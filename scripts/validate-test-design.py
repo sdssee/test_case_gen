@@ -540,6 +540,36 @@ def main() -> int:
     ]:
         assert_contains(path, product_map_persistence_markers)
 
+    batch_complete_markers = [
+        "每一批测试设计",
+        "完整 test-design Skill 和 Rule",
+        "不得因为分批而降级",
+        "功能测试",
+        "性能测试",
+        "异常",
+        "边界",
+        "权限",
+        "状态",
+        "数据一致性",
+        "风险",
+        "自动化建议",
+        "页面元素覆盖清单",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / "README.md",
+        repo_root / "README_IMPORT.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-design" / "README.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+    ]:
+        assert_contains(path, batch_complete_markers)
+
     print("OK: test design templates are aligned and import template validations are preserved.")
     return 0
 

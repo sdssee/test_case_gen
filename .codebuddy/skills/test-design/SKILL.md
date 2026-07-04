@@ -160,6 +160,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 4. 不得仅凭 AI 对话记忆判断已有模块能力、已有用例、可复用测试数据或跨模块依赖。
 5. 当前模块依赖已有模块能力时，优先引用已有用例 ID 作为前置条件，不重复复制已有用例。
 6. 正式生成前必须向用户展示产品理解摘要，包括当前模块、依赖模块、关联业务对象、关联业务链路、可复用历史用例、预计新增范围和待确认问题。
+7. 当任务范围是全产品、多个一级模块或某个大模块时，必须先输出分批设计计划，不得一次性生成完整测试用例；应按模块、页面域或业务链路分批生成、分批回存，再做跨模块汇总。
 
 ### 2. 测试范围定义
 
@@ -439,6 +440,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 是否记录待确认问题
 - 如果存在跨模块依赖，是否已读取产品版图和依赖模块归档测试设计
 - 是否已向用户展示产品理解摘要并获得确认或补充
+- 如果任务范围是全产品、多个一级模块或大模块，是否已先输出分批设计计划，且没有一次性生成完整测试用例
 - 是否已规划将客户交付件保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`，将最终测试设计回存 `docs/test-assets/modules/`，将导入文件副本回存 `docs/test-assets/imports/`，并更新 `product-map.xlsx`
 - 外网到内网做普通框架升级时，是否已保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`，且未覆盖内网真实资产。标识：PROTECTED_ASSET_DIRS
 

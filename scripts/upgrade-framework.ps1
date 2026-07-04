@@ -21,7 +21,6 @@ $protectedPrefixes = @(
 
 $allowedPrefixes = @(
   ".codebuddy/",
-  "docs/test-design/",
   "docs/ARCHITECTURE.md",
   "docs/UPGRADE.md",
   "docs/test-assets/README.md",
@@ -60,6 +59,9 @@ function Test-AllowedPath {
     if ($normalized -eq $prefix.TrimEnd("/") -or $normalized.StartsWith($prefix)) {
       return $true
     }
+  }
+  if ($normalized -match "^docs/test-design/[^/]+\.(md|xlsx)$") {
+    return $true
   }
   return $false
 }
@@ -109,6 +111,22 @@ try {
   $currentAssetSchemaVersion = Read-VersionValue -File $currentVersion -Key "asset_schema_version"
   $packageAssetSchemaVersion = Read-VersionValue -File $packageVersion -Key "asset_schema_version"
 
+  if (-not $currentAssetSchemaVersion) {
+    throw "Current VERSION is missing asset_schema_version."
+  }
+  if (-not $packageAssetSchemaVersion) {
+    throw "Package VERSION is missing asset_schema_version."
+  }
+
+  $migration = Join-Path $repoRoot "scripts\migrations\${currentAssetSchemaVersion}_to_${packageAssetSchemaVersion}.ps1"
+  $requiresMigration = $currentAssetSchemaVersion -ne $packageAssetSchemaVersion
+  if ($requiresMigration -and -not $RunMigrations) {
+    throw "Asset schema version changed from $currentAssetSchemaVersion to $packageAssetSchemaVersion. No files were copied. Review and run with -RunMigrations after confirming migration script: $migration"
+  }
+  if ($requiresMigration -and -not (Test-Path $migration)) {
+    throw "Missing migration script: $migration"
+  }
+
   New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
   foreach ($protected in $protectedPrefixes) {
     $source = Join-Path $repoRoot $protected
@@ -135,14 +153,7 @@ try {
     Copy-Item -LiteralPath $_.FullName -Destination $target -Force
   }
 
-  if ($currentAssetSchemaVersion -and $packageAssetSchemaVersion -and $currentAssetSchemaVersion -ne $packageAssetSchemaVersion) {
-    $migration = Join-Path $repoRoot "scripts\migrations\${currentAssetSchemaVersion}_to_${packageAssetSchemaVersion}.ps1"
-    if (-not $RunMigrations) {
-      throw "Asset schema version changed from $currentAssetSchemaVersion to $packageAssetSchemaVersion. Review and run with -RunMigrations after confirming migration script: $migration"
-    }
-    if (-not (Test-Path $migration)) {
-      throw "Missing migration script: $migration"
-    }
+  if ($requiresMigration) {
     & powershell -ExecutionPolicy Bypass -File $migration
   }
 

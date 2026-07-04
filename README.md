@@ -24,6 +24,8 @@
 | `docs/test-design/codebuddy-test-design-template.xlsx` | 正式测试设计模板，包含 8 个标准 Sheet。 |
 | `docs/test-design/测试用例模板.xlsx` | 测试系统导入模板。需要导入时复制该模板生成独立导入文件，不修改原模板。 |
 | `docs/test-design/excel-template-spec.md` | Excel 字段和模板规则说明。 |
+| `docs/test-design/archive-and-index-guidelines.md` | 测试资产归档、模块能力索引和跨模块依赖维护规范。 |
+| `docs/test-design/indexes/module-capability-index.xlsx` | 模块能力、跨模块依赖、可复用测试数据和归档清单索引。 |
 | `README_IMPORT.md` | 将本规范复制到业务项目的说明。 |
 | `scripts/validate-test-design.ps1` | 模板稳定性自检入口。 |
 
@@ -50,6 +52,14 @@
 2. 将 `功能测试用例` 中需要导入的内容映射填入副本。
 3. 保留原模板中的字段顺序、下拉框、必填样式、标红字段和自动生成字段空值。
 4. 不修改原始 `测试用例模板.xlsx`。
+
+## 测试资产归档
+
+- 正式测试设计最终版归档到 `docs/test-design/outputs/`
+- 测试系统导入文件副本归档到 `docs/test-design/imports/`
+- 模块能力、跨模块依赖和可复用测试数据维护在 `docs/test-design/indexes/module-capability-index.xlsx`
+- 每次生成前读取索引和依赖模块归档；每次生成后回存最终版并更新索引
+- 不依赖 AI 对话记忆保存具体业务事实
 
 ## 使用方式
 
@@ -85,6 +95,7 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 - `测试类型`、`测试用例级别`、`执行方式` 的 Excel 下拉框仍保留
 - 无已落地自动化资产时，导入文件中的 `执行方式` 默认填写 `手动`
 - `用例标题`/`测试用例名称` 使用 `功能点-当前用例标题` 格式，避免导入系统后丢失功能点信息
+- 模块能力索引文件存在且包含标准 Sheet
 
 ## 维护原则
 

@@ -95,11 +95,19 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     design_template = repo_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
     system_template = repo_root / "docs" / "test-design" / "测试用例模板.xlsx"
+    capability_index = repo_root / "docs" / "test-design" / "indexes" / "module-capability-index.xlsx"
 
     if not design_template.exists():
         fail(f"Missing design template: {design_template}")
     if not system_template.exists():
         fail(f"Missing system import template: {system_template}")
+    if not capability_index.exists():
+        fail(f"Missing module capability index: {capability_index}")
+
+    for dirname in ["outputs", "imports", "indexes"]:
+        path = repo_root / "docs" / "test-design" / dirname
+        if not path.is_dir():
+            fail(f"Missing test asset directory: {path}")
 
     expected_design_sheets = [
         "测试设计总览",
@@ -140,6 +148,37 @@ def main() -> int:
     system_sheets = workbook_sheets(system_template)
     if not system_sheets:
         fail("System import template should contain at least one sheet")
+
+    expected_index_sheets = [
+        "已归档测试设计清单",
+        "模块能力索引",
+        "跨模块依赖关系",
+        "可复用测试数据",
+        "变更记录",
+    ]
+    index_sheets = workbook_sheets(capability_index)
+    if index_sheets != expected_index_sheets:
+        fail(
+            "Module capability index sheets mismatch.\n"
+            f"Expected: {expected_index_sheets}\n"
+            f"Actual:   {index_sheets}"
+        )
+
+    expected_index_headers = {
+        1: ["项目/需求编号", "模块", "归档文件路径", "导入文件路径", "版本", "基线状态", "来源", "维护人", "最后更新时间", "备注"],
+        2: ["项目/需求编号", "模块", "功能点", "能力/数据对象", "能力描述", "关键状态", "可复用前置条件", "关联用例ID", "归档文件路径", "限制/待确认问题", "最后更新时间"],
+        3: ["项目/需求编号", "当前模块", "依赖模块", "依赖功能点/能力", "依赖类型", "引用用例ID", "当前模块用例ID", "使用方式", "风险/待确认问题", "归档文件路径", "最后更新时间"],
+        4: ["项目/需求编号", "模块", "数据对象", "测试数据标识", "数据用途", "可执行敏感操作", "创建/维护方式", "关联用例ID", "清理策略", "敏感信息处理", "最后更新时间"],
+        5: ["版本", "日期", "变更人/来源", "变更类型", "影响模块", "变更内容", "是否已同步索引", "备注"],
+    }
+    for sheet_index, expected in expected_index_headers.items():
+        actual = first_row_values(capability_index, sheet_index)
+        if actual != expected:
+            fail(
+                f"Module capability index headers mismatch on sheet {sheet_index}.\n"
+                f"Expected: {expected}\n"
+                f"Actual:   {actual}"
+            )
 
     expected_headers = [
         "一级模块系统编号",
@@ -198,7 +237,7 @@ def main() -> int:
             fail(f"System import template is missing dropdown values: {marker}")
 
     formula_errors = re.compile(r"#REF!|#DIV/0!|#VALUE!|#NAME\?|#N/A")
-    for path in [design_template, system_template]:
+    for path in [design_template, system_template, capability_index]:
         with zipfile.ZipFile(path) as zf:
             for item in zf.namelist():
                 if item.startswith("xl/worksheets/") and item.endswith(".xml"):
@@ -214,6 +253,7 @@ def main() -> int:
         repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
     ]
     for path in architecture_files:
         if not path.exists():
@@ -226,6 +266,8 @@ def main() -> int:
         "测试用例模板.xlsx",
     ]
     for path in architecture_files:
+        if path.name == "archive-and-index-guidelines.md":
+            continue
         assert_contains(path, required_markers[:2] if path.name == "AGENTS.md" else required_markers[:3])
 
     stale_markers = [
@@ -266,6 +308,23 @@ def main() -> int:
         repo_root / "docs" / "ARCHITECTURE.md",
     ]:
         assert_contains(path, title_format_markers)
+
+    archive_markers = [
+        "module-capability-index.xlsx",
+        "docs/test-design/outputs/",
+        "docs/test-design/imports/",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+    ]:
+        assert_contains(path, archive_markers)
 
     print("OK: test design templates are aligned and import template validations are preserved.")
     return 0

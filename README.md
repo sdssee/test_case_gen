@@ -83,6 +83,7 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 - 正式模板不包含 `测试系统导入用例` Sheet
 - 测试系统导入模板字段顺序正确
 - `测试类型`、`测试用例级别`、`执行方式` 的 Excel 下拉框仍保留
+- 无已落地自动化资产时，导入文件中的 `执行方式` 默认填写 `手动`
 
 ## 维护原则
 

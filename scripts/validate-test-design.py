@@ -214,6 +214,20 @@ def main() -> int:
 
     assert_contains(repo_root / "AGENTS.md", ["GitHub 提交信息必须使用中文"])
 
+    execution_mode_markers = [
+        "默认填写 `手动`",
+        "自动化建议",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+    ]:
+        assert_contains(path, execution_mode_markers)
+
     print("OK: test design templates are aligned and import template validations are preserved.")
     return 0
 

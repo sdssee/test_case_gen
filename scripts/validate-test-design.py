@@ -94,7 +94,7 @@ def assert_not_contains(path: Path, markers: list[str]) -> None:
 def parse_key_value_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     for raw_line in read_text(path).splitlines():
-        line = raw_line.strip()
+        line = raw_line.lstrip("\ufeff").strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)

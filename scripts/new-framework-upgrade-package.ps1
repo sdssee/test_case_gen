@@ -14,11 +14,11 @@ if (-not (Test-Path $manifest)) {
   throw "Missing UPGRADE_MANIFEST.md."
 }
 
-$frameworkVersion = (Get-Content -Encoding utf8 $versionFile | Where-Object { $_ -match "^framework_version=" }) -replace "^framework_version=", ""
+$frameworkVersion = (Get-Content -Encoding utf8 $versionFile | ForEach-Object { $_.TrimStart([char]0xFEFF) } | Where-Object { $_ -match "^framework_version=" }) -replace "^framework_version=", ""
 if (-not $frameworkVersion) {
   throw "VERSION is missing framework_version."
 }
-$assetSchemaVersion = (Get-Content -Encoding utf8 $versionFile | Where-Object { $_ -match "^asset_schema_version=" }) -replace "^asset_schema_version=", ""
+$assetSchemaVersion = (Get-Content -Encoding utf8 $versionFile | ForEach-Object { $_.TrimStart([char]0xFEFF) } | Where-Object { $_ -match "^asset_schema_version=" }) -replace "^asset_schema_version=", ""
 if (-not $assetSchemaVersion) {
   throw "VERSION is missing asset_schema_version."
 }

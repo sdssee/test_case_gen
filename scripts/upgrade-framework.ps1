@@ -74,7 +74,7 @@ function Read-VersionValue {
   if (-not (Test-Path $File)) {
     return ""
   }
-  $line = Get-Content -Encoding utf8 $File | Where-Object { $_ -match "^$Key=" } | Select-Object -First 1
+  $line = Get-Content -Encoding utf8 $File | ForEach-Object { $_.TrimStart([char]0xFEFF) } | Where-Object { $_ -match "^$Key=" } | Select-Object -First 1
   if (-not $line) {
     return ""
   }
@@ -118,13 +118,15 @@ try {
     throw "Package VERSION is missing asset_schema_version."
   }
 
-  $migration = Join-Path $repoRoot "scripts\migrations\${currentAssetSchemaVersion}_to_${packageAssetSchemaVersion}.ps1"
   $requiresMigration = $currentAssetSchemaVersion -ne $packageAssetSchemaVersion
+  $migrationRelativePath = "scripts\migrations\${currentAssetSchemaVersion}_to_${packageAssetSchemaVersion}.ps1"
+  $extractedMigration = Join-Path $extractRoot $migrationRelativePath
+  $repoMigration = Join-Path $repoRoot $migrationRelativePath
   if ($requiresMigration -and -not $RunMigrations) {
-    throw "Asset schema version changed from $currentAssetSchemaVersion to $packageAssetSchemaVersion. No files were copied. Review and run with -RunMigrations after confirming migration script: $migration"
+    throw "Asset schema version changed from $currentAssetSchemaVersion to $packageAssetSchemaVersion. No files were copied. Review and run with -RunMigrations after confirming migration script: $migrationRelativePath"
   }
-  if ($requiresMigration -and -not (Test-Path $migration)) {
-    throw "Missing migration script: $migration"
+  if ($requiresMigration -and -not (Test-Path $extractedMigration)) {
+    throw "Missing migration script in upgrade package: $migrationRelativePath"
   }
 
   New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
@@ -154,7 +156,7 @@ try {
   }
 
   if ($requiresMigration) {
-    & powershell -ExecutionPolicy Bypass -File $migration
+    & powershell -ExecutionPolicy Bypass -File $repoMigration
   }
 
   & powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\validate-test-design.ps1")

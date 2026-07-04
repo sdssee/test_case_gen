@@ -86,6 +86,8 @@ powershell -ExecutionPolicy Bypass -File scripts\upgrade-framework.ps1 -PackageP
 scripts/migrations/1.0.0_to_1.1.0.ps1
 ```
 
+迁移脚本必须随升级包一起提供。内网升级脚本会在复制框架文件前检查升级包中是否存在对应迁移脚本；如果未传入 `-RunMigrations`，或升级包缺少迁移脚本，脚本会停止且不复制文件。
+
 迁移脚本必须读取旧资产，保留已有数据，缺 Sheet 就新增，缺字段就追加，并写入变更记录。
 
 ## 回滚

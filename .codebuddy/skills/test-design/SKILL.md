@@ -25,7 +25,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 9. 使用浏览器或 computer use 实探页面时，只能新增、修改、删除或变更自己创建且带测试标识的数据；对页面已有数据可以查看、搜索、筛选、排序、分页、打开详情，或进入编辑/修改页面观察字段、校验、联动、多级子菜单和保存前提示，但不得保存、提交或改变已有数据。
 10. 如果用户提供测试数据，应优先使用这些数据进行页面实探和用例设计；正常数据用于确认页面真实成功路径和预期结果，异常/边界数据用于补充负向测试，最终用例中的测试数据必须脱敏处理。
 11. 正式测试设计 Excel 不再新增 `测试系统导入用例` Sheet；需要导入测试系统时，必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，并从 `功能测试用例` 派生内容填充该副本。
-12. 测试资产事实必须保存在项目文件中，不依赖 AI 对话记忆。正式测试设计归档到 `docs/test-design/outputs/`，测试系统导入文件副本归档到 `docs/test-design/imports/`，模块能力、跨模块依赖和可复用测试数据维护在 `docs/test-design/indexes/module-capability-index.xlsx`。
+12. 测试资产事实必须保存在项目文件中，不依赖 AI 对话记忆。客户交付件放在 `docs/test-design/current/` 或 `docs/test-design/deliverables/`；内部产品级测试资产库放在 `docs/test-assets/`，其中 `docs/test-assets/product-map.xlsx` 是产品测试知识图谱主入口，不作为默认客户交付件。
 
 ## 输入识别
 
@@ -154,11 +154,12 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 
 生成或补充测试用例前，必须先读取项目测试资产事实：
 
-1. 读取 `docs/test-design/indexes/module-capability-index.xlsx`。
-2. 如果用户指定依赖模块，优先读取索引中登记的依赖模块归档测试设计。
-3. 如果索引缺失但 `docs/test-design/outputs/` 中存在相关归档文件，应读取归档文件，并在风险或待确认问题中提示需要补充索引。
+1. 读取 `docs/test-assets/product-map.xlsx`。
+2. 如果用户指定依赖模块，优先读取产品版图中登记的依赖模块归档测试设计。
+3. 如果产品版图缺失但 `docs/test-assets/modules/` 中存在相关归档文件，应读取归档文件，并在风险或待确认问题中提示需要补充产品版图。
 4. 不得仅凭 AI 对话记忆判断已有模块能力、已有用例、可复用测试数据或跨模块依赖。
 5. 当前模块依赖已有模块能力时，优先引用已有用例 ID 作为前置条件，不重复复制已有用例。
+6. 正式生成前必须向用户展示产品理解摘要，包括当前模块、依赖模块、关联业务对象、关联业务链路、可复用历史用例、预计新增范围和待确认问题。
 
 ### 2. 测试范围定义
 
@@ -436,8 +437,9 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 独立导入文件是否只派生自 `功能测试用例`，并且没有遗漏需要导入系统的功能用例
 - 是否存在重复用例
 - 是否记录待确认问题
-- 如果存在跨模块依赖，是否已读取模块能力索引和依赖模块归档测试设计
-- 是否已规划将最终测试设计回存 `docs/test-design/outputs/`，将导入文件副本回存 `docs/test-design/imports/`，并更新 `module-capability-index.xlsx`
+- 如果存在跨模块依赖，是否已读取产品版图和依赖模块归档测试设计
+- 是否已向用户展示产品理解摘要并获得确认或补充
+- 是否已规划将客户交付件保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`，将最终测试设计回存 `docs/test-assets/modules/`，将导入文件副本回存 `docs/test-assets/imports/`，并更新 `product-map.xlsx`
 
 ## 输出要求
 
@@ -445,4 +447,4 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 
 在对话中可以先输出摘要，但不能用摘要替代 Excel 交付物。
 
-最终版测试设计应归档到 `docs/test-design/outputs/`，测试系统导入文件副本应归档到 `docs/test-design/imports/`。生成后必须同步更新 `docs/test-design/indexes/module-capability-index.xlsx` 中的归档清单、模块能力索引、跨模块依赖、可复用测试数据和变更记录；如果无法更新，应在最终说明中明确原因和待补项。
+客户交付件应保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。最终版测试设计应归档到 `docs/test-assets/modules/`，测试系统导入文件副本应归档到 `docs/test-assets/imports/`。生成后必须同步更新 `docs/test-assets/product-map.xlsx` 中的产品模块地图、业务对象地图、业务链路地图、页面元素地图、用例资产索引、模块能力索引、跨模块依赖、可复用测试数据、变更影响分析和变更记录；如果无法更新，应在最终说明中明确原因和待补项。

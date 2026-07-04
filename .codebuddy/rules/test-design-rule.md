@@ -16,7 +16,7 @@
 12. 如果用户提供测试数据，必须优先用于页面实探和用例设计；正常数据用于校准成功路径预期，异常/边界数据用于补充负向测试，最终用例中的敏感数据必须脱敏。
 13. 正式测试设计 Excel 不再新增 `测试系统导入用例` Sheet；需要导入测试系统时，必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，并从 `功能测试用例` 派生内容填充该副本。
 14. 测试系统导入文件中的 `执行方式` 默认填写 `手动`；只有已存在可运行、可维护并覆盖该用例主要校验点的自动化资产，且本次交付明确按自动化导入或关联自动化资产时，才允许填写 `自动化`。
-15. 测试资产事实必须保存在项目文件中，不依赖 AI 对话记忆；生成前读取 `docs/test-design/indexes/module-capability-index.xlsx`，生成后回存 `docs/test-design/outputs/`、`docs/test-design/imports/` 并更新索引。
+15. 测试资产事实必须保存在项目文件中，不依赖 AI 对话记忆；生成前读取 `docs/test-assets/product-map.xlsx`，正式生成前展示产品理解摘要，生成后回存 `docs/test-assets/modules/`、`docs/test-assets/imports/` 并更新产品版图。客户交付件放在 `docs/test-design/current/` 或 `docs/test-design/deliverables/`，内部产品版图不作为默认客户交付件。
 
 ## 分析先行规则
 
@@ -33,17 +33,19 @@
 
 不得在未分析需求的情况下直接输出测试用例。
 
-## 测试资产归档与跨模块依赖规则
+## 测试资产归档与产品版图规则
 
 - 归档规范见 `docs/test-design/archive-and-index-guidelines.md`。
-- 模块能力索引文件为 `docs/test-design/indexes/module-capability-index.xlsx`。
-- 生成或补充测试用例前，必须读取模块能力索引。
-- 用户指定依赖模块时，必须优先读取索引中登记的依赖模块归档测试设计。
-- 如果索引缺失但 `docs/test-design/outputs/` 中存在相关归档文件，应读取归档文件，并登记索引待同步问题。
+- 内部产品测试知识图谱主入口为 `docs/test-assets/product-map.xlsx`。
+- 客户交付件和内部维护资产必须分离；`product-map.xlsx` 不作为默认客户交付件。
+- 生成或补充测试用例前，必须读取产品版图。
+- 用户指定依赖模块时，必须优先读取产品版图中登记的依赖模块归档测试设计。
+- 正式生成前必须向用户展示产品理解摘要，包括当前模块、依赖模块、业务对象、业务链路、可复用历史用例、预计新增范围和待确认问题。
+- 如果产品版图缺失但 `docs/test-assets/modules/` 中存在相关归档文件，应读取归档文件，并登记产品版图待同步问题。
 - 不得仅凭 AI 对话记忆判断已有模块能力、已有用例、可复用测试数据或跨模块依赖。
 - 当前模块依赖已有模块能力时，优先引用已有用例 ID 作为前置条件，不重复复制已有用例。
-- 跨模块用例只保留一个主归属模块，依赖模块通过 `跨模块依赖关系` Sheet、标签、备注和关联用例 ID 追踪。
-- 生成、评审或人工修订后的最终版测试设计应回存 `docs/test-design/outputs/`；测试系统导入文件副本应回存 `docs/test-design/imports/`；模块能力、跨模块依赖、可复用测试数据和变更记录应同步到 `module-capability-index.xlsx`。
+- 跨模块用例只保留一个主归属模块，依赖模块通过产品模块地图、业务对象地图、业务链路地图、用例资产索引、跨模块依赖关系、标签、备注和关联用例 ID 追踪。
+- 生成、评审或人工修订后的最终版测试设计应回存 `docs/test-assets/modules/`；测试系统导入文件副本应回存 `docs/test-assets/imports/`；客户交付件应保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`；产品模块、业务对象、业务链路、页面元素、用例资产、模块能力、跨模块依赖、可复用测试数据、变更影响分析和变更记录应同步到 `product-map.xlsx`。
 
 ## 页面材料处理规则
 

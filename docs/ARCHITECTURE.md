@@ -10,7 +10,8 @@
 | AI 入口 | `AGENTS.md`、`CODEBUDDY.md` | Codex 与 CodeBuddy 的项目级记忆，放置高优先级约束和交付边界。 |
 | 执行规则 | `.codebuddy/skills/test-design/SKILL.md`、`.codebuddy/.rules/test-design-rule.mdc`、`.codebuddy/rules/test-design-rule.md` | 指导 AI 完成输入识别、页面实探、用例设计、导入文件生成和自检。 |
 | 模板契约 | `docs/test-design/excel-template-spec.md`、`docs/test-design/*.xlsx` | 定义 Excel Sheet、字段、枚举、下拉框、导入模板和样式约束。 |
-| 测试资产事实 | `docs/test-design/outputs/`、`docs/test-design/imports/`、`docs/test-design/indexes/module-capability-index.xlsx` | 保存最终测试设计、测试系统导入副本、模块能力、跨模块依赖和可复用测试数据。 |
+| 客户交付件 | `docs/test-design/current/`、`docs/test-design/deliverables/` | 保存本次任务范围内交付给客户或测试系统的测试设计和导入文件，不包含内部产品全量版图。 |
+| 内部测试资产事实 | `docs/test-assets/product-map.xlsx`、`docs/test-assets/modules/`、`docs/test-assets/imports/` | 保存产品测试知识图谱、最终测试设计归档、导入文件副本、模块能力、业务对象、业务链路、跨模块依赖和可复用测试数据。 |
 | 自动化校验 | `scripts/validate-test-design.py`、`scripts/validate-test-design.ps1` | 防止模板结构、导入模板下拉框和关键规则发生漂移。 |
 
 ## 关键架构决策
@@ -21,9 +22,10 @@
 4. 页面实探允许操作本次创建且带测试标识的数据；已有数据只能查看、搜索、筛选、打开详情或进入编辑页观察，不保存不提交。
 5. 用例标题和测试系统导入文件中的测试用例名称必须正式、简洁、可检索，避免口语化，并使用 `功能点-当前用例标题` 格式补偿测试系统缺少独立功能点字段的问题。
 6. 测试系统导入文件的 `执行方式` 默认是 `手动`；只有已有可运行、可维护并覆盖用例主要校验点的自动化资产，且本次交付明确按自动化导入或关联资产时，才填写 `自动化`。
-7. AI 记忆只保存规则和索引入口，具体业务事实必须保存在归档测试设计和 `module-capability-index.xlsx` 中。
-8. 每次生成前读取模块能力索引和用户指定依赖模块的归档测试设计；每次生成后回存最终测试设计并更新索引。
-9. 每次修改规范或模板后必须运行稳定性自检。
+7. 客户交付件与内部维护资产必须分离；`docs/test-assets/product-map.xlsx` 是内部产品版图，不作为默认客户交付件。
+8. AI 记忆只保存规则和索引入口，具体业务事实必须保存在产品版图和归档测试设计中。
+9. 每次生成前读取 `product-map.xlsx` 和用户指定依赖模块的归档测试设计，正式生成前展示产品理解摘要；每次生成后回存最终测试设计并更新产品版图。
+10. 每次修改规范或模板后必须运行稳定性自检。
 
 ## 变更同步规则
 

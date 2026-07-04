@@ -95,19 +95,23 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     design_template = repo_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
     system_template = repo_root / "docs" / "test-design" / "测试用例模板.xlsx"
-    capability_index = repo_root / "docs" / "test-design" / "indexes" / "module-capability-index.xlsx"
+    product_map = repo_root / "docs" / "test-assets" / "product-map.xlsx"
 
     if not design_template.exists():
         fail(f"Missing design template: {design_template}")
     if not system_template.exists():
         fail(f"Missing system import template: {system_template}")
-    if not capability_index.exists():
-        fail(f"Missing module capability index: {capability_index}")
+    if not product_map.exists():
+        fail(f"Missing product map: {product_map}")
 
-    for dirname in ["outputs", "imports", "indexes"]:
+    for dirname in ["current", "deliverables"]:
         path = repo_root / "docs" / "test-design" / dirname
         if not path.is_dir():
-            fail(f"Missing test asset directory: {path}")
+            fail(f"Missing deliverable directory: {path}")
+    for dirname in ["modules", "imports", "indexes"]:
+        path = repo_root / "docs" / "test-assets" / dirname
+        if not path.is_dir():
+            fail(f"Missing internal test asset directory: {path}")
 
     expected_design_sheets = [
         "测试设计总览",
@@ -149,33 +153,43 @@ def main() -> int:
     if not system_sheets:
         fail("System import template should contain at least one sheet")
 
-    expected_index_sheets = [
-        "已归档测试设计清单",
+    expected_product_map_sheets = [
+        "产品模块地图",
+        "业务对象地图",
+        "业务链路地图",
+        "页面元素地图",
+        "用例资产索引",
         "模块能力索引",
         "跨模块依赖关系",
         "可复用测试数据",
+        "变更影响分析",
         "变更记录",
     ]
-    index_sheets = workbook_sheets(capability_index)
-    if index_sheets != expected_index_sheets:
+    product_map_sheets = workbook_sheets(product_map)
+    if product_map_sheets != expected_product_map_sheets:
         fail(
-            "Module capability index sheets mismatch.\n"
-            f"Expected: {expected_index_sheets}\n"
-            f"Actual:   {index_sheets}"
+            "Product map sheets mismatch.\n"
+            f"Expected: {expected_product_map_sheets}\n"
+            f"Actual:   {product_map_sheets}"
         )
 
-    expected_index_headers = {
-        1: ["项目/需求编号", "模块", "归档文件路径", "导入文件路径", "版本", "基线状态", "来源", "维护人", "最后更新时间", "备注"],
-        2: ["项目/需求编号", "模块", "功能点", "能力/数据对象", "能力描述", "关键状态", "可复用前置条件", "关联用例ID", "归档文件路径", "限制/待确认问题", "最后更新时间"],
-        3: ["项目/需求编号", "当前模块", "依赖模块", "依赖功能点/能力", "依赖类型", "引用用例ID", "当前模块用例ID", "使用方式", "风险/待确认问题", "归档文件路径", "最后更新时间"],
-        4: ["项目/需求编号", "模块", "数据对象", "测试数据标识", "数据用途", "可执行敏感操作", "创建/维护方式", "关联用例ID", "清理策略", "敏感信息处理", "最后更新时间"],
-        5: ["版本", "日期", "变更人/来源", "变更类型", "影响模块", "变更内容", "是否已同步索引", "备注"],
+    expected_product_map_headers = {
+        1: ["产品/系统", "一级模块", "二级模块", "三级模块", "页面/入口", "菜单路径/URL", "模块功能摘要", "归档测试设计路径", "覆盖状态", "最后更新时间", "待确认问题"],
+        2: ["产品/系统", "业务对象", "来源模块", "消费模块", "关键字段", "关键状态", "状态生产者", "状态消费者", "创建用例ID", "状态变更用例ID", "归档测试设计路径", "待确认问题"],
+        3: ["链路ID", "链路名称", "起始模块", "中间模块", "结束模块", "业务对象", "关键状态流转", "主流程用例ID", "跨模块用例ID", "依赖测试数据", "风险点", "归档测试设计路径"],
+        4: ["产品/系统", "模块", "页面/入口", "菜单路径/URL", "元素名称/文案", "元素类型", "交互方式", "前置状态/权限", "关联用例ID", "覆盖状态", "发现来源", "最后更新时间", "备注"],
+        5: ["产品/系统", "模块", "功能点", "用例ID", "用例标题", "测试类型", "执行方式", "是否可复用为前置条件", "是否跨模块", "关联业务对象", "关联业务链路", "归档测试设计路径", "最后更新时间"],
+        6: ["产品/系统", "模块", "功能点", "能力/数据对象", "能力描述", "关键状态", "可复用前置条件", "关联用例ID", "归档测试设计路径", "限制/待确认问题", "最后更新时间"],
+        7: ["产品/系统", "当前模块", "依赖模块", "依赖业务对象", "依赖功能点/能力", "依赖类型", "引用用例ID", "当前模块用例ID", "使用方式", "风险/待确认问题", "最后更新时间"],
+        8: ["产品/系统", "模块", "数据对象", "测试数据标识", "数据用途", "可执行敏感操作", "创建/维护方式", "关联用例ID", "清理策略", "敏感信息处理", "最后更新时间"],
+        9: ["变更ID", "需求/任务", "变更模块", "影响模块", "影响业务对象", "影响业务链路", "需复核历史用例ID", "需新增/修改用例", "风险等级", "处理状态", "分析日期", "备注"],
+        10: ["版本", "日期", "变更人/来源", "变更类型", "影响模块", "变更内容", "是否已同步产品版图", "备注"],
     }
-    for sheet_index, expected in expected_index_headers.items():
-        actual = first_row_values(capability_index, sheet_index)
+    for sheet_index, expected in expected_product_map_headers.items():
+        actual = first_row_values(product_map, sheet_index)
         if actual != expected:
             fail(
-                f"Module capability index headers mismatch on sheet {sheet_index}.\n"
+                f"Product map headers mismatch on sheet {sheet_index}.\n"
                 f"Expected: {expected}\n"
                 f"Actual:   {actual}"
             )
@@ -237,7 +251,7 @@ def main() -> int:
             fail(f"System import template is missing dropdown values: {marker}")
 
     formula_errors = re.compile(r"#REF!|#DIV/0!|#VALUE!|#NAME\?|#N/A")
-    for path in [design_template, system_template, capability_index]:
+    for path in [design_template, system_template, product_map]:
         with zipfile.ZipFile(path) as zf:
             for item in zf.namelist():
                 if item.startswith("xl/worksheets/") and item.endswith(".xml"):
@@ -310,9 +324,9 @@ def main() -> int:
         assert_contains(path, title_format_markers)
 
     archive_markers = [
-        "module-capability-index.xlsx",
-        "docs/test-design/outputs/",
-        "docs/test-design/imports/",
+        "product-map.xlsx",
+        "docs/test-assets/modules/",
+        "docs/test-assets/imports/",
     ]
     for path in [
         repo_root / "AGENTS.md",
@@ -325,6 +339,41 @@ def main() -> int:
         repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
     ]:
         assert_contains(path, archive_markers)
+
+    deliverable_markers = [
+        "docs/test-design/current/",
+        "docs/test-design/deliverables/",
+        "客户交付件",
+        "不作为默认客户交付件",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-assets" / "README.md",
+    ]:
+        assert_contains(path, deliverable_markers)
+
+    understanding_markers = [
+        "产品理解摘要",
+        "当前模块",
+        "依赖模块",
+        "业务链路",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+    ]:
+        assert_contains(path, understanding_markers)
 
     print("OK: test design templates are aligned and import template validations are preserved.")
     return 0

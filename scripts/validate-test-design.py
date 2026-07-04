@@ -490,6 +490,28 @@ def main() -> int:
     ]:
         assert_contains(path, batch_exploration_markers)
 
+    module_two_pass_markers = [
+        "模块级粗遍历",
+        "深遍历",
+        "可点击",
+        "可输入",
+        "可测试元素",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / "README.md",
+        repo_root / "README_IMPORT.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-design" / "README.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+    ]:
+        assert_contains(path, module_two_pass_markers)
+
     print("OK: test design templates are aligned and import template validations are preserved.")
     return 0
 

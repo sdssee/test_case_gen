@@ -58,6 +58,16 @@ def first_row_values(path: Path, sheet_index: int = 1) -> list[str]:
     return [cell_text(cell, shared) for cell in row.findall("x:c", NS)]
 
 
+def cell_value(path: Path, sheet_index: int, cell_ref: str) -> str:
+    with zipfile.ZipFile(path) as zf:
+        shared = shared_strings(zf)
+        root = ET.fromstring(zf.read(f"xl/worksheets/sheet{sheet_index}.xml"))
+    cell = root.find(f".//x:sheetData/x:row/x:c[@r='{cell_ref}']", NS)
+    if cell is None:
+        return ""
+    return cell_text(cell, shared)
+
+
 def worksheet_xml(path: Path, sheet_index: int = 1) -> str:
     with zipfile.ZipFile(path) as zf:
         return zf.read(f"xl/worksheets/sheet{sheet_index}.xml").decode("utf-8")
@@ -111,6 +121,14 @@ def main() -> int:
         )
     if "测试系统导入用例" in design_sheets:
         fail("Design template must not contain 测试系统导入用例 sheet")
+
+    for row in range(2, 5):
+        function_point = cell_value(design_template, 4, f"D{row}")
+        case_title = cell_value(design_template, 4, f"E{row}")
+        if function_point and case_title != f"{function_point}-{case_title.split('-', 1)[-1]}":
+            fail(f"功能测试用例 sample title must use 功能点-当前用例标题 format at row {row}: {case_title}")
+        if function_point and not case_title.startswith(f"{function_point}-"):
+            fail(f"功能测试用例 sample title must start with its 功能点 at row {row}: {case_title}")
 
     system_sheets = workbook_sheets(system_template)
     if not system_sheets:
@@ -227,6 +245,20 @@ def main() -> int:
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
     ]:
         assert_contains(path, execution_mode_markers)
+
+    title_format_markers = [
+        "功能点-当前用例标题",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+    ]:
+        assert_contains(path, title_format_markers)
 
     print("OK: test design templates are aligned and import template validations are preserved.")
     return 0

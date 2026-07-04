@@ -340,3 +340,11 @@ Excel 单元格要求：
 禁止只按页面大功能粗略覆盖，遗漏行内按钮、图标按钮、二级菜单、更多操作、禁用按钮、弹窗按钮、分页、排序、筛选、上传、下载等入口。
 
 页面元素覆盖清单中的 `覆盖用例 ID` 必须指向 `功能测试用例` Sheet 中的用例，性能相关元素或链路应通过 `性能测试设计` Sheet 中的性能场景 ID 体现，不得在覆盖清单中替代正式测试用例。
+
+## 外网到内网升级规则
+
+- 普通框架升级以脚本升级为主、手动确认兜底；外网使用 `scripts/new-framework-upgrade-package.ps1` 生成升级包，内网使用 `scripts/upgrade-framework.ps1 -PackagePath <升级包>` 应用升级包。
+- `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/` 是受保护目录，普通框架升级不得覆盖、删除或清空。标识：PROTECTED_ASSET_DIRS。
+- `VERSION` 中的 `framework_version` 表示框架版本，`asset_schema_version` 表示内部资产结构版本。
+- `product-map.xlsx` 是主要可能演进的内部资产结构；历史归档 Excel 默认作为历史快照保留，不因普通框架升级而批量重写。
+- `asset_schema_version` 变化或产品版图结构变化时，必须通过升级清单、校验脚本和迁移脚本处理；迁移脚本只能读取旧资产并增量补齐，不能用空模板覆盖内网真实资产。

@@ -91,11 +91,27 @@ def assert_not_contains(path: Path, markers: list[str]) -> None:
             fail(f"{path.relative_to(path.parents[1])} contains stale marker: {marker}")
 
 
+def parse_key_value_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in read_text(path).splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     design_template = repo_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
     system_template = repo_root / "docs" / "test-design" / "测试用例模板.xlsx"
     product_map = repo_root / "docs" / "test-assets" / "product-map.xlsx"
+    version_file = repo_root / "VERSION"
+    upgrade_manifest = repo_root / "UPGRADE_MANIFEST.md"
+    upgrade_doc = repo_root / "docs" / "UPGRADE.md"
+    package_script = repo_root / "scripts" / "new-framework-upgrade-package.ps1"
+    upgrade_script = repo_root / "scripts" / "upgrade-framework.ps1"
 
     if not design_template.exists():
         fail(f"Missing design template: {design_template}")
@@ -103,6 +119,16 @@ def main() -> int:
         fail(f"Missing system import template: {system_template}")
     if not product_map.exists():
         fail(f"Missing product map: {product_map}")
+    for path in [version_file, upgrade_manifest, upgrade_doc, package_script, upgrade_script]:
+        if not path.exists():
+            fail(f"Missing upgrade mechanism file: {path}")
+
+    versions = parse_key_value_file(version_file)
+    for key in ["framework_version", "asset_schema_version"]:
+        if key not in versions or not versions[key]:
+            fail(f"VERSION is missing {key}")
+        if not re.fullmatch(r"\d+\.\d+\.\d+", versions[key]):
+            fail(f"VERSION {key} should use semantic numeric format: {versions[key]}")
 
     for dirname in ["current", "deliverables"]:
         path = repo_root / "docs" / "test-design" / dirname
@@ -374,6 +400,51 @@ def main() -> int:
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
     ]:
         assert_contains(path, understanding_markers)
+
+    upgrade_protection_markers = [
+        "PROTECTED_ASSET_DIRS",
+        "docs/test-assets/",
+        "docs/test-design/current/",
+        "docs/test-design/deliverables/",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / "README.md",
+        repo_root / "README_IMPORT.md",
+        repo_root / "UPGRADE_MANIFEST.md",
+        repo_root / "docs" / "UPGRADE.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-assets" / "README.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        package_script,
+        upgrade_script,
+    ]:
+        assert_contains(path, upgrade_protection_markers)
+
+    upgrade_version_markers = [
+        "framework_version",
+        "asset_schema_version",
+    ]
+    for path in [
+        version_file,
+        upgrade_manifest,
+        upgrade_doc,
+        repo_root / "README.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / "AGENTS.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        package_script,
+        upgrade_script,
+    ]:
+        assert_contains(path, upgrade_version_markers)
+
+    for path in [upgrade_manifest, upgrade_doc, repo_root / "README.md", repo_root / "README_IMPORT.md"]:
+        assert_contains(path, ["new-framework-upgrade-package.ps1", "upgrade-framework.ps1"])
 
     print("OK: test design templates are aligned and import template validations are preserved.")
     return 0

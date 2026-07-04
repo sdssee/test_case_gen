@@ -28,3 +28,6 @@ docs/test-assets/
 - 事实存放在 `product-map.xlsx` 和归档测试设计中。
 - 不依赖 AI 对话记忆保存具体业务事实。
 - 用户人工新增或修改后的最终版本必须回存资产库。
+- 外网到内网做普通框架升级时，`docs/test-assets/` 是受保护目录，不得被升级包覆盖或删除。标识：PROTECTED_ASSET_DIRS。
+- `product-map.xlsx` 是主要可能演进的资产结构；结构变化时通过 `asset_schema_version`、升级清单、校验脚本和迁移脚本处理。
+- `modules/` 和 `imports/` 中的历史 Excel 默认作为历史快照保留，不因框架升级而批量重写。

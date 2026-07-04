@@ -106,3 +106,13 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 - 模板字段变化时同步更新 `docs/test-design/excel-template-spec.md`。
 - 修改完成后运行稳定性自检。
 - 按项目约定，修改完成并验证通过后提交并推送到 `origin`。
+
+## 外网到内网升级
+
+- 普通框架升级使用 `scripts/new-framework-upgrade-package.ps1` 生成升级包。
+- 内网使用 `scripts/upgrade-framework.ps1 -PackagePath <升级包>` 应用升级包。
+- 升级包默认保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`，不得覆盖内网真实资产。标识：PROTECTED_ASSET_DIRS。
+- `VERSION` 中的 `framework_version` 表示框架版本，`asset_schema_version` 表示内部资产结构版本。
+- 只有 `asset_schema_version` 变化或 `product-map.xlsx` 结构变化时，才需要资产迁移；迁移必须增量补齐，不得用空模板覆盖真实资产。
+
+详细流程见 `docs/UPGRADE.md`。

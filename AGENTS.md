@@ -90,3 +90,11 @@ Codex 应优先读取并遵守以下文件：
 - 每次完成修改后，默认执行 `git status` 检查变更。
 - 如果修改已完成且验证通过，默认提交到当前分支并推送到 `origin`。
 - GitHub 提交信息必须使用中文，简洁说明本次规范、模板、脚本或文档变更。
+
+## 外网到内网升级约定
+
+- 普通框架升级以脚本升级为主、手动确认兜底：外网使用 `scripts/new-framework-upgrade-package.ps1` 生成升级包，内网使用 `scripts/upgrade-framework.ps1 -PackagePath <升级包>` 应用升级包。
+- `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/` 是受保护目录，普通框架升级不得覆盖、删除或清空。标识：PROTECTED_ASSET_DIRS。
+- `VERSION` 中的 `framework_version` 表示框架版本，`asset_schema_version` 表示内部资产结构版本；只有资产结构版本或 `product-map.xlsx` 结构变化时才需要迁移。
+- 资产结构升级必须通过升级清单、校验脚本和迁移脚本发现并处理；迁移脚本只能读取旧资产并增量补齐，不能用空模板覆盖内网真实资产。
+- `docs/test-assets/modules/` 和 `docs/test-assets/imports/` 中的历史 Excel 默认作为历史快照保留，不因普通框架升级而批量重写。

@@ -1,0 +1,161 @@
+param(
+  [Parameter(Mandatory = $true)]
+  [string]$PackagePath,
+  [switch]$RunMigrations
+)
+
+$ErrorActionPreference = "Stop"
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$resolvedPackage = Resolve-Path -LiteralPath $PackagePath
+$timestamp = Get-Date -Format "yyyyMMddHHmmss"
+$backupRoot = Join-Path $repoRoot ".upgrade-backups\$timestamp"
+$extractRoot = Join-Path $env:TEMP ("test-case-gen-upgrade-apply-" + [System.Guid]::NewGuid().ToString("N"))
+
+$protectedPrefixes = @(
+  "docs/test-assets/",
+  "docs/test-design/current/",
+  "docs/test-design/deliverables/"
+)
+# PROTECTED_ASSET_DIRS: docs/test-assets/, docs/test-design/current/, docs/test-design/deliverables/
+# VERSION keys: framework_version, asset_schema_version
+
+$allowedPrefixes = @(
+  ".codebuddy/",
+  "docs/test-design/",
+  "docs/ARCHITECTURE.md",
+  "docs/UPGRADE.md",
+  "docs/test-assets/README.md",
+  "scripts/",
+  "AGENTS.md",
+  "CODEBUDDY.md",
+  "README.md",
+  "README_IMPORT.md",
+  "VERSION",
+  "UPGRADE_MANIFEST.md"
+)
+
+function Normalize-RelativePath {
+  param([string]$Path)
+  return $Path.Replace("\", "/").TrimStart("/")
+}
+
+function Test-ProtectedPath {
+  param([string]$RelativePath)
+  $normalized = Normalize-RelativePath $RelativePath
+  if ($normalized -eq "docs/test-assets/README.md") {
+    return $false
+  }
+  foreach ($prefix in $protectedPrefixes) {
+    if ($normalized.StartsWith($prefix)) {
+      return $true
+    }
+  }
+  return $false
+}
+
+function Test-AllowedPath {
+  param([string]$RelativePath)
+  $normalized = Normalize-RelativePath $RelativePath
+  foreach ($prefix in $allowedPrefixes) {
+    if ($normalized -eq $prefix.TrimEnd("/") -or $normalized.StartsWith($prefix)) {
+      return $true
+    }
+  }
+  return $false
+}
+
+function Read-VersionValue {
+  param(
+    [string]$File,
+    [string]$Key
+  )
+  if (-not (Test-Path $File)) {
+    return ""
+  }
+  $line = Get-Content -Encoding utf8 $File | Where-Object { $_ -match "^$Key=" } | Select-Object -First 1
+  if (-not $line) {
+    return ""
+  }
+  return $line -replace "^$Key=", ""
+}
+
+function Get-RelativePath {
+  param(
+    [string]$BasePath,
+    [string]$FullPath
+  )
+  $base = (Resolve-Path -LiteralPath $BasePath).Path.TrimEnd("\") + "\"
+  $full = (Resolve-Path -LiteralPath $FullPath).Path
+  if (-not $full.StartsWith($base, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Path is outside base path: $FullPath"
+  }
+  return $full.Substring($base.Length)
+}
+
+New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+try {
+  Expand-Archive -LiteralPath $resolvedPackage -DestinationPath $extractRoot -Force
+
+  $manifest = Join-Path $extractRoot "UPGRADE_MANIFEST.md"
+  $packageVersion = Join-Path $extractRoot "VERSION"
+  if (-not (Test-Path $manifest)) {
+    throw "Upgrade package is missing UPGRADE_MANIFEST.md."
+  }
+  if (-not (Test-Path $packageVersion)) {
+    throw "Upgrade package is missing VERSION."
+  }
+
+  $currentVersion = Join-Path $repoRoot "VERSION"
+  $currentAssetSchemaVersion = Read-VersionValue -File $currentVersion -Key "asset_schema_version"
+  $packageAssetSchemaVersion = Read-VersionValue -File $packageVersion -Key "asset_schema_version"
+
+  New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+  foreach ($protected in $protectedPrefixes) {
+    $source = Join-Path $repoRoot $protected
+    if (Test-Path $source) {
+      $target = Join-Path $backupRoot $protected
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+      Copy-Item -LiteralPath $source -Destination $target -Recurse -Force
+    }
+  }
+
+  Get-ChildItem -Path $extractRoot -Recurse -File | ForEach-Object {
+    $relative = Get-RelativePath -BasePath $extractRoot -FullPath $_.FullName
+    $normalized = Normalize-RelativePath $relative
+    if (Test-ProtectedPath $normalized) {
+      Write-Host "Skip protected asset path: $normalized"
+      return
+    }
+    if (-not (Test-AllowedPath $normalized)) {
+      Write-Host "Skip unexpected package path: $normalized"
+      return
+    }
+    $target = Join-Path $repoRoot $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+    Copy-Item -LiteralPath $_.FullName -Destination $target -Force
+  }
+
+  if ($currentAssetSchemaVersion -and $packageAssetSchemaVersion -and $currentAssetSchemaVersion -ne $packageAssetSchemaVersion) {
+    $migration = Join-Path $repoRoot "scripts\migrations\${currentAssetSchemaVersion}_to_${packageAssetSchemaVersion}.ps1"
+    if (-not $RunMigrations) {
+      throw "Asset schema version changed from $currentAssetSchemaVersion to $packageAssetSchemaVersion. Review and run with -RunMigrations after confirming migration script: $migration"
+    }
+    if (-not (Test-Path $migration)) {
+      throw "Missing migration script: $migration"
+    }
+    & powershell -ExecutionPolicy Bypass -File $migration
+  }
+
+  & powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\validate-test-design.ps1")
+  if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+  }
+
+  Write-Host "Framework upgrade applied."
+  Write-Host "Protected assets backup: $backupRoot"
+}
+finally {
+  if (Test-Path $extractRoot) {
+    Remove-Item -LiteralPath $extractRoot -Recurse -Force
+  }
+}

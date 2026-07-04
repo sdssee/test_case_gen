@@ -70,3 +70,9 @@ docs/test-assets/product-map.xlsx
 - 被依赖模块通过 `跨模块依赖关系` Sheet、标签、备注和关联用例 ID 追踪。
 - 当前模块依赖已有模块能力时，优先引用已有用例 ID 作为前置条件，不重复复制已有用例。
 - 如果依赖关系本身存在风险，应新增跨模块链路用例，并登记到索引。
+
+## 外网到内网升级保护
+
+- `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/` 是受保护目录，普通框架升级不得覆盖或删除。标识：PROTECTED_ASSET_DIRS。
+- `product-map.xlsx` 是主要可能演进的内部资产结构；历史归档 Excel 默认作为历史快照保留，不因普通框架升级而批量重写。
+- 如果 `asset_schema_version` 或产品版图结构变化，必须通过升级清单、校验脚本和迁移脚本增量补齐旧资产，不得用空模板覆盖内网真实资产。

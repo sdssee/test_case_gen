@@ -324,3 +324,15 @@
 - 表格开启筛选。
 - 枚举字段应使用固定值。
 - 工作簿内保留示例行，便于用户理解填写方式。
+
+## 外网到内网升级
+
+普通框架升级使用升级包同步规范、模板和脚本，不覆盖内网业务资产。受保护目录包括：
+
+- `docs/test-assets/`
+- `docs/test-design/current/`
+- `docs/test-design/deliverables/`
+
+标识：PROTECTED_ASSET_DIRS
+
+`VERSION` 中的 `framework_version` 表示框架版本，`asset_schema_version` 表示内部资产结构版本。`product-map.xlsx` 是主要可能演进的数据结构；历史归档 Excel 默认作为历史快照保留。如果 `asset_schema_version` 或产品版图结构变化，必须通过迁移脚本读取旧资产并增量补齐，不得用空模板覆盖真实资产。

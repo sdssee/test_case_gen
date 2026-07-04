@@ -440,6 +440,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 如果存在跨模块依赖，是否已读取产品版图和依赖模块归档测试设计
 - 是否已向用户展示产品理解摘要并获得确认或补充
 - 是否已规划将客户交付件保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`，将最终测试设计回存 `docs/test-assets/modules/`，将导入文件副本回存 `docs/test-assets/imports/`，并更新 `product-map.xlsx`
+- 外网到内网做普通框架升级时，是否已保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`，且未覆盖内网真实资产。标识：PROTECTED_ASSET_DIRS
 
 ## 输出要求
 
@@ -448,3 +449,11 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 在对话中可以先输出摘要，但不能用摘要替代 Excel 交付物。
 
 客户交付件应保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。最终版测试设计应归档到 `docs/test-assets/modules/`，测试系统导入文件副本应归档到 `docs/test-assets/imports/`。生成后必须同步更新 `docs/test-assets/product-map.xlsx` 中的产品模块地图、业务对象地图、业务链路地图、页面元素地图、用例资产索引、模块能力索引、跨模块依赖、可复用测试数据、变更影响分析和变更记录；如果无法更新，应在最终说明中明确原因和待补项。
+
+## 外网到内网升级
+
+- 普通框架升级以脚本升级为主、手动确认兜底；外网使用 `scripts/new-framework-upgrade-package.ps1` 生成升级包，内网使用 `scripts/upgrade-framework.ps1 -PackagePath <升级包>` 应用升级包。
+- `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/` 是受保护目录，普通框架升级不得覆盖、删除或清空。标识：PROTECTED_ASSET_DIRS。
+- `VERSION` 中的 `framework_version` 表示框架版本，`asset_schema_version` 表示内部资产结构版本。
+- `product-map.xlsx` 是主要可能演进的内部资产结构；历史归档 Excel 默认作为历史快照保留，不因普通框架升级而批量重写。
+- `asset_schema_version` 变化或产品版图结构变化时，必须通过升级清单、校验脚本和迁移脚本处理；迁移脚本只能读取旧资产并增量补齐，不能用空模板覆盖内网真实资产。

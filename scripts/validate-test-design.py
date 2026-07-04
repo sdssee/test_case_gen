@@ -63,6 +63,24 @@ def worksheet_xml(path: Path, sheet_index: int = 1) -> str:
         return zf.read(f"xl/worksheets/sheet{sheet_index}.xml").decode("utf-8")
 
 
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def assert_contains(path: Path, markers: list[str]) -> None:
+    text = read_text(path)
+    for marker in markers:
+        if marker not in text:
+            fail(f"{path.relative_to(path.parents[1])} is missing required marker: {marker}")
+
+
+def assert_not_contains(path: Path, markers: list[str]) -> None:
+    text = read_text(path)
+    for marker in markers:
+        if marker in text:
+            fail(f"{path.relative_to(path.parents[1])} contains stale marker: {marker}")
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     design_template = repo_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
@@ -162,6 +180,39 @@ def main() -> int:
                     text = zf.read(item).decode("utf-8", errors="ignore")
                     if formula_errors.search(text):
                         fail(f"Formula error marker found in {path.name}:{item}")
+
+    architecture_files = [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+    ]
+    for path in architecture_files:
+        if not path.exists():
+            fail(f"Missing architecture file: {path}")
+
+    required_markers = [
+        "正式测试设计",
+        "测试系统导入用例",
+        "独立导入文件",
+        "测试用例模板.xlsx",
+    ]
+    for path in architecture_files:
+        assert_contains(path, required_markers[:2] if path.name == "AGENTS.md" else required_markers[:3])
+
+    stale_markers = [
+        "必须输出 `测试系统导入用例` Sheet",
+        "正式交付时必须包含 `测试系统导入用例` Sheet",
+        "请生成测试系统导入用例 Sheet",
+        "模板包含 `测试系统导入用例` Sheet",
+    ]
+    for path in architecture_files:
+        assert_not_contains(path, stale_markers)
+
+    assert_contains(repo_root / "AGENTS.md", ["GitHub 提交信息必须使用中文"])
 
     print("OK: test design templates are aligned and import template validations are preserved.")
     return 0

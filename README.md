@@ -17,6 +17,7 @@
 | --- | --- |
 | `AGENTS.md` | Codex 项目级执行说明。 |
 | `CODEBUDDY.md` | CodeBuddy 项目级 Memory。 |
+| `docs/ARCHITECTURE.md` | AI 规则分层、模板契约和维护边界。 |
 | `.codebuddy/skills/test-design/SKILL.md` | 测试设计 Skill。 |
 | `.codebuddy/.rules/test-design-rule.mdc` | CodeBuddy IDE 规则。 |
 | `.codebuddy/rules/test-design-rule.md` | CodeBuddy Code/CLI 规则。 |
@@ -64,6 +65,7 @@
 
 - `AGENTS.md`
 - `CODEBUDDY.md`
+- `docs/ARCHITECTURE.md`
 - `.codebuddy/skills/test-design/SKILL.md`
 - `docs/test-design/excel-template-spec.md`
 

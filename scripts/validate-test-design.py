@@ -125,10 +125,17 @@ def main() -> int:
     for row in range(2, 5):
         function_point = cell_value(design_template, 4, f"D{row}")
         case_title = cell_value(design_template, 4, f"E{row}")
-        if function_point and case_title != f"{function_point}-{case_title.split('-', 1)[-1]}":
-            fail(f"功能测试用例 sample title must use 功能点-当前用例标题 format at row {row}: {case_title}")
-        if function_point and not case_title.startswith(f"{function_point}-"):
+        if not function_point:
+            fail(f"功能测试用例 sample function point must not be empty at row {row}")
+        if not case_title:
+            fail(f"功能测试用例 sample title must not be empty at row {row}")
+        if not case_title.startswith(f"{function_point}-"):
             fail(f"功能测试用例 sample title must start with its 功能点 at row {row}: {case_title}")
+        suffix = case_title.removeprefix(f"{function_point}-")
+        if not suffix:
+            fail(f"功能测试用例 sample title must include content after 功能点- at row {row}: {case_title}")
+        if f"{function_point} -" in case_title or f"{function_point}- " in case_title:
+            fail(f"功能测试用例 sample title must not include spaces around hyphen at row {row}: {case_title}")
 
     system_sheets = workbook_sheets(system_template)
     if not system_sheets:

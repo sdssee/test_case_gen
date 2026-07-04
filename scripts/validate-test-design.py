@@ -516,6 +516,30 @@ def main() -> int:
     ]:
         assert_contains(path, module_two_pass_markers)
 
+    product_map_persistence_markers = [
+        "不是临时分析结果",
+        "必须沉淀",
+        "product-map.xlsx",
+        "产品模块地图",
+        "页面元素地图",
+        "业务对象地图",
+        "业务链路地图",
+        "模块能力索引",
+        "跨模块依赖关系",
+        "变更记录",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+    ]:
+        assert_contains(path, product_map_persistence_markers)
+
     print("OK: test design templates are aligned and import template validations are preserved.")
     return 0
 

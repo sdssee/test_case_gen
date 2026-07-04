@@ -72,6 +72,8 @@ docs/test-assets/product-map.xlsx
 
 执行时应先按小模块或页面域分批生成测试设计和导入文件，每批生成后立即回存 `docs/test-assets/modules/`、`docs/test-assets/imports/` 并更新 `product-map.xlsx`。所有模块批次完成后，再生成跨模块链路用例、回归范围、风险清单和客户总览交付件。跨模块汇总只引用已归档模块能力和用例 ID，不重复复制各模块完整用例。
 
+每个批次正式写测试用例前，如果存在可访问页面、原型或桌面窗口，必须使用浏览器能力或 computer use 遍历当前批次对应模块、页面域或业务链路的所有可点击/可交互功能点。遍历结果必须同步到页面元素覆盖清单、功能测试用例和 `product-map.xlsx` 的页面元素地图；无法确认业务规则的入口登记为待确认问题。
+
 ## 每次生成后
 
 1. 将客户交付件保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。

@@ -600,6 +600,28 @@ def main() -> int:
     actual_page_discovery_header = read_text(page_discovery_template).splitlines()[0]
     if actual_page_discovery_header != expected_page_discovery_header:
         fail("page-discovery-template.csv header changed unexpectedly")
+
+    no_global_intermediate_markers = [
+        "承载全量测试用例正文",
+        "单一中间文件",
+        "Python",
+        "JSON",
+        "Markdown",
+        "当前批次的模板填充、格式转换或校验",
+        "统一生成 Excel",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
+        batch_plan_template,
+    ]:
+        assert_contains(path, no_global_intermediate_markers)
     for path in [
         repo_root / "AGENTS.md",
         repo_root / "CODEBUDDY.md",

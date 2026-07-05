@@ -33,3 +33,7 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/
 6. 当前批次的覆盖质量自检通过后，才能进入下一批。
 7. 禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件；脚本只能用于当前批次的模板填充、格式转换或校验，不得把多个二级菜单、多个批次或全产品测试用例先集中写入一个文件后再统一生成 Excel。
 8. 最终汇总只引用已归档批次成果和用例 ID，不得重新生成各批完整用例。
+
+## 运行期门禁
+
+`scripts/validate-test-design.ps1` 会扫描 `docs/test-assets/batch-runs/`、`docs/test-design/current/` 和 `docs/test-design/deliverables/`，拦截疑似承载全量测试用例正文的单一中间文件，例如 `all_cases.py`、`full_product_cases.json`、`merged_cases.csv`、`case_pool.md` 或包含“全量测试用例”“多个二级菜单”“统一生成 Excel”等聚合痕迹的文件。标准批次账本文件 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 以及 `templates/` 模板目录不会被误判。

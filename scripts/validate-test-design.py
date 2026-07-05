@@ -13,6 +13,72 @@ NS = {
     "rel": "http://schemas.openxmlformats.org/package/2006/relationships",
 }
 
+GLOBAL_INTERMEDIATE_SCAN_DIRS = [
+    Path("docs/test-assets/batch-runs"),
+    Path("docs/test-design/current"),
+    Path("docs/test-design/deliverables"),
+]
+
+GLOBAL_INTERMEDIATE_EXTS = {".py", ".json", ".csv", ".md", ".txt", ".tmp"}
+
+GLOBAL_INTERMEDIATE_ALLOWED_NAMES = {
+    "README.md",
+    "batch-plan.md",
+    "batch-status.csv",
+    "batch-review.md",
+    "page-discovery.csv",
+}
+
+GLOBAL_INTERMEDIATE_NAME_PATTERNS = [
+    "all_cases",
+    "all-cases",
+    "allcases",
+    "cases_all",
+    "test_cases_all",
+    "full_product",
+    "full-product",
+    "fullproduct",
+    "global_cases",
+    "merged_cases",
+    "case_pool",
+    "casepool",
+    "all_test_cases",
+    "complete_cases",
+    "全量用例",
+    "全部用例",
+    "完整用例",
+    "统一用例",
+    "用例池",
+]
+
+GLOBAL_INTERMEDIATE_CONTENT_MARKERS = [
+    "all test cases",
+    "all cases",
+    "full product cases",
+    "global cases",
+    "merged cases",
+    "case pool",
+    "全量测试用例",
+    "全部测试用例",
+    "完整测试用例",
+    "跨批次用例",
+    "多个二级菜单",
+    "统一生成 Excel",
+    "先集中写入",
+]
+
+CASE_BODY_MARKERS = [
+    "用例ID",
+    "用例 ID",
+    "测试步骤",
+    "预期结果",
+    "测试用例名称",
+    "case_id",
+    "case id",
+    "test steps",
+    "expected result",
+]
+
 
 def fail(message: str) -> None:
     raise AssertionError(message)
@@ -102,6 +168,59 @@ def parse_key_value_file(path: Path) -> dict[str, str]:
     return values
 
 
+def is_under(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def is_allowed_batch_run_file(path: Path, repo_root: Path) -> bool:
+    batch_runs_dir = repo_root / "docs" / "test-assets" / "batch-runs"
+    templates_dir = batch_runs_dir / "templates"
+    if is_under(path, templates_dir):
+        return True
+    if path.name in GLOBAL_INTERMEDIATE_ALLOWED_NAMES:
+        return True
+    return False
+
+
+def likely_global_intermediate_name(path: Path) -> bool:
+    normalized = path.name.lower().replace(" ", "_")
+    return any(pattern.lower() in normalized for pattern in GLOBAL_INTERMEDIATE_NAME_PATTERNS)
+
+
+def likely_global_intermediate_content(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8-sig", errors="ignore")
+    except OSError:
+        return False
+    normalized = text.lower()
+    has_global_marker = any(marker.lower() in normalized for marker in GLOBAL_INTERMEDIATE_CONTENT_MARKERS)
+    case_marker_count = sum(1 for marker in CASE_BODY_MARKERS if marker.lower() in normalized)
+    return has_global_marker and case_marker_count >= 2
+
+
+def validate_no_global_intermediate_files(repo_root: Path) -> None:
+    for relative_dir in GLOBAL_INTERMEDIATE_SCAN_DIRS:
+        scan_dir = repo_root / relative_dir
+        if not scan_dir.exists():
+            continue
+        for path in scan_dir.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in GLOBAL_INTERMEDIATE_EXTS:
+                continue
+            if is_allowed_batch_run_file(path, repo_root):
+                continue
+            if likely_global_intermediate_name(path) or likely_global_intermediate_content(path):
+                fail(
+                    "Forbidden global test-case intermediate file found: "
+                    f"{path.relative_to(repo_root)}. "
+                    "Large-scope work must keep case bodies inside the current batch workbook, "
+                    "page-discovery.csv, and batch-status.csv instead of aggregating all cases first."
+                )
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     design_template = repo_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
@@ -140,6 +259,8 @@ def main() -> int:
         path = repo_root / "docs" / "test-assets" / dirname
         if not path.is_dir():
             fail(f"Missing internal test asset directory: {path}")
+
+    validate_no_global_intermediate_files(repo_root)
 
     expected_design_sheets = [
         "测试设计总览",

@@ -293,6 +293,7 @@ def main() -> int:
         repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "RULE_OWNERSHIP.md",
         repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
     ]
     for path in architecture_files:
@@ -308,6 +309,8 @@ def main() -> int:
     for path in architecture_files:
         if path.name == "archive-and-index-guidelines.md":
             continue
+        if path.name == "RULE_OWNERSHIP.md":
+            continue
         assert_contains(path, required_markers[:2] if path.name == "AGENTS.md" else required_markers[:3])
 
     stale_markers = [
@@ -318,6 +321,41 @@ def main() -> int:
     ]
     for path in architecture_files:
         assert_not_contains(path, stale_markers)
+
+    rule_mdc = repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc"
+    rule_md = repo_root / ".codebuddy" / "rules" / "test-design-rule.md"
+    if read_text(rule_mdc) != read_text(rule_md):
+        fail("CodeBuddy Rule mirrors must stay identical: .codebuddy/.rules/test-design-rule.mdc and .codebuddy/rules/test-design-rule.md")
+
+    ownership_file = repo_root / "docs" / "RULE_OWNERSHIP.md"
+    ownership_markers = [
+        "规则归属矩阵",
+        "权威源",
+        "可摘要引用",
+        "不应承载完整规则",
+        ".codebuddy/.rules/test-design-rule.mdc",
+        ".codebuddy/rules/test-design-rule.md",
+        ".codebuddy/skills/test-design/SKILL.md",
+        "docs/test-design/excel-template-spec.md",
+        "docs/test-design/archive-and-index-guidelines.md",
+        "docs/UPGRADE.md",
+        "README.md",
+    ]
+    assert_contains(ownership_file, ownership_markers)
+    for path in [repo_root / "README.md", repo_root / "README_IMPORT.md", repo_root / "docs" / "ARCHITECTURE.md"]:
+        assert_contains(path, ["docs/RULE_OWNERSHIP.md"])
+    summary_only_files = [
+        repo_root / "README.md",
+        repo_root / "docs" / "test-design" / "README.md",
+    ]
+    full_rule_markers = [
+        "测试用例必须尽可能详细",
+        "批次队列",
+        "不得重新一次性改写各批完整用例",
+        "分批默认按一级模块下的二级菜单",
+    ]
+    for path in summary_only_files:
+        assert_not_contains(path, full_rule_markers)
 
     assert_contains(repo_root / "AGENTS.md", ["GitHub 提交信息必须使用中文"])
 
@@ -478,10 +516,7 @@ def main() -> int:
     for path in [
         repo_root / "AGENTS.md",
         repo_root / "CODEBUDDY.md",
-        repo_root / "README.md",
-        repo_root / "README_IMPORT.md",
         repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-design" / "README.md",
         repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
@@ -500,10 +535,7 @@ def main() -> int:
     for path in [
         repo_root / "AGENTS.md",
         repo_root / "CODEBUDDY.md",
-        repo_root / "README.md",
-        repo_root / "README_IMPORT.md",
         repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-design" / "README.md",
         repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
@@ -522,10 +554,7 @@ def main() -> int:
     for path in [
         repo_root / "AGENTS.md",
         repo_root / "CODEBUDDY.md",
-        repo_root / "README.md",
-        repo_root / "README_IMPORT.md",
         repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-design" / "README.md",
         repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
@@ -576,10 +605,6 @@ def main() -> int:
     for path in [
         repo_root / "AGENTS.md",
         repo_root / "CODEBUDDY.md",
-        repo_root / "README.md",
-        repo_root / "README_IMPORT.md",
-        repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-design" / "README.md",
         repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",

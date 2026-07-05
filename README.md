@@ -18,6 +18,7 @@
 | `AGENTS.md` | Codex 项目级执行说明。 |
 | `CODEBUDDY.md` | CodeBuddy 项目级 Memory。 |
 | `docs/ARCHITECTURE.md` | AI 规则分层、模板契约和维护边界。 |
+| `docs/RULE_OWNERSHIP.md` | 规则归属矩阵，定义权威源、摘要引用和不应承载完整规则的位置。 |
 | `.codebuddy/skills/test-design/SKILL.md` | 测试设计 Skill。 |
 | `.codebuddy/.rules/test-design-rule.mdc` | CodeBuddy IDE 规则。 |
 | `.codebuddy/rules/test-design-rule.md` | CodeBuddy Code/CLI 规则。 |
@@ -64,19 +65,13 @@
 - 每次生成前读取产品版图和依赖模块归档；正式生成前展示产品理解摘要；每次生成后回存最终版并更新产品版图
 - 不依赖 AI 对话记忆保存具体业务事实
 
-## 大范围任务
+## 规则入口
 
-- 单模块任务正式写用例前，也要先做模块级粗遍历，识别菜单入口、页面清单、核心功能点、业务对象、状态流转和跨模块依赖。
-- 全产品、多个一级模块或大模块测试设计必须先遍历一级菜单、二级菜单和必要的三级菜单，拿到菜单轮廓、页面清单和功能地图后，再输出分批设计计划，不得一次性生成完整测试用例。
-- 模块级粗遍历、菜单轮廓、页面清单和功能地图必须沉淀到 `product-map.xlsx`，不能只停留在对话或临时分析里。
-- 分批默认按一级模块下的二级菜单执行；二级菜单过大时按三级菜单、页面域或小功能块继续拆分，二级菜单过小时可与同一一级模块下相邻二级菜单合并，跨二级菜单强依赖时按业务对象或业务链路合并成批。
-- 每批按二级菜单或调整后的批次范围生成测试设计和导入文件，并立即回存内部资产库。
-- 每批正式写测试用例前，如有可访问页面，应使用浏览器或 computer use 遍历当前批次所有可点击/可交互功能点。
-- 具体写测试用例时，要在对应页面或功能点内做深遍历，覆盖所有可点击、可输入、可测试元素。
-- 每一批测试设计都必须严格执行完整 test-design Skill 和 Rule，不得因为分批而降级；每批都必须覆盖功能测试、性能测试、异常流程、边界值、权限/角色、状态流转、数据一致性、兼容性/稳定性、风险与待确认问题、自动化建议和页面元素覆盖清单。
-- 当范围超过一个二级菜单时，禁止直接生成完整测试用例；必须先建立批次队列，逐批执行完整测试设计，并在每批覆盖质量自检通过后才能进入下一批；所有批次完成后只做跨模块汇总，不得重新一次性改写各批完整用例。
-- 测试用例必须尽可能详细；每个测试点和每个页面元素都要按主流程、异常、边界、权限、状态、数据一致性、组合条件、禁用态/空状态/错误态、兼容性/稳定性、性能影响和可恢复路径等不同测试方向展开，不能只写笼统用例。
-- 所有批次完成后，再生成跨模块汇总、回归范围、风险清单和客户总览交付件。
+- 硬性测试质量规则以 `.codebuddy/.rules/test-design-rule.mdc` 和 `.codebuddy/rules/test-design-rule.md` 为准。
+- 执行流程以 `.codebuddy/skills/test-design/SKILL.md` 为准。
+- Excel 字段、下拉框和导入模板以 `docs/test-design/excel-template-spec.md` 为准。
+- 产品版图、归档和跨模块依赖以 `docs/test-design/archive-and-index-guidelines.md` 为准。
+- 规则归属和精简边界以 `docs/RULE_OWNERSHIP.md` 为准。
 
 ## 使用方式
 
@@ -94,7 +89,9 @@
 - `CODEBUDDY.md`
 - `docs/ARCHITECTURE.md`
 - `.codebuddy/skills/test-design/SKILL.md`
+- `.codebuddy/rules/test-design-rule.md`
 - `docs/test-design/excel-template-spec.md`
+- `docs/RULE_OWNERSHIP.md`
 
 ## 稳定性自检
 
@@ -113,11 +110,11 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 - 无已落地自动化资产时，导入文件中的 `执行方式` 默认填写 `手动`
 - `用例标题`/`测试用例名称` 使用 `功能点-当前用例标题` 格式，避免导入系统后丢失功能点信息
 - 产品版图文件存在且包含标准 Sheet
-- 分批测试设计规则要求每批都执行完整 Skill 和 Rule，覆盖功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险、自动化建议和页面元素覆盖清单
+- 规则归属矩阵存在，Rule 双入口保持一致，入口文档引用权威源而不是复制完整规则
 
 ## 维护原则
 
-- 规则变化时同步更新 `AGENTS.md`、`CODEBUDDY.md`、Skill 和 Rule。
+- 规则变化时先查 `docs/RULE_OWNERSHIP.md`，更新权威源，再同步必要摘要引用。
 - 模板字段变化时同步更新 `docs/test-design/excel-template-spec.md`。
 - 修改完成后运行稳定性自检。
 - 按项目约定，修改完成并验证通过后提交并推送到 `origin`。

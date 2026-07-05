@@ -15,6 +15,8 @@
 | 升级机制 | `VERSION`、`UPGRADE_MANIFEST.md`、`docs/UPGRADE.md`、`scripts/new-framework-upgrade-package.ps1`、`scripts/upgrade-framework.ps1` | 支持外网生成框架升级包、内网受控应用升级包，并保护内网业务资产。 |
 | 自动化校验 | `scripts/validate-test-design.py`、`scripts/validate-test-design.ps1` | 防止模板结构、导入模板下拉框、升级边界和关键规则发生漂移。 |
 
+规则归属和精简边界见 `docs/RULE_OWNERSHIP.md`。修改规则时，应先判断规则类型和权威源，再更新摘要引用和校验脚本。
+
 ## 关键架构决策
 
 1. 正式测试设计 Excel 只保留 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
@@ -45,6 +47,7 @@
 - 改测试资产归档或跨模块依赖规则：同步 `AGENTS.md`、`CODEBUDDY.md`、Skill、Rule、`docs/test-design/archive-and-index-guidelines.md` 和自检脚本。
 - 改外网到内网升级机制：同步 `VERSION`、`UPGRADE_MANIFEST.md`、`docs/UPGRADE.md`、升级脚本和自检脚本。
 - 改内部资产结构：提升 `asset_schema_version`，补充升级清单和迁移脚本；迁移脚本只能读取旧资产并增量补齐。
+- 改规则归属或精简策略：同步 `docs/RULE_OWNERSHIP.md`、`docs/ARCHITECTURE.md` 和自检脚本。
 
 ## 发布前检查
 

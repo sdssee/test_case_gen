@@ -32,7 +32,7 @@
 - 页面实探时只能新增、修改、删除或变更自己创建且带测试标识的数据；对页面已有数据可以查看、搜索、筛选、排序、分页、打开详情，或进入编辑/修改页面观察字段、校验、联动、多级子菜单和保存前提示，但不得保存、提交或改变已有数据。
 - 功能测试用例必须按模块、页面、业务流程和小功能块连续编排；同一小功能块的用例必须放在附近。
 - 如果用户提供测试数据，必须优先用于页面实探和用例设计；正常数据用于校准成功路径预期，异常/边界数据用于补充负向测试，敏感数据在最终用例中必须脱敏。
-- 生成正式测试设计 Excel 后，应运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务还应传入 `-BatchStatusPath <batch-status.csv>`。如果本次存在 `page-discovery.csv`，还必须传入 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的页面元素、关联用例、用例资产索引和变更记录是否同步。
+- 生成正式测试设计 Excel 后，应运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务还应传入 `-BatchStatusPath <batch-status.csv>`。如果 `batch-status.csv` 同级存在 `page-discovery.csv`，脚本会自动使用 `docs/test-assets/product-map.xlsx` 启用产品版图同步校验；也可以显式传入 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的页面元素、关联用例、用例资产索引和变更记录是否同步。
 - 敏捷用户故事每条至少生成 10 条功能测试用例。
 - `前置条件`、`操作步骤`、`预期结果` 必须使用 `1. 2. 3.` 换行分条；`操作步骤` 不得默认已经位于当前模块页面，必须从系统或项目入口开始写完整导航路径，包括登录/打开系统、进入一级菜单、二级/三级菜单或目标页面，再写具体控件操作。
 - `用例标题` 和测试系统导入文件中的 `测试用例名称` 必须正式、简洁、可检索，避免口语化、聊天式或操作随笔式表达，并统一使用 `功能点-当前用例标题` 格式。

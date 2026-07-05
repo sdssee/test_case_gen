@@ -775,13 +775,18 @@ def main() -> int:
             "navigation_markers",
             "full navigation",
             "validate_product_map_sync",
+            "default_page_discovery_path",
+            "default_product_map_path",
             "--product-map",
             "--page-discovery",
             "page-discovery.csv",
             "product-map",
         ],
     )
-    assert_contains(deliverable_validator_ps1, ["ProductMapPath", "PageDiscoveryPath", "--product-map", "--page-discovery"])
+    assert_contains(
+        deliverable_validator_ps1,
+        ["ProductMapPath", "PageDiscoveryPath", "--product-map", "--page-discovery", "page-discovery.csv"],
+    )
 
     batch_exploration_markers = [
         "当前批次",

@@ -457,7 +457,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 是否已在 `batch-status.csv` 记录当前批次状态，并确认页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数、数据一致性用例数、页面遍历完成、功能用例完成、性能设计完成、异常边界权限覆盖完成、页面元素覆盖完成、产品版图已更新和覆盖质量自检通过后才进入下一批
 - 是否没有创建承载全量测试用例正文的单一 Python/JSON/CSV/Markdown/临时脚本文件，脚本是否只处理当前批次的模板填充、格式转换或校验
 - 当前批次是否已对每个测试点和每个页面元素按主流程、异常、边界、权限、状态、数据一致性、组合条件、禁用态/空状态/错误态、兼容性/稳定性、性能影响和可恢复路径等方向展开，而不是只写笼统用例
-- 正式测试设计 Excel 生成后，是否已运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务是否传入 `-BatchStatusPath <batch-status.csv>`；如果本次存在 `page-discovery.csv`，是否已传入 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>` 校验页面实探、正式 Excel 和产品版图之间的页面元素、关联用例、用例资产索引和变更记录是否同步
+- 正式测试设计 Excel 生成后，是否已运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务是否传入 `-BatchStatusPath <batch-status.csv>`；如果 `batch-status.csv` 同级存在 `page-discovery.csv`，脚本会自动使用 `docs/test-assets/product-map.xlsx` 启用产品版图同步校验；也可以显式传入 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的页面元素、关联用例、用例资产索引和变更记录是否同步
 - 是否已规划将客户交付件保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`，将最终测试设计回存 `docs/test-assets/modules/`，将导入文件副本回存 `docs/test-assets/imports/`，并更新 `product-map.xlsx`
 - 外网到内网做普通框架升级时，是否已保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`，且未覆盖内网真实资产。标识：PROTECTED_ASSET_DIRS
 

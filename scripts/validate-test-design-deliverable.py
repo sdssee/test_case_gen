@@ -452,6 +452,19 @@ def validate_product_map_sync(
         fail("product-map 变更记录 must include at least one synced change row with 是否已同步产品版图=是")
 
 
+def default_product_map_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "docs" / "test-assets" / "product-map.xlsx"
+
+
+def default_page_discovery_path(batch_status: Path | None) -> Path | None:
+    if not batch_status:
+        return None
+    candidate = batch_status.resolve().parent / "page-discovery.csv"
+    if candidate.exists():
+        return candidate
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate generated test design deliverable workbook.")
     parser.add_argument("--workbook", required=True, type=Path)
@@ -459,6 +472,11 @@ def main() -> int:
     parser.add_argument("--product-map", type=Path)
     parser.add_argument("--page-discovery", type=Path)
     args = parser.parse_args()
+
+    if not args.page_discovery:
+        args.page_discovery = default_page_discovery_path(args.batch_status)
+    if args.page_discovery and not args.product_map:
+        args.product_map = default_product_map_path()
 
     workbook_data = validate_workbook(args.workbook)
     if args.batch_status:

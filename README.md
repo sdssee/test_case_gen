@@ -124,7 +124,7 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 
 大范围任务可追加 `-BatchStatusPath <batch-status.csv>`，用于校验批次状态中的覆盖数量、用例数量和质量门禁。
 
-如果本次存在 `page-discovery.csv`，追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，用于校验页面实探、正式 Excel 和产品版图之间的页面元素、关联用例、用例资产索引和变更记录是否同步。
+如果 `batch-status.csv` 同级存在 `page-discovery.csv`，脚本会自动使用 `docs/test-assets/product-map.xlsx` 启用产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，用于校验页面实探、正式 Excel 和产品版图之间的页面元素、关联用例、用例资产索引和变更记录是否同步。
 
 ## 维护原则
 

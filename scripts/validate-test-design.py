@@ -768,7 +768,20 @@ def main() -> int:
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
     ]:
         assert_contains(path, operation_navigation_markers)
-    assert_contains(deliverable_validator, ["assert_complete_operation_steps", "navigation_markers", "full navigation"])
+    assert_contains(
+        deliverable_validator,
+        [
+            "assert_complete_operation_steps",
+            "navigation_markers",
+            "full navigation",
+            "validate_product_map_sync",
+            "--product-map",
+            "--page-discovery",
+            "page-discovery.csv",
+            "product-map",
+        ],
+    )
+    assert_contains(deliverable_validator_ps1, ["ProductMapPath", "PageDiscoveryPath", "--product-map", "--page-discovery"])
 
     batch_exploration_markers = [
         "当前批次",

@@ -49,6 +49,51 @@ BATCH_REQUIRED_HEADERS = [
     "覆盖质量自检",
 ]
 
+PAGE_DISCOVERY_REQUIRED_HEADERS = [
+    "批次ID",
+    "页面/入口",
+    "菜单路径/URL",
+    "元素名称/文案",
+    "元素类型",
+    "交互方式",
+    "完整点击路径",
+    "是否已生成用例",
+    "关联用例ID",
+    "覆盖状态",
+]
+
+PRODUCT_MAP_PAGE_ELEMENT_HEADERS = [
+    "产品/系统",
+    "模块",
+    "页面/入口",
+    "菜单路径/URL",
+    "元素名称/文案",
+    "元素类型",
+    "交互方式",
+    "关联用例ID",
+    "覆盖状态",
+    "发现来源",
+]
+
+PRODUCT_MAP_CASE_INDEX_HEADERS = [
+    "产品/系统",
+    "模块",
+    "功能点",
+    "用例ID",
+    "用例标题",
+    "归档测试设计路径",
+]
+
+PRODUCT_MAP_CHANGE_HEADERS = [
+    "版本",
+    "日期",
+    "变更人/来源",
+    "变更类型",
+    "影响模块",
+    "变更内容",
+    "是否已同步产品版图",
+]
+
 
 def fail(message: str) -> None:
     raise AssertionError(message)
@@ -175,6 +220,30 @@ def parse_ids(text: str) -> set[str]:
     return {item.strip() for item in re.split(r"[,，;；\s]+", text) if item.strip()}
 
 
+def normalize(value: str) -> str:
+    return re.sub(r"\s+", "", value or "").strip().lower()
+
+
+def normalized_key(*values: str) -> tuple[str, ...]:
+    return tuple(normalize(value) for value in values)
+
+
+def csv_row_dicts(path: Path, required: list[str], label: str) -> list[dict[str, str]]:
+    if not path.exists():
+        fail(f"{label} not found: {path}")
+    with path.open("r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.DictReader(fp)
+        headers = reader.fieldnames or []
+        missing = [header for header in required if header not in headers]
+        if missing:
+            fail(f"{label} is missing headers: {missing}")
+        return [
+            {key: (value or "").strip() for key, value in row.items()}
+            for row in reader
+            if any((value or "").strip() for value in row.values())
+        ]
+
+
 def require_headers(rows: list[list[str]], required: list[str], sheet_name: str) -> None:
     headers = set(rows[0] if rows else [])
     missing = [header for header in required if header not in headers]
@@ -182,7 +251,7 @@ def require_headers(rows: list[list[str]], required: list[str], sheet_name: str)
         fail(f"{sheet_name} is missing headers: {missing}")
 
 
-def validate_workbook(workbook: Path) -> None:
+def validate_workbook(workbook: Path) -> dict[str, object]:
     if not workbook.exists():
         fail(f"Workbook not found: {workbook}")
     with zipfile.ZipFile(workbook) as zf:
@@ -197,6 +266,8 @@ def validate_workbook(workbook: Path) -> None:
         fail("功能测试用例 must contain at least one case")
 
     case_ids: set[str] = set()
+    case_titles: dict[str, str] = {}
+    case_function_points: dict[str, str] = {}
     for index, row in enumerate(function_rows, start=2):
         case_id = row.get("用例 ID", "")
         function_point = row.get("功能点", "")
@@ -206,6 +277,8 @@ def validate_workbook(workbook: Path) -> None:
         if case_id in case_ids:
             fail(f"Duplicate 用例 ID: {case_id}")
         case_ids.add(case_id)
+        case_titles[case_id] = title
+        case_function_points[case_id] = function_point
         if not function_point:
             fail(f"功能测试用例 row {index} is missing 功能点")
         if not title.startswith(f"{function_point}-"):
@@ -247,6 +320,13 @@ def validate_workbook(workbook: Path) -> None:
         elif not row.get("待确认问题/备注", ""):
             fail(f"页面元素覆盖清单 row {index} status {status} must explain reason in 待确认问题/备注")
 
+    return {
+        "case_ids": case_ids,
+        "case_titles": case_titles,
+        "case_function_points": case_function_points,
+        "coverage_rows": coverage_rows,
+    }
+
 
 def positive_int(value: str, field: str, batch_id: str) -> int:
     if not re.fullmatch(r"\d+", value or ""):
@@ -283,15 +363,110 @@ def validate_batch_status(path: Path) -> None:
                     fail(f"batch {batch_id} cannot pass 覆盖质量自检 when {field} is not 是")
 
 
+def validate_product_map_sync(
+    workbook_data: dict[str, object],
+    product_map: Path,
+    page_discovery: Path,
+) -> None:
+    discovery_rows = csv_row_dicts(page_discovery, PAGE_DISCOVERY_REQUIRED_HEADERS, "page-discovery.csv")
+    if not discovery_rows:
+        fail("page-discovery.csv must contain at least one discovery row when product map sync validation is enabled")
+
+    if not product_map.exists():
+        fail(f"Product map not found: {product_map}")
+
+    product_page_rows_raw = sheet_rows(product_map, "页面元素地图")
+    product_case_rows_raw = sheet_rows(product_map, "用例资产索引")
+    product_change_rows_raw = sheet_rows(product_map, "变更记录")
+    require_headers(product_page_rows_raw, PRODUCT_MAP_PAGE_ELEMENT_HEADERS, "product-map 页面元素地图")
+    require_headers(product_case_rows_raw, PRODUCT_MAP_CASE_INDEX_HEADERS, "product-map 用例资产索引")
+    require_headers(product_change_rows_raw, PRODUCT_MAP_CHANGE_HEADERS, "product-map 变更记录")
+
+    product_page_rows = row_dicts(product_page_rows_raw, "product-map 页面元素地图")
+    product_case_rows = row_dicts(product_case_rows_raw, "product-map 用例资产索引")
+    product_change_rows = row_dicts(product_change_rows_raw, "product-map 变更记录")
+    if not product_page_rows:
+        fail("product-map 页面元素地图 must contain synced page elements")
+    if not product_case_rows:
+        fail("product-map 用例资产索引 must contain synced case assets")
+    if not product_change_rows:
+        fail("product-map 变更记录 must record this product map sync")
+
+    coverage_rows = workbook_data["coverage_rows"]
+    case_ids = workbook_data["case_ids"]
+    case_titles = workbook_data["case_titles"]
+    case_function_points = workbook_data["case_function_points"]
+    assert isinstance(coverage_rows, list)
+    assert isinstance(case_ids, set)
+    assert isinstance(case_titles, dict)
+    assert isinstance(case_function_points, dict)
+
+    workbook_elements = {
+        normalized_key(row.get("页面/入口", ""), row.get("元素名称/文案", ""))
+        for row in coverage_rows
+        if row.get("页面/入口") and row.get("元素名称/文案")
+    }
+    product_elements = {
+        normalized_key(row.get("页面/入口", ""), row.get("元素名称/文案", ""))
+        for row in product_page_rows
+        if row.get("页面/入口") and row.get("元素名称/文案")
+    }
+    product_case_ids = {row.get("用例ID", "") for row in product_case_rows if row.get("用例ID")}
+
+    for index, row in enumerate(discovery_rows, start=2):
+        page = row.get("页面/入口", "")
+        element = row.get("元素名称/文案", "")
+        if not page or not element:
+            fail(f"page-discovery.csv row {index} must include 页面/入口 and 元素名称/文案")
+        if normalized_key(page, element) not in workbook_elements:
+            fail(f"page-discovery.csv row {index} element is missing from workbook 页面元素覆盖清单: {page} / {element}")
+        if normalized_key(page, element) not in product_elements:
+            fail(f"page-discovery.csv row {index} element is missing from product-map 页面元素地图: {page} / {element}")
+
+        generated = row.get("是否已生成用例", "")
+        linked_ids = parse_ids(row.get("关联用例ID", ""))
+        if generated == "是":
+            if not linked_ids:
+                fail(f"page-discovery.csv row {index} is generated but missing 关联用例ID")
+            unknown_workbook = sorted(linked_ids - case_ids)
+            if unknown_workbook:
+                fail(f"page-discovery.csv row {index} references case IDs missing from workbook: {unknown_workbook}")
+            unknown_product = sorted(linked_ids - product_case_ids)
+            if unknown_product:
+                fail(f"page-discovery.csv row {index} references case IDs missing from product-map 用例资产索引: {unknown_product}")
+
+    for case_id in sorted(case_ids):
+        if case_id not in product_case_ids:
+            fail(f"Workbook case ID is missing from product-map 用例资产索引: {case_id}")
+        product_rows = [row for row in product_case_rows if row.get("用例ID") == case_id]
+        if not any(row.get("用例标题") == case_titles[case_id] for row in product_rows):
+            fail(f"product-map 用例资产索引 title mismatch or missing for case ID: {case_id}")
+        if not any(row.get("功能点") == case_function_points[case_id] for row in product_rows):
+            fail(f"product-map 用例资产索引 功能点 mismatch or missing for case ID: {case_id}")
+
+    synced_changes = [
+        row for row in product_change_rows
+        if row.get("是否已同步产品版图") == "是" and row.get("变更内容")
+    ]
+    if not synced_changes:
+        fail("product-map 变更记录 must include at least one synced change row with 是否已同步产品版图=是")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate generated test design deliverable workbook.")
     parser.add_argument("--workbook", required=True, type=Path)
     parser.add_argument("--batch-status", type=Path)
+    parser.add_argument("--product-map", type=Path)
+    parser.add_argument("--page-discovery", type=Path)
     args = parser.parse_args()
 
-    validate_workbook(args.workbook)
+    workbook_data = validate_workbook(args.workbook)
     if args.batch_status:
         validate_batch_status(args.batch_status)
+    if bool(args.product_map) != bool(args.page_discovery):
+        fail("--product-map and --page-discovery must be provided together")
+    if args.product_map and args.page_discovery:
+        validate_product_map_sync(workbook_data, args.product_map, args.page_discovery)
     print("OK: test design deliverable quality checks passed.")
     return 0
 

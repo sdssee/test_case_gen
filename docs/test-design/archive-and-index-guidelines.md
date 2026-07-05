@@ -117,6 +117,7 @@ docs/test-assets/product-map.xlsx
 3. 如需导入测试系统，将导入文件副本保存到 `docs/test-assets/imports/`。
 4. 将本模块提供的能力、业务对象、关键状态、业务链路、可复用前置条件、可复用测试数据、跨模块依赖、影响分析和关联用例 ID 更新到 `product-map.xlsx`。
 5. 如果用户人工修改了测试设计，最终版必须回存内部资产库，并更新产品版图中的变更记录。
+6. 生成正式测试设计 Excel 后，必须运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务追加 `-BatchStatusPath <batch-status.csv>`；如果本次存在 `page-discovery.csv`，还必须追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的页面元素、关联用例、用例资产索引和变更记录是否同步。
 
 ## 跨模块用例管理
 

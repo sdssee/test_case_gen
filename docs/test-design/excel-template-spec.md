@@ -313,6 +313,8 @@
 
 生成后，应将客户交付件保存到 `current/` 或 `deliverables/`，将最终测试设计回存到 `docs/test-assets/modules/`，将导入文件副本回存到 `docs/test-assets/imports/`，并同步更新产品模块地图、业务对象地图、业务链路地图、页面元素地图、用例资产索引、模块能力索引、跨模块依赖、可复用测试数据、变更影响分析和变更记录。
 
+生成正式测试设计 Excel 后，应运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务追加 `-BatchStatusPath <batch-status.csv>`；如果本次存在 `page-discovery.csv`，还必须追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的页面元素、关联用例、用例资产索引和变更记录是否同步。
+
 跨模块用例只保留一个主归属模块。当前模块依赖已有模块能力时，应优先引用已有用例 ID 作为前置条件，不重复复制已有用例。
 
 全产品、多个一级模块或大模块测试设计必须先遍历所有可见一级菜单和二级菜单，必要时继续展开三级菜单，拿到菜单轮廓、页面清单和功能地图后，再输出分批设计计划，不得一次性生成完整测试用例。分批默认按一级模块下的二级菜单执行；二级菜单过大时按三级菜单、页面域或小功能块继续拆分，二级菜单过小时可与同一一级模块下相邻二级菜单合并，跨二级菜单强依赖时按业务对象或业务链路合并成批；每批回存内部资产库并更新产品版图后，再生成跨模块汇总和客户总览交付件。

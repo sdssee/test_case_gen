@@ -2,7 +2,11 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$WorkbookPath,
 
-  [string]$BatchStatusPath
+  [string]$BatchStatusPath,
+
+  [string]$ProductMapPath,
+
+  [string]$PageDiscoveryPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,6 +20,12 @@ if (-not (Test-Path $python)) {
 $argsList = @((Join-Path $scriptDir "validate-test-design-deliverable.py"), "--workbook", $WorkbookPath)
 if ($BatchStatusPath) {
   $argsList += @("--batch-status", $BatchStatusPath)
+}
+if ($ProductMapPath) {
+  $argsList += @("--product-map", $ProductMapPath)
+}
+if ($PageDiscoveryPath) {
+  $argsList += @("--page-discovery", $PageDiscoveryPath)
 }
 
 & $python @argsList

@@ -37,4 +37,5 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/
 ## 运行期门禁
 
 `scripts/validate-test-design.ps1` 会扫描 `docs/test-assets/batch-runs/`、`docs/test-design/current/` 和 `docs/test-design/deliverables/`，拦截疑似承载全量测试用例正文的单一中间文件，例如 `all_cases.py`、`full_product_cases.json`、`merged_cases.csv`、`case_pool.md` 或包含“全量测试用例”“多个三级菜单/页面域”“统一生成 Excel”等聚合痕迹的文件。标准批次账本文件 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 以及 `templates/` 模板目录不会被误判。
-- 每个已通过批次默认只能覆盖 1 个三级菜单/页面域；确需合并时最多允许合并 2 个三级菜单/页面域，且必须在 `batch-status.csv` 的 `拆分/合并原因` 中说明合并原因，超过 2 个必须拆成独立批次。已通过批次的导入文件路径必须真实存在，并能与归档测试设计逐个匹配校验。
+- 分批必须按当前产品或模块可识别的最深标题级别执行，例如一级标题、二级标题、三级标题、四级标题等，哪个标题级别最小就以哪个最小标题作为一个批次。每个已通过批次只能覆盖 1 个最小标题路径，`最小标题路径` 使用 `一级>二级>三级>四级` 形式记录唯一叶子节点；禁止合并多个最小标题，禁止再拆分一个最小标题为多个批次。已通过批次的导入文件路径必须真实存在，并能与归档测试设计逐个匹配校验。
+- 当任务范围超过一个最小标题时，必须建立批次队列并按最小标题路径逐批执行。

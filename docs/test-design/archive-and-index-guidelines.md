@@ -86,7 +86,6 @@ docs/test-assets/product-map.xlsx
 
 当范围超过一个三级菜单/页面域时，必须在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本。账本必须包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`，并优先基于 `docs/test-assets/batch-runs/templates/` 复制生成。`batch-plan.md` 承载分批设计计划，`batch-status.csv` 承载每批状态、覆盖数量、用例数量和覆盖质量自检，`page-discovery.csv` 承载页面实探证据，`batch-review.md` 承载最终汇总、跨模块汇总、回归范围、风险与待确认问题，`artifacts/` 保存页面遍历笔记、截图或中间核对材料。
 
-执行时分批默认按一级模块下的三级菜单/页面域生成测试设计和导入文件。三级菜单仍然过大时，按小功能块继续拆分；三级菜单过小时，可与同一二级菜单下相邻三级菜单合并；跨三级菜单强依赖时，按业务对象或业务链路合并成批，并在批次计划写明拆分/合并原因。每批生成后立即回存 `docs/test-assets/modules/`、`docs/test-assets/imports/` 并更新 `product-map.xlsx`。所有模块批次完成后，再生成跨模块链路用例、回归范围、风险清单和客户总览交付件。跨模块汇总只引用已归档模块能力和用例 ID，不重复复制各模块完整用例。
 
 大范围任务禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件。脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 artifacts/scripts/，不得把多个三级菜单/页面域、多个批次或全产品测试用例先集中写入一个文件后再统一生成 Excel。每批的测试用例正文必须以当前批次正式测试设计 Excel、`page-discovery.csv` 和 `batch-status.csv` 为边界进行维护。
 
@@ -131,4 +130,5 @@ docs/test-assets/product-map.xlsx
 - `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/` 是受保护目录，普通框架升级不得覆盖或删除。标识：PROTECTED_ASSET_DIRS。
 - `product-map.xlsx` 是主要可能演进的内部资产结构；历史归档 Excel 默认作为历史快照保留，不因普通框架升级而批量重写。
 - 如果 `asset_schema_version` 或产品版图结构变化，必须通过升级清单、校验脚本和迁移脚本增量补齐旧资产，不得用空模板覆盖内网真实资产。
-- 每个已通过批次默认只能覆盖 1 个三级菜单/页面域；确需合并时最多允许合并 2 个三级菜单/页面域，且必须在 `batch-status.csv` 的 `拆分/合并原因` 中说明合并原因，超过 2 个必须拆成独立批次。已通过批次的导入文件路径必须真实存在，并能与归档测试设计逐个匹配校验。
+- 分批必须按当前产品或模块可识别的最深标题级别执行，例如一级标题、二级标题、三级标题、四级标题等，哪个标题级别最小就以哪个最小标题作为一个批次。每个已通过批次只能覆盖 1 个最小标题路径，`最小标题路径` 使用 `一级>二级>三级>四级` 形式记录唯一叶子节点；禁止合并多个最小标题，禁止再拆分一个最小标题为多个批次。已通过批次的导入文件路径必须真实存在，并能与归档测试设计逐个匹配校验。
+- 当任务范围超过一个最小标题时，必须建立批次队列并按最小标题路径逐批执行。

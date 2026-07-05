@@ -64,6 +64,7 @@ GLOBAL_INTERMEDIATE_CONTENT_MARKERS = [
     "完整测试用例",
     "跨批次用例",
     "多个三级菜单/页面域",
+    "多个最小标题",
     "统一生成 Excel",
     "先集中写入",
 ]
@@ -475,7 +476,7 @@ def main() -> int:
         "批次ID,一级模块,二级菜单,三级菜单/页面域,批次范围,状态,页面数,元素总数,已覆盖元素数,"
         "待确认元素数,功能用例数,性能场景数,异常用例数,边界用例数,权限/状态用例数,数据一致性用例数,"
         "页面遍历完成,功能用例完成,性能设计完成,异常边界权限覆盖完成,页面元素覆盖完成,产品版图已更新,"
-        "覆盖质量自检,未覆盖元素清单路径,归档路径,导入文件路径,导入文件已生成,拆分/合并原因,待确认问题,下一步动作"
+        "覆盖质量自检,未覆盖元素清单路径,归档路径,导入文件路径,导入文件已生成,最小标题路径,待确认问题,下一步动作"
     )
     actual_batch_status_header = read_text(batch_status_template).splitlines()[0]
     if actual_batch_status_header != expected_batch_status_header:
@@ -679,13 +680,12 @@ def main() -> int:
         "三级菜单",
         "菜单轮廓",
         "分批设计计划",
-        "分批默认按一级模块下的三级菜单/页面域",
-        "三级菜单仍然过大",
-        "三级菜单过小时",
-        "跨三级菜单强依赖",
-        "最多允许合并 2 个三级菜单/页面域",
+        "最小标题路径",
+        "最深标题级别",
+        "禁止合并",
+        "禁止再拆分",
         "逐个匹配校验",
-        "超过一个三级菜单/页面域",
+        "超过一个最小标题",
         "禁止直接生成完整测试用例",
         "批次队列",
         "覆盖质量自检",
@@ -723,7 +723,7 @@ def main() -> int:
         "artifacts/",
         "导入文件路径",
         "导入文件已生成",
-        "拆分/合并原因",
+        "最小标题路径",
         "页面数",
         "元素总数",
         "已覆盖元素数",
@@ -752,7 +752,7 @@ def main() -> int:
         repo_root / "docs" / "test-assets" / "README.md",
     ]:
         assert_contains(path, ["docs/test-assets/batch-runs/"])
-    assert_contains(batch_plan_template, ["批次执行计划", "三级菜单/页面域", "batch-status.csv", "page-discovery.csv", "导入文件", "最多允许合并 2 个", "才能进入下一批", "不得重新生成各批完整用例"])
+    assert_contains(batch_plan_template, ["批次执行计划", "最小标题路径", "最深标题级别", "禁止合并", "禁止再拆分", "batch-status.csv", "page-discovery.csv", "导入文件", "才能进入下一批", "不得重新生成各批完整用例"])
     assert_contains(batch_review_template, ["批次执行复盘", "页面数", "元素总数", "导入文件路径", "最终交付约束", "不得重新生成各批完整用例"])
     expected_page_discovery_header = (
         "批次ID,一级模块,二级菜单,三级菜单/页面域,页面/入口,菜单路径/URL,发现方式,角色/权限,数据状态,"
@@ -822,7 +822,8 @@ def main() -> int:
             "validate_import_workbook",
             "validate_batch_granularity",
             "validate_batch_import_workbooks",
-            "MAX_MERGED_TERTIARY_DOMAINS",
+            "MULTI_LEAF_SEPARATORS",
+            "最小标题路径",
             "--import-workbook",
             "default_page_discovery_path",
             "default_product_map_path",

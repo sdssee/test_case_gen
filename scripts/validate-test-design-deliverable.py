@@ -49,11 +49,10 @@ BATCH_REQUIRED_HEADERS = [
     "覆盖质量自检",
     "导入文件路径",
     "导入文件已生成",
-    "拆分/合并原因",
+    "最小标题路径",
 ]
 
-MAX_MERGED_TERTIARY_DOMAINS = 2
-MERGE_REASON_MARKERS = ["合并", "强依赖", "过小", "同一业务对象", "同一业务链路", "联动"]
+MULTI_LEAF_SEPARATORS = ["、", "，", ",", "；", ";", "／", "/"]
 
 BATCH_NUMBER_FIELDS = [
     "页面数",
@@ -481,13 +480,11 @@ def positive_int(value: str, field: str, batch_id: str) -> int:
     return int(value)
 
 
-def split_tertiary_domains(value: str) -> list[str]:
+def has_multiple_leaf_values(value: str) -> bool:
     normalized = (value or "").strip()
     if not normalized or normalized in {"—", "-", "无", "N/A", "NA"}:
-        return []
-    normalized = normalized.replace("（", "(").replace("）", ")")
-    parts = re.split(r"[、，,；;／/]+", normalized)
-    return [part.strip() for part in parts if part.strip()]
+        return False
+    return any(separator in normalized for separator in MULTI_LEAF_SEPARATORS)
 
 
 def is_passed_batch(row: dict[str, str]) -> bool:
@@ -496,21 +493,19 @@ def is_passed_batch(row: dict[str, str]) -> bool:
 
 def validate_batch_granularity(row: dict[str, str], numbers: dict[str, int]) -> None:
     batch_id = row.get("批次ID", "")
-    tertiary_value = row.get("三级菜单/页面域", "")
-    tertiary_domains = split_tertiary_domains(tertiary_value)
+    leaf_path = row.get("最小标题路径", "").strip()
+    tertiary_value = row.get("三级菜单/页面域", "").strip()
     page_count = numbers.get("页面数", 0)
-    if not tertiary_domains and page_count > 1:
-        fail(f"batch {batch_id} covers {page_count} pages but does not declare a 三级菜单/页面域")
-    if len(tertiary_domains) <= 1:
-        return
-    reason = row.get("拆分/合并原因", "")
-    if not any(marker in reason for marker in MERGE_REASON_MARKERS):
-        fail(f"batch {batch_id} covers multiple 三级菜单/页面域 but lacks a valid 拆分/合并原因")
-    if len(tertiary_domains) > MAX_MERGED_TERTIARY_DOMAINS:
-        fail(
-            f"batch {batch_id} covers {len(tertiary_domains)} 三级菜单/页面域, "
-            f"exceeding the merge limit {MAX_MERGED_TERTIARY_DOMAINS}: {tertiary_value}"
-        )
+    if not leaf_path:
+        fail(f"batch {batch_id} must declare 最小标题路径 for leaf-level batching")
+    if has_multiple_leaf_values(leaf_path):
+        fail(f"batch {batch_id} 最小标题路径 must point to exactly one leaf title, not multiple leaves: {leaf_path}")
+    if has_multiple_leaf_values(tertiary_value):
+        fail(f"batch {batch_id} 三级菜单/页面域 must not contain merged leaves: {tertiary_value}")
+    if page_count > 1:
+        fail(f"batch {batch_id} covers {page_count} pages; leaf-level batching allows only one page/domain per batch")
+    if row.get("拆分/合并原因", "").strip():
+        fail(f"batch {batch_id} must not use 拆分/合并原因 because merge/split is forbidden")
 
 
 def project_root_from_batch_status(batch_status: Path) -> Path:

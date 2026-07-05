@@ -145,6 +145,32 @@ def assert_numbered(text: str, label: str) -> None:
             fail(f"{label} must use numbered lines like '1. ...': {line}")
 
 
+def assert_complete_operation_steps(text: str, label: str) -> None:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 2:
+        fail(f"{label} must include full navigation and operation steps, not a single short sentence")
+    first_steps = "\n".join(lines[:3])
+    navigation_markers = [
+        "登录",
+        "打开",
+        "进入",
+        "访问",
+        "选择",
+        "点击",
+        "菜单",
+        "页面",
+        "模块",
+        "系统",
+        "导航",
+        "路径",
+        "tab",
+        "Tab",
+        "URL",
+    ]
+    if not any(marker in first_steps for marker in navigation_markers):
+        fail(f"{label} must start from system/project entry and include navigation path to target function")
+
+
 def parse_ids(text: str) -> set[str]:
     return {item.strip() for item in re.split(r"[,，;；\s]+", text) if item.strip()}
 
@@ -185,6 +211,7 @@ def validate_workbook(workbook: Path) -> None:
         if not title.startswith(f"{function_point}-"):
             fail(f"功能测试用例 row {index} title must start with 功能点-: {title}")
         assert_numbered(row.get("操作步骤", ""), f"功能测试用例 row {index} 操作步骤")
+        assert_complete_operation_steps(row.get("操作步骤", ""), f"功能测试用例 row {index} 操作步骤")
         assert_numbered(row.get("预期结果", ""), f"功能测试用例 row {index} 预期结果")
         if row.get("前置条件"):
             assert_numbered(row["前置条件"], f"功能测试用例 row {index} 前置条件")

@@ -609,6 +609,24 @@ def main() -> int:
     ]:
         assert_contains(path, ["validate-test-design-deliverable.ps1"])
 
+    operation_navigation_markers = [
+        "操作步骤",
+        "不得默认",
+        "当前模块页面",
+        "完整导航路径",
+        "系统或项目入口",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+    ]:
+        assert_contains(path, operation_navigation_markers)
+    assert_contains(deliverable_validator, ["assert_complete_operation_steps", "navigation_markers", "full navigation"])
+
     batch_exploration_markers = [
         "当前批次",
         "浏览器",

@@ -49,7 +49,11 @@ BATCH_REQUIRED_HEADERS = [
     "覆盖质量自检",
     "导入文件路径",
     "导入文件已生成",
+    "拆分/合并原因",
 ]
+
+MAX_MERGED_TERTIARY_DOMAINS = 2
+MERGE_REASON_MARKERS = ["合并", "强依赖", "过小", "同一业务对象", "同一业务链路", "联动"]
 
 BATCH_NUMBER_FIELDS = [
     "页面数",
@@ -477,6 +481,57 @@ def positive_int(value: str, field: str, batch_id: str) -> int:
     return int(value)
 
 
+def split_tertiary_domains(value: str) -> list[str]:
+    normalized = (value or "").strip()
+    if not normalized or normalized in {"—", "-", "无", "N/A", "NA"}:
+        return []
+    normalized = normalized.replace("（", "(").replace("）", ")")
+    parts = re.split(r"[、，,；;／/]+", normalized)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def is_passed_batch(row: dict[str, str]) -> bool:
+    return row.get("覆盖质量自检") == "通过" or row.get("状态") in {"已完成", "完成"}
+
+
+def validate_batch_granularity(row: dict[str, str], numbers: dict[str, int]) -> None:
+    batch_id = row.get("批次ID", "")
+    tertiary_value = row.get("三级菜单/页面域", "")
+    tertiary_domains = split_tertiary_domains(tertiary_value)
+    page_count = numbers.get("页面数", 0)
+    if not tertiary_domains and page_count > 1:
+        fail(f"batch {batch_id} covers {page_count} pages but does not declare a 三级菜单/页面域")
+    if len(tertiary_domains) <= 1:
+        return
+    reason = row.get("拆分/合并原因", "")
+    if not any(marker in reason for marker in MERGE_REASON_MARKERS):
+        fail(f"batch {batch_id} covers multiple 三级菜单/页面域 but lacks a valid 拆分/合并原因")
+    if len(tertiary_domains) > MAX_MERGED_TERTIARY_DOMAINS:
+        fail(
+            f"batch {batch_id} covers {len(tertiary_domains)} 三级菜单/页面域, "
+            f"exceeding the merge limit {MAX_MERGED_TERTIARY_DOMAINS}: {tertiary_value}"
+        )
+
+
+def project_root_from_batch_status(batch_status: Path) -> Path:
+    resolved = batch_status.resolve()
+    for parent in [resolved.parent, *resolved.parents]:
+        if (parent / "docs" / "test-assets").exists() or (parent / "docs" / "test-design").exists():
+            return parent
+    return resolved.parent
+
+
+def resolve_project_path(raw_path: str, batch_status: Path) -> Path:
+    candidate = Path(raw_path)
+    if candidate.is_absolute():
+        return candidate
+    project_root = project_root_from_batch_status(batch_status)
+    root_candidate = project_root / candidate
+    if root_candidate.exists():
+        return root_candidate
+    return batch_status.resolve().parent / candidate
+
+
 def validate_batch_status(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         fail(f"Batch status file not found: {path}")
@@ -498,6 +553,7 @@ def validate_batch_status(path: Path) -> list[dict[str, str]]:
         if numbers["待确认元素数"] > numbers["元素总数"]:
             fail(f"batch {batch_id} 待确认元素数 cannot exceed 元素总数")
         if row.get("覆盖质量自检") == "通过":
+            validate_batch_granularity(row, numbers)
             for field in ["页面数", "元素总数", "已覆盖元素数", "功能用例数", "性能场景数"]:
                 if numbers[field] <= 0:
                     fail(f"batch {batch_id} cannot pass 覆盖质量自检 with {field}=0")
@@ -509,15 +565,33 @@ def validate_batch_status(path: Path) -> list[dict[str, str]]:
     return rows
 
 
+def validate_batch_import_workbooks(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
+    for row in batch_rows:
+        if not is_passed_batch(row):
+            continue
+        batch_id = row.get("批次ID", "")
+        archive_raw = row.get("归档路径", "")
+        import_raw = row.get("导入文件路径", "")
+        if not archive_raw:
+            fail(f"batch {batch_id} cannot pass 覆盖质量自检 without 归档路径")
+        if not import_raw:
+            fail(f"batch {batch_id} cannot pass 覆盖质量自检 without 导入文件路径")
+        archive_path = resolve_project_path(archive_raw, batch_status)
+        import_path = resolve_project_path(import_raw, batch_status)
+        if not archive_path.exists():
+            fail(f"batch {batch_id} 归档路径 does not exist: {archive_raw}")
+        if not import_path.exists():
+            fail(f"batch {batch_id} 导入文件路径 does not exist: {import_raw}")
+        archive_data = validate_workbook(archive_path)
+        validate_import_workbook(import_path, archive_data)
+
+
 def validate_batch_review(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
     review_path = batch_status.resolve().parent / "batch-review.md"
     if not review_path.exists():
         fail(f"batch-review.md not found beside batch-status.csv: {review_path}")
     text = review_path.read_text(encoding="utf-8-sig")
-    completed_rows = [
-        row for row in batch_rows
-        if row.get("覆盖质量自检") == "通过" or row.get("状态") in {"已完成", "完成"}
-    ]
+    completed_rows = [row for row in batch_rows if is_passed_batch(row)]
     for row in completed_rows:
         batch_id = row.get("批次ID", "")
         if batch_id and batch_id not in text:
@@ -651,6 +725,7 @@ def main() -> int:
     if args.batch_status:
         batch_rows = validate_batch_status(args.batch_status)
         validate_batch_review(args.batch_status, batch_rows)
+        validate_batch_import_workbooks(args.batch_status, batch_rows)
     if args.import_workbook:
         validate_import_workbook(args.import_workbook, workbook_data)
     if bool(args.product_map) != bool(args.page_discovery):

@@ -37,3 +37,4 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/
 ## 运行期门禁
 
 `scripts/validate-test-design.ps1` 会扫描 `docs/test-assets/batch-runs/`、`docs/test-design/current/` 和 `docs/test-design/deliverables/`，拦截疑似承载全量测试用例正文的单一中间文件，例如 `all_cases.py`、`full_product_cases.json`、`merged_cases.csv`、`case_pool.md` 或包含“全量测试用例”“多个三级菜单/页面域”“统一生成 Excel”等聚合痕迹的文件。标准批次账本文件 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 以及 `templates/` 模板目录不会被误判。
+- 每个已通过批次默认只能覆盖 1 个三级菜单/页面域；确需合并时最多允许合并 2 个三级菜单/页面域，且必须在 `batch-status.csv` 的 `拆分/合并原因` 中说明合并原因，超过 2 个必须拆成独立批次。已通过批次的导入文件路径必须真实存在，并能与归档测试设计逐个匹配校验。

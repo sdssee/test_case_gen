@@ -355,3 +355,4 @@
 标识：PROTECTED_ASSET_DIRS
 
 `VERSION` 中的 `framework_version` 表示框架版本，`asset_schema_version` 表示内部资产结构版本。`product-map.xlsx` 是主要可能演进的数据结构；历史归档 Excel 默认作为历史快照保留。如果 `asset_schema_version` 或产品版图结构变化，必须通过迁移脚本读取旧资产并增量补齐，不得用空模板覆盖真实资产。
+- 每个已通过批次默认只能覆盖 1 个三级菜单/页面域；确需合并时最多允许合并 2 个三级菜单/页面域，且必须在 `batch-status.csv` 的 `拆分/合并原因` 中说明合并原因，超过 2 个必须拆成独立批次。已通过批次的导入文件路径必须真实存在，并能与归档测试设计逐个匹配校验。

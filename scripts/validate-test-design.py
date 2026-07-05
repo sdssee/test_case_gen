@@ -475,7 +475,7 @@ def main() -> int:
         "批次ID,一级模块,二级菜单,三级菜单/页面域,批次范围,状态,页面数,元素总数,已覆盖元素数,"
         "待确认元素数,功能用例数,性能场景数,异常用例数,边界用例数,权限/状态用例数,数据一致性用例数,"
         "页面遍历完成,功能用例完成,性能设计完成,异常边界权限覆盖完成,页面元素覆盖完成,产品版图已更新,"
-        "覆盖质量自检,未覆盖元素清单路径,归档路径,导入文件路径,导入文件已生成,待确认问题,下一步动作"
+        "覆盖质量自检,未覆盖元素清单路径,归档路径,导入文件路径,导入文件已生成,拆分/合并原因,待确认问题,下一步动作"
     )
     actual_batch_status_header = read_text(batch_status_template).splitlines()[0]
     if actual_batch_status_header != expected_batch_status_header:
@@ -683,6 +683,8 @@ def main() -> int:
         "三级菜单仍然过大",
         "三级菜单过小时",
         "跨三级菜单强依赖",
+        "最多允许合并 2 个三级菜单/页面域",
+        "逐个匹配校验",
         "超过一个三级菜单/页面域",
         "禁止直接生成完整测试用例",
         "批次队列",
@@ -721,6 +723,7 @@ def main() -> int:
         "artifacts/",
         "导入文件路径",
         "导入文件已生成",
+        "拆分/合并原因",
         "页面数",
         "元素总数",
         "已覆盖元素数",
@@ -749,7 +752,7 @@ def main() -> int:
         repo_root / "docs" / "test-assets" / "README.md",
     ]:
         assert_contains(path, ["docs/test-assets/batch-runs/"])
-    assert_contains(batch_plan_template, ["批次执行计划", "三级菜单/页面域", "batch-status.csv", "page-discovery.csv", "导入文件", "才能进入下一批", "不得重新生成各批完整用例"])
+    assert_contains(batch_plan_template, ["批次执行计划", "三级菜单/页面域", "batch-status.csv", "page-discovery.csv", "导入文件", "最多允许合并 2 个", "才能进入下一批", "不得重新生成各批完整用例"])
     assert_contains(batch_review_template, ["批次执行复盘", "页面数", "元素总数", "导入文件路径", "最终交付约束", "不得重新生成各批完整用例"])
     expected_page_discovery_header = (
         "批次ID,一级模块,二级菜单,三级菜单/页面域,页面/入口,菜单路径/URL,发现方式,角色/权限,数据状态,"
@@ -817,6 +820,9 @@ def main() -> int:
             "must not assume",
             "validate_product_map_sync",
             "validate_import_workbook",
+            "validate_batch_granularity",
+            "validate_batch_import_workbooks",
+            "MAX_MERGED_TERTIARY_DOMAINS",
             "--import-workbook",
             "default_page_discovery_path",
             "default_product_map_path",

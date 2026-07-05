@@ -131,3 +131,4 @@ docs/test-assets/product-map.xlsx
 - `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/` 是受保护目录，普通框架升级不得覆盖或删除。标识：PROTECTED_ASSET_DIRS。
 - `product-map.xlsx` 是主要可能演进的内部资产结构；历史归档 Excel 默认作为历史快照保留，不因普通框架升级而批量重写。
 - 如果 `asset_schema_version` 或产品版图结构变化，必须通过升级清单、校验脚本和迁移脚本增量补齐旧资产，不得用空模板覆盖内网真实资产。
+- 每个已通过批次默认只能覆盖 1 个三级菜单/页面域；确需合并时最多允许合并 2 个三级菜单/页面域，且必须在 `batch-status.csv` 的 `拆分/合并原因` 中说明合并原因，超过 2 个必须拆成独立批次。已通过批次的导入文件路径必须真实存在，并能与归档测试设计逐个匹配校验。

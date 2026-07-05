@@ -47,7 +47,70 @@ BATCH_REQUIRED_HEADERS = [
     "页面元素覆盖完成",
     "产品版图已更新",
     "覆盖质量自检",
+    "导入文件路径",
+    "导入文件已生成",
 ]
+
+BATCH_NUMBER_FIELDS = [
+    "页面数",
+    "元素总数",
+    "已覆盖元素数",
+    "待确认元素数",
+    "功能用例数",
+    "性能场景数",
+    "异常用例数",
+    "边界用例数",
+    "权限/状态用例数",
+    "数据一致性用例数",
+]
+
+BATCH_PASS_BOOLEAN_FIELDS = [
+    "页面遍历完成",
+    "功能用例完成",
+    "性能设计完成",
+    "异常边界权限覆盖完成",
+    "页面元素覆盖完成",
+    "产品版图已更新",
+    "导入文件已生成",
+]
+
+IMPORT_HEADERS = [
+    "一级模块系统编号",
+    "一级模块名称",
+    "二级模块系统编号",
+    "二级模块名称",
+    "三级模块系统编号",
+    "三级模块名称",
+    "四级模块系统编号",
+    "四级模块名称",
+    "五级模块系统编号",
+    "五级模块名称",
+    "其他模块系统编号",
+    "其他模块名称",
+    "测试用例系统编号",
+    "测试用例序号",
+    "测试用例名称",
+    "测试步骤描述",
+    "测试步骤预期结果",
+    "测试类型",
+    "测试用例级别",
+    "执行方式",
+    "测试用例说明",
+    "前置条件",
+    "维护人",
+    "标签",
+    "备注",
+    "作者",
+]
+
+IMPORT_ALLOWED_VALUES = {
+    "测试类型": {"功能测试", "性能规格测试", "可靠性测试", "兼容性测试", "可维护性测试", "安全性测试", "易用性测试"},
+    "测试用例级别": {"L1", "L2", "L3", "L4"},
+    "执行方式": {"自动化", "手动"},
+}
+
+IMPORT_REQUIRED_FIELDS = ["一级模块名称", "二级模块名称", "三级模块名称", "测试用例名称", "测试类型", "测试用例级别", "执行方式"]
+IMPORT_AUTO_FIELDS = ["测试用例系统编号", "作者"]
 
 PAGE_DISCOVERY_REQUIRED_HEADERS = [
     "批次ID",
@@ -195,25 +258,14 @@ def assert_complete_operation_steps(text: str, label: str) -> None:
     if len(lines) < 2:
         fail(f"{label} must include full navigation and operation steps, not a single short sentence")
     first_steps = "\n".join(lines[:3])
-    navigation_markers = [
-        "登录",
-        "打开",
-        "进入",
-        "访问",
-        "选择",
-        "点击",
-        "菜单",
-        "页面",
-        "模块",
-        "系统",
-        "导航",
-        "路径",
-        "tab",
-        "Tab",
-        "URL",
-    ]
-    if not any(marker in first_steps for marker in navigation_markers):
+    entry_markers = ["登录", "打开系统", "访问系统", "进入系统", "打开平台", "访问平台", "进入平台", "URL"]
+    navigation_markers = ["一级", "二级", "三级", "菜单", "模块", "导航", "路径", ">", "页面"]
+    if not any(marker in first_steps for marker in entry_markers):
         fail(f"{label} must start from system/project entry and include navigation path to target function")
+    if not any(marker in first_steps for marker in navigation_markers):
+        fail(f"{label} must include complete menu/module navigation before operating target controls")
+    if re.match(r"^1\.\s*在[^，,。]*页面", lines[0]):
+        fail(f"{label} must not assume the tester is already on the target module page")
 
 
 def parse_ids(text: str) -> set[str]:
@@ -249,6 +301,35 @@ def require_headers(rows: list[list[str]], required: list[str], sheet_name: str)
     missing = [header for header in required if header not in headers]
     if missing:
         fail(f"{sheet_name} is missing headers: {missing}")
+
+
+def first_sheet_rows(path: Path) -> list[list[str]]:
+    with zipfile.ZipFile(path) as zf:
+        paths = workbook_sheet_paths(zf)
+        if not paths:
+            fail(f"Workbook has no sheets: {path}")
+        first_sheet = next(iter(paths))
+        shared = shared_strings(zf)
+        root = ET.fromstring(zf.read(paths[first_sheet]))
+    rows: list[list[str]] = []
+    for row in root.findall(".//x:sheetData/x:row", NS):
+        values: list[str] = []
+        for cell in row.findall("x:c", NS):
+            index = column_index(cell.attrib.get("r", "A1"))
+            while len(values) <= index:
+                values.append("")
+            values[index] = cell_text(cell, shared)
+        rows.append(values)
+    return rows
+
+
+def first_worksheet_xml(path: Path) -> str:
+    with zipfile.ZipFile(path) as zf:
+        paths = workbook_sheet_paths(zf)
+        if not paths:
+            fail(f"Workbook has no sheets: {path}")
+        first_sheet = next(iter(paths))
+        return zf.read(paths[first_sheet]).decode("utf-8", errors="ignore")
 
 
 def validate_workbook(workbook: Path) -> dict[str, object]:
@@ -328,13 +409,75 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
     }
 
 
+def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, object]) -> None:
+    if not import_workbook.exists():
+        fail(f"Import workbook not found: {import_workbook}")
+    with zipfile.ZipFile(import_workbook) as zf:
+        sheet_names = list(workbook_sheet_paths(zf))
+    if sheet_names == EXPECTED_SHEETS or "测试系统导入用例" in sheet_names:
+        fail("Import workbook must be a copy of 测试用例模板.xlsx, not the formal test design workbook")
+
+    rows_raw = first_sheet_rows(import_workbook)
+    if not rows_raw:
+        fail("Import workbook has no header row")
+    headers = rows_raw[0]
+    if headers[: len(IMPORT_HEADERS)] != IMPORT_HEADERS:
+        fail(f"Import workbook headers mismatch. Expected {IMPORT_HEADERS}, got {headers}")
+
+    rows = row_dicts(rows_raw, "测试系统导入文件")
+    if not rows:
+        fail("Import workbook must contain mapped test cases")
+
+    case_titles = workbook_data["case_titles"]
+    assert isinstance(case_titles, dict)
+    formal_titles = set(case_titles.values())
+    imported_titles: set[str] = set()
+    for index, row in enumerate(rows, start=2):
+        for field in IMPORT_REQUIRED_FIELDS:
+            if not row.get(field):
+                fail(f"Import workbook row {index} is missing required field: {field}")
+        for field in IMPORT_AUTO_FIELDS:
+            if row.get(field):
+                fail(f"Import workbook row {index} must leave auto-generated field blank: {field}")
+        for field, allowed in IMPORT_ALLOWED_VALUES.items():
+            value = row.get(field, "")
+            if value not in allowed:
+                fail(f"Import workbook row {index} has invalid {field}: {value}")
+        if row.get("执行方式") == "自动化":
+            note = row.get("备注", "") + row.get("标签", "") + row.get("测试用例说明", "")
+            if not any(marker in note for marker in ["自动化资产", "脚本", "流水线", "API自动化", "UI自动化"]):
+                fail(f"Import workbook row {index} uses 自动化 but does not reference an implemented automation asset")
+        title = row.get("测试用例名称", "")
+        if "-" not in title or " -" in title or "- " in title:
+            fail(f"Import workbook row {index} 测试用例名称 must use 功能点-当前用例标题 without spaces: {title}")
+        assert_numbered(row.get("测试步骤描述", ""), f"Import workbook row {index} 测试步骤描述")
+        assert_complete_operation_steps(row.get("测试步骤描述", ""), f"Import workbook row {index} 测试步骤描述")
+        assert_numbered(row.get("测试步骤预期结果", ""), f"Import workbook row {index} 测试步骤预期结果")
+        if row.get("前置条件"):
+            assert_numbered(row["前置条件"], f"Import workbook row {index} 前置条件")
+        imported_titles.add(title)
+
+    missing_titles = sorted(formal_titles - imported_titles)
+    if missing_titles:
+        fail(f"Import workbook is missing formal function cases: {missing_titles[:10]}")
+
+    xml = first_worksheet_xml(import_workbook)
+    for marker, label in {
+        'sqref="R2:R2001"': "测试类型",
+        'sqref="S2:S2001"': "测试用例级别",
+        'sqref="T2:T2001"': "执行方式",
+    }.items():
+        if marker not in xml:
+            fail(f"Import workbook is missing preserved {label} dropdown validation: {marker}")
+
+
 def positive_int(value: str, field: str, batch_id: str) -> int:
     if not re.fullmatch(r"\d+", value or ""):
         fail(f"batch {batch_id} field {field} must be a non-negative integer: {value}")
     return int(value)
 
 
-def validate_batch_status(path: Path) -> None:
+def validate_batch_status(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         fail(f"Batch status file not found: {path}")
     with path.open("r", encoding="utf-8-sig", newline="") as fp:
@@ -349,7 +492,7 @@ def validate_batch_status(path: Path) -> None:
 
     for row in rows:
         batch_id = row["批次ID"]
-        numbers = {field: positive_int(row.get(field, ""), field, batch_id) for field in BATCH_REQUIRED_HEADERS[2:12]}
+        numbers = {field: positive_int(row.get(field, ""), field, batch_id) for field in BATCH_NUMBER_FIELDS}
         if numbers["已覆盖元素数"] > numbers["元素总数"]:
             fail(f"batch {batch_id} 已覆盖元素数 cannot exceed 元素总数")
         if numbers["待确认元素数"] > numbers["元素总数"]:
@@ -358,9 +501,34 @@ def validate_batch_status(path: Path) -> None:
             for field in ["页面数", "元素总数", "已覆盖元素数", "功能用例数", "性能场景数"]:
                 if numbers[field] <= 0:
                     fail(f"batch {batch_id} cannot pass 覆盖质量自检 with {field}=0")
-            for field in BATCH_REQUIRED_HEADERS[12:18]:
+            for field in BATCH_PASS_BOOLEAN_FIELDS:
                 if row.get(field) != "是":
                     fail(f"batch {batch_id} cannot pass 覆盖质量自检 when {field} is not 是")
+            if not row.get("导入文件路径"):
+                fail(f"batch {batch_id} cannot pass 覆盖质量自检 without 导入文件路径")
+    return rows
+
+
+def validate_batch_review(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
+    review_path = batch_status.resolve().parent / "batch-review.md"
+    if not review_path.exists():
+        fail(f"batch-review.md not found beside batch-status.csv: {review_path}")
+    text = review_path.read_text(encoding="utf-8-sig")
+    completed_rows = [
+        row for row in batch_rows
+        if row.get("覆盖质量自检") == "通过" or row.get("状态") in {"已完成", "完成"}
+    ]
+    for row in completed_rows:
+        batch_id = row.get("批次ID", "")
+        if batch_id and batch_id not in text:
+            fail(f"batch-review.md must include completed batch: {batch_id}")
+        stale_pattern = rf"\|\s*{re.escape(batch_id)}\s*\|\s*待开始\s*\|\s*0\s*\|\s*0\s*\|"
+        if re.search(stale_pattern, text):
+            fail(f"batch-review.md still contains stale template row for completed batch: {batch_id}")
+        for field in ["归档路径", "导入文件路径"]:
+            value = row.get(field, "")
+            if value and value not in text:
+                fail(f"batch-review.md must reference {field} for completed batch {batch_id}: {value}")
 
 
 def validate_product_map_sync(
@@ -471,6 +639,7 @@ def main() -> int:
     parser.add_argument("--batch-status", type=Path)
     parser.add_argument("--product-map", type=Path)
     parser.add_argument("--page-discovery", type=Path)
+    parser.add_argument("--import-workbook", type=Path)
     args = parser.parse_args()
 
     if not args.page_discovery:
@@ -480,7 +649,10 @@ def main() -> int:
 
     workbook_data = validate_workbook(args.workbook)
     if args.batch_status:
-        validate_batch_status(args.batch_status)
+        batch_rows = validate_batch_status(args.batch_status)
+        validate_batch_review(args.batch_status, batch_rows)
+    if args.import_workbook:
+        validate_import_workbook(args.import_workbook, workbook_data)
     if bool(args.product_map) != bool(args.page_discovery):
         fail("--product-map and --page-discovery must be provided together")
     if args.product_map and args.page_discovery:

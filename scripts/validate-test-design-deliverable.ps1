@@ -6,7 +6,9 @@ param(
 
   [string]$ProductMapPath,
 
-  [string]$PageDiscoveryPath
+  [string]$PageDiscoveryPath,
+
+  [string]$ImportWorkbookPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,6 +37,9 @@ if ($ProductMapPath) {
 }
 if ($PageDiscoveryPath) {
   $argsList += @("--page-discovery", $PageDiscoveryPath)
+}
+if ($ImportWorkbookPath) {
+  $argsList += @("--import-workbook", $ImportWorkbookPath)
 }
 
 & $python @argsList

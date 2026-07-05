@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import csv
 import re
 import sys
 import zipfile
@@ -62,9 +63,15 @@ GLOBAL_INTERMEDIATE_CONTENT_MARKERS = [
     "全部测试用例",
     "完整测试用例",
     "跨批次用例",
-    "多个二级菜单",
+    "多个三级菜单/页面域",
     "统一生成 Excel",
     "先集中写入",
+]
+
+GENERATED_BATCH_SCRIPT_PATTERNS = [
+    "gen_batch*.py",
+    "fix_batch*.py",
+    "*batch*_cases.py",
 ]
 
 CASE_BODY_MARKERS = [
@@ -221,6 +228,29 @@ def validate_no_global_intermediate_files(repo_root: Path) -> None:
                 )
 
 
+def validate_no_generated_batch_scripts_in_framework_scripts(repo_root: Path) -> None:
+    scripts_dir = repo_root / "scripts"
+    offenders: list[Path] = []
+    for pattern in GENERATED_BATCH_SCRIPT_PATTERNS:
+        offenders.extend(path for path in scripts_dir.glob(pattern) if path.is_file())
+    if offenders:
+        relative = ", ".join(str(path.relative_to(repo_root)) for path in sorted(offenders))
+        fail(
+            "Generated batch helper scripts must not stay in framework scripts/: "
+            f"{relative}. Put current-batch scripts under "
+            "docs/test-assets/batch-runs/<task>/artifacts/scripts/ and remove them after use."
+        )
+
+
+def validate_no_root_batch_artifacts_dir(repo_root: Path) -> None:
+    root_artifacts = repo_root / "docs" / "test-assets" / "batch-runs" / "artifacts"
+    if root_artifacts.exists():
+        fail(
+            "Batch artifacts must live under docs/test-assets/batch-runs/<task>/artifacts/, "
+            "not the shared batch-runs/artifacts directory."
+        )
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     design_template = repo_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
@@ -261,6 +291,8 @@ def main() -> int:
             fail(f"Missing internal test asset directory: {path}")
 
     validate_no_global_intermediate_files(repo_root)
+    validate_no_generated_batch_scripts_in_framework_scripts(repo_root)
+    validate_no_root_batch_artifacts_dir(repo_root)
 
     expected_design_sheets = [
         "测试设计总览",
@@ -443,11 +475,15 @@ def main() -> int:
         "批次ID,一级模块,二级菜单,三级菜单/页面域,批次范围,状态,页面数,元素总数,已覆盖元素数,"
         "待确认元素数,功能用例数,性能场景数,异常用例数,边界用例数,权限/状态用例数,数据一致性用例数,"
         "页面遍历完成,功能用例完成,性能设计完成,异常边界权限覆盖完成,页面元素覆盖完成,产品版图已更新,"
-        "覆盖质量自检,未覆盖元素清单路径,归档路径,待确认问题,下一步动作"
+        "覆盖质量自检,未覆盖元素清单路径,归档路径,导入文件路径,导入文件已生成,待确认问题,下一步动作"
     )
     actual_batch_status_header = read_text(batch_status_template).splitlines()[0]
     if actual_batch_status_header != expected_batch_status_header:
         fail("batch-status-template.csv header changed unexpectedly")
+    with batch_status_template.open("r", encoding="utf-8-sig", newline="") as fp:
+        batch_status_rows = list(csv.reader(fp))
+    if len(batch_status_rows) < 2 or len(batch_status_rows[1]) != len(batch_status_rows[0]):
+        fail("batch-status-template.csv sample row must have the same column count as its header")
 
     required_markers = [
         "正式测试设计",
@@ -503,7 +539,7 @@ def main() -> int:
         "测试用例必须尽可能详细",
         "批次队列",
         "不得重新生成各批完整用例",
-        "分批默认按一级模块下的二级菜单",
+        "分批默认按一级模块下的三级菜单/页面域",
     ]
     for path in summary_only_files:
         assert_not_contains(path, full_rule_markers)
@@ -643,11 +679,11 @@ def main() -> int:
         "三级菜单",
         "菜单轮廓",
         "分批设计计划",
-        "分批默认按一级模块下的二级菜单",
-        "二级菜单过大",
-        "二级菜单过小",
-        "跨二级菜单强依赖",
-        "超过一个二级菜单",
+        "分批默认按一级模块下的三级菜单/页面域",
+        "三级菜单仍然过大",
+        "三级菜单过小时",
+        "跨三级菜单强依赖",
+        "超过一个三级菜单/页面域",
         "禁止直接生成完整测试用例",
         "批次队列",
         "覆盖质量自检",
@@ -683,6 +719,8 @@ def main() -> int:
         "batch-review.md",
         "page-discovery.csv",
         "artifacts/",
+        "导入文件路径",
+        "导入文件已生成",
         "页面数",
         "元素总数",
         "已覆盖元素数",
@@ -711,8 +749,8 @@ def main() -> int:
         repo_root / "docs" / "test-assets" / "README.md",
     ]:
         assert_contains(path, ["docs/test-assets/batch-runs/"])
-    assert_contains(batch_plan_template, ["批次执行计划", "batch-status.csv", "page-discovery.csv", "才能进入下一批", "不得重新生成各批完整用例"])
-    assert_contains(batch_review_template, ["批次执行复盘", "页面数", "元素总数", "最终交付约束", "不得重新生成各批完整用例"])
+    assert_contains(batch_plan_template, ["批次执行计划", "三级菜单/页面域", "batch-status.csv", "page-discovery.csv", "导入文件", "才能进入下一批", "不得重新生成各批完整用例"])
+    assert_contains(batch_review_template, ["批次执行复盘", "页面数", "元素总数", "导入文件路径", "最终交付约束", "不得重新生成各批完整用例"])
     expected_page_discovery_header = (
         "批次ID,一级模块,二级菜单,三级菜单/页面域,页面/入口,菜单路径/URL,发现方式,角色/权限,数据状态,"
         "元素名称/文案,元素类型,交互方式,完整点击路径,预期/观察行为,业务依据/规则来源,测试数据来源,"
@@ -729,6 +767,7 @@ def main() -> int:
         "JSON",
         "Markdown",
         "当前批次的模板填充、格式转换或校验",
+        "artifacts/scripts",
         "统一生成 Excel",
     ]
     for path in [
@@ -772,9 +811,13 @@ def main() -> int:
         deliverable_validator,
         [
             "assert_complete_operation_steps",
+            "entry_markers",
             "navigation_markers",
             "full navigation",
+            "must not assume",
             "validate_product_map_sync",
+            "validate_import_workbook",
+            "--import-workbook",
             "default_page_discovery_path",
             "default_product_map_path",
             "--product-map",
@@ -785,7 +828,7 @@ def main() -> int:
     )
     assert_contains(
         deliverable_validator_ps1,
-        ["ProductMapPath", "PageDiscoveryPath", "--product-map", "--page-discovery", "page-discovery.csv"],
+        ["ProductMapPath", "PageDiscoveryPath", "ImportWorkbookPath", "--product-map", "--page-discovery", "--import-workbook", "page-discovery.csv"],
     )
 
     batch_exploration_markers = [

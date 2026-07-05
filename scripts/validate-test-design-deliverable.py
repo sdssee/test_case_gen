@@ -117,6 +117,7 @@ IMPORT_AUTO_FIELDS = ["测试用例系统编号", "作者"]
 
 PAGE_DISCOVERY_REQUIRED_HEADERS = [
     "批次ID",
+    "最小标题路径",
     "页面/入口",
     "菜单路径/URL",
     "元素名称/文案",
@@ -488,22 +489,19 @@ def has_multiple_leaf_values(value: str) -> bool:
 
 
 def is_passed_batch(row: dict[str, str]) -> bool:
-    return row.get("覆盖质量自检") == "通过" or row.get("状态") in {"已完成", "完成"}
+    return row.get("覆盖质量自检", "").strip() == "通过"
 
 
 def validate_batch_granularity(row: dict[str, str], numbers: dict[str, int]) -> None:
     batch_id = row.get("批次ID", "")
     leaf_path = row.get("最小标题路径", "").strip()
     tertiary_value = row.get("三级菜单/页面域", "").strip()
-    page_count = numbers.get("页面数", 0)
     if not leaf_path:
         fail(f"batch {batch_id} must declare 最小标题路径 for leaf-level batching")
     if has_multiple_leaf_values(leaf_path):
         fail(f"batch {batch_id} 最小标题路径 must point to exactly one leaf title, not multiple leaves: {leaf_path}")
     if has_multiple_leaf_values(tertiary_value):
         fail(f"batch {batch_id} 三级菜单/页面域 must not contain merged leaves: {tertiary_value}")
-    if page_count > 1:
-        fail(f"batch {batch_id} covers {page_count} pages; leaf-level batching allows only one page/domain per batch")
     if row.get("拆分/合并原因", "").strip():
         fail(f"batch {batch_id} must not use 拆分/合并原因 because merge/split is forbidden")
 
@@ -536,10 +534,16 @@ def validate_batch_status(path: Path) -> list[dict[str, str]]:
         missing = [header for header in BATCH_REQUIRED_HEADERS if header not in headers]
         if missing:
             fail(f"batch-status.csv is missing headers: {missing}")
-        rows = [row for row in reader if row.get("批次ID")]
+        rows = [
+            {key: (value or "").strip() for key, value in row.items()}
+            for row in reader
+            if (row.get("批次ID") or "").strip()
+        ]
     if not rows:
         fail("batch-status.csv must contain at least one batch row")
 
+    completed_statuses = {"已完成", "完成"}
+    passed_leaf_paths: dict[str, str] = {}
     for row in rows:
         batch_id = row["批次ID"]
         numbers = {field: positive_int(row.get(field, ""), field, batch_id) for field in BATCH_NUMBER_FIELDS}
@@ -547,8 +551,20 @@ def validate_batch_status(path: Path) -> list[dict[str, str]]:
             fail(f"batch {batch_id} 已覆盖元素数 cannot exceed 元素总数")
         if numbers["待确认元素数"] > numbers["元素总数"]:
             fail(f"batch {batch_id} 待确认元素数 cannot exceed 元素总数")
-        if row.get("覆盖质量自检") == "通过":
+        status = row.get("状态", "")
+        self_check = row.get("覆盖质量自检", "")
+        if status in completed_statuses and self_check != "通过":
+            fail(f"batch {batch_id} cannot be marked {status} unless 覆盖质量自检 is 通过")
+        if self_check == "通过" and status not in completed_statuses:
+            fail(f"batch {batch_id} cannot pass 覆盖质量自检 unless 状态 is 已完成")
+        if is_passed_batch(row):
             validate_batch_granularity(row, numbers)
+            leaf_path = row.get("最小标题路径", "").strip()
+            if leaf_path in passed_leaf_paths:
+                fail(
+                    f"batch {batch_id} duplicates 最小标题路径 already covered by {passed_leaf_paths[leaf_path]}: {leaf_path}"
+                )
+            passed_leaf_paths[leaf_path] = batch_id
             for field in ["页面数", "元素总数", "已覆盖元素数", "功能用例数", "性能场景数"]:
                 if numbers[field] <= 0:
                     fail(f"batch {batch_id} cannot pass 覆盖质量自检 with {field}=0")
@@ -604,6 +620,7 @@ def validate_product_map_sync(
     workbook_data: dict[str, object],
     product_map: Path,
     page_discovery: Path,
+    batch_rows: list[dict[str, str]] | None = None,
 ) -> None:
     discovery_rows = csv_row_dicts(page_discovery, PAGE_DISCOVERY_REQUIRED_HEADERS, "page-discovery.csv")
     if not discovery_rows:
@@ -650,7 +667,25 @@ def validate_product_map_sync(
     }
     product_case_ids = {row.get("用例ID", "") for row in product_case_rows if row.get("用例ID")}
 
+    passed_batches = {
+        row.get("批次ID", ""): row.get("最小标题路径", "").strip()
+        for row in (batch_rows or [])
+        if is_passed_batch(row)
+    }
+
     for index, row in enumerate(discovery_rows, start=2):
+        batch_id = row.get("批次ID", "")
+        leaf_path = row.get("最小标题路径", "").strip()
+        if not leaf_path:
+            fail(f"page-discovery.csv row {index} must include 最小标题路径")
+        if passed_batches:
+            expected_leaf = passed_batches.get(batch_id)
+            if not expected_leaf:
+                fail(f"page-discovery.csv row {index} references unknown or unfinished batch: {batch_id}")
+            if leaf_path != expected_leaf:
+                fail(
+                    f"page-discovery.csv row {index} 最小标题路径 must match batch-status.csv for {batch_id}: {leaf_path} != {expected_leaf}"
+                )
         page = row.get("页面/入口", "")
         element = row.get("元素名称/文案", "")
         if not page or not element:
@@ -696,10 +731,7 @@ def default_product_map_path() -> Path:
 def default_page_discovery_path(batch_status: Path | None) -> Path | None:
     if not batch_status:
         return None
-    candidate = batch_status.resolve().parent / "page-discovery.csv"
-    if candidate.exists():
-        return candidate
-    return None
+    return batch_status.resolve().parent / "page-discovery.csv"
 
 
 def main() -> int:
@@ -717,6 +749,7 @@ def main() -> int:
         args.product_map = default_product_map_path()
 
     workbook_data = validate_workbook(args.workbook)
+    batch_rows = None
     if args.batch_status:
         batch_rows = validate_batch_status(args.batch_status)
         validate_batch_review(args.batch_status, batch_rows)
@@ -726,7 +759,7 @@ def main() -> int:
     if bool(args.product_map) != bool(args.page_discovery):
         fail("--product-map and --page-discovery must be provided together")
     if args.product_map and args.page_discovery:
-        validate_product_map_sync(workbook_data, args.product_map, args.page_discovery)
+        validate_product_map_sync(workbook_data, args.product_map, args.page_discovery, batch_rows)
     print("OK: test design deliverable quality checks passed.")
     return 0
 

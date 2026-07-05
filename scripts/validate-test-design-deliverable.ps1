@@ -24,9 +24,7 @@ if ($BatchStatusPath) {
   $argsList += @("--batch-status", $BatchStatusPath)
   if (-not $PageDiscoveryPath) {
     $candidatePageDiscovery = Join-Path (Split-Path -Parent $BatchStatusPath) "page-discovery.csv"
-    if (Test-Path $candidatePageDiscovery) {
-      $PageDiscoveryPath = $candidatePageDiscovery
-    }
+    $PageDiscoveryPath = $candidatePageDiscovery
   }
 }
 if ($PageDiscoveryPath -and -not $ProductMapPath) {

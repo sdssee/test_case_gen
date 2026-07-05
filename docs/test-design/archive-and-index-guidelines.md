@@ -84,17 +84,17 @@ docs/test-assets/product-map.xlsx
 - 每批预计交付物和回存路径
 - 跨模块汇总方式和待确认问题
 
-当范围超过一个三级菜单/页面域时，必须在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本。账本必须包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`，并优先基于 `docs/test-assets/batch-runs/templates/` 复制生成。`batch-plan.md` 承载分批设计计划，`batch-status.csv` 承载每批状态、覆盖数量、用例数量和覆盖质量自检，`page-discovery.csv` 承载页面实探证据，`batch-review.md` 承载最终汇总、跨模块汇总、回归范围、风险与待确认问题，`artifacts/` 保存页面遍历笔记、截图或中间核对材料。
+当范围超过一个最小标题时，必须在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本。账本必须包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`，并优先基于 `docs/test-assets/batch-runs/templates/` 复制生成。`batch-plan.md` 承载分批设计计划，`batch-status.csv` 承载每批状态、最小标题路径、覆盖数量、用例数量和覆盖质量自检，`page-discovery.csv` 承载页面实探证据并记录最小标题路径，`batch-review.md` 承载最终汇总、跨模块汇总、回归范围、风险与待确认问题，`artifacts/` 保存页面遍历笔记、截图或中间核对材料。
 
 
-大范围任务禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件。脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 artifacts/scripts/，不得把多个三级菜单/页面域、多个批次或全产品测试用例先集中写入一个文件后再统一生成 Excel。每批的测试用例正文必须以当前批次正式测试设计 Excel、`page-discovery.csv` 和 `batch-status.csv` 为边界进行维护。
+大范围任务禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件。脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 artifacts/scripts/，不得把多个最小标题路径、多个批次或全产品测试用例先集中写入一个文件后再统一生成 Excel。每批的测试用例正文必须以当前批次正式测试设计 Excel、`page-discovery.csv` 和 `batch-status.csv` 为边界进行维护。
 
-每个批次正式写测试用例前，如果存在可访问页面、原型或桌面窗口，必须使用浏览器能力或 computer use 遍历当前批次对应模块、页面域或业务链路的所有可点击/可交互功能点。遍历结果必须同步到 `page-discovery.csv`、页面元素覆盖清单、功能测试用例和 `product-map.xlsx` 的产品模块地图、页面元素地图、业务对象地图、业务链路地图、模块能力索引、跨模块依赖关系和变更记录；无法确认业务规则的入口登记为待确认问题。
+每个批次正式写测试用例前，如果存在可访问页面、原型或桌面窗口，必须使用浏览器能力或 computer use 遍历当前批次最小标题路径对应模块、页面域或业务链路的所有可点击/可交互功能点。遍历结果必须同步到 `page-discovery.csv`、页面元素覆盖清单、功能测试用例和 `product-map.xlsx` 的产品模块地图、页面元素地图、业务对象地图、业务链路地图、模块能力索引、跨模块依赖关系和变更记录；无法确认业务规则的入口登记为待确认问题。
 
 具体写测试用例时，必须在对应页面或功能点内做深遍历，覆盖所有可点击、可输入、可测试元素，包括按钮、链接、菜单、Tab、图标按钮、筛选、排序、分页、表格行操作、批量操作、输入框、下拉项、上传下载、弹窗、抽屉、开关、禁用态、空状态和错误态。
 
 每一批测试设计都必须严格执行完整 test-design Skill 和 Rule，不得因为分批而降级。每批都必须形成完整测试设计闭环，至少覆盖：
-当范围超过一个三级菜单/页面域时，禁止直接生成完整测试用例；必须先建立批次队列，按批次逐个执行完整测试设计。每批完成覆盖质量自检、更新 `batch-status.csv` 并回存内部资产后，才能进入下一批。覆盖质量自检至少确认页面遍历完成、页面元素覆盖清单、功能测试用例、性能测试设计、异常/边界/权限/状态/数据一致性用例、风险与待确认问题、自动化建议和产品版图回存均已完成，并在 `batch-status.csv` 填写页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数和数据一致性用例数、导入文件路径和导入文件已生成。所有批次完成后只做最终汇总、跨模块汇总、回归范围、风险清单和客户总览，不得重新生成各批完整用例。
+当范围超过一个最小标题时，禁止直接生成完整测试用例；必须先建立批次队列，按最小标题路径逐个执行完整测试设计。每批完成覆盖质量自检、更新 `batch-status.csv` 并回存内部资产后，才能进入下一批。覆盖质量自检至少确认页面遍历完成、页面元素覆盖清单、功能测试用例、性能测试设计、异常/边界/权限/状态/数据一致性用例、风险与待确认问题、自动化建议和产品版图回存均已完成，并在 `batch-status.csv` 填写最小标题路径、页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数和数据一致性用例数、导入文件路径和导入文件已生成。所有批次完成后只做最终汇总、跨模块汇总、回归范围、风险清单和客户总览，不得重新生成各批完整用例。
 测试用例必须尽可能详细；详细度自检必须确认每个测试点和每个页面元素都已按不同测试方向展开，包括主流程、异常流程、边界值、权限/角色、状态流转、数据一致性、组合条件、禁用态/空状态/错误态、兼容性/稳定性、性能影响、审计/日志/通知、副作用和可恢复路径；不能只用一个笼统用例替代多个可验证方向。
 
 - 功能测试主流程
@@ -116,7 +116,7 @@ docs/test-assets/product-map.xlsx
 3. 如需导入测试系统，将导入文件副本保存到 `docs/test-assets/imports/`。
 4. 将本模块提供的能力、业务对象、关键状态、业务链路、可复用前置条件、可复用测试数据、跨模块依赖、影响分析和关联用例 ID 更新到 `product-map.xlsx`。
 5. 如果用户人工修改了测试设计，最终版必须回存内部资产库，并更新产品版图中的变更记录。
-6. 生成正式测试设计 Excel 后，必须运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务追加 `-BatchStatusPath <batch-status.csv>`；如果 `batch-status.csv` 同级存在 `page-discovery.csv`，脚本会自动使用 `docs/test-assets/product-map.xlsx` 启用产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的页面元素、关联用例、用例资产索引和变更记录是否同步。
+6. 生成正式测试设计 Excel 后，必须运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务追加 `-BatchStatusPath <batch-status.csv>`，并强制读取同级 `page-discovery.csv` 与 `docs/test-assets/product-map.xlsx` 做产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的最小标题路径、页面元素、关联用例、用例资产索引和变更记录是否同步。
 
 ## 跨模块用例管理
 

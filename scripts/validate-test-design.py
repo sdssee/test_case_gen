@@ -63,7 +63,6 @@ GLOBAL_INTERMEDIATE_CONTENT_MARKERS = [
     "全部测试用例",
     "完整测试用例",
     "跨批次用例",
-    "多个三级菜单/页面域",
     "多个最小标题",
     "统一生成 Excel",
     "先集中写入",
@@ -540,7 +539,7 @@ def main() -> int:
         "测试用例必须尽可能详细",
         "批次队列",
         "不得重新生成各批完整用例",
-        "分批默认按一级模块下的三级菜单/页面域",
+        "分批默认按一级模块下的最小标题路径",
     ]
     for path in summary_only_files:
         assert_not_contains(path, full_rule_markers)
@@ -755,7 +754,7 @@ def main() -> int:
     assert_contains(batch_plan_template, ["批次执行计划", "最小标题路径", "最深标题级别", "禁止合并", "禁止再拆分", "batch-status.csv", "page-discovery.csv", "导入文件", "才能进入下一批", "不得重新生成各批完整用例"])
     assert_contains(batch_review_template, ["批次执行复盘", "页面数", "元素总数", "导入文件路径", "最终交付约束", "不得重新生成各批完整用例"])
     expected_page_discovery_header = (
-        "批次ID,一级模块,二级菜单,三级菜单/页面域,页面/入口,菜单路径/URL,发现方式,角色/权限,数据状态,"
+        "批次ID,一级模块,二级菜单,三级菜单/页面域,最小标题路径,页面/入口,菜单路径/URL,发现方式,角色/权限,数据状态,"
         "元素名称/文案,元素类型,交互方式,完整点击路径,预期/观察行为,业务依据/规则来源,测试数据来源,"
         "是否已生成用例,关联用例ID,覆盖状态,未覆盖/待确认原因,证据路径,备注"
     )

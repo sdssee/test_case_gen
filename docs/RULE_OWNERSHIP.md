@@ -17,6 +17,7 @@
 | 执行流程与自检步骤 | `.codebuddy/skills/test-design/SKILL.md` | `AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | `README.md` |
 | Excel Sheet、字段、枚举、导入模板 | `docs/test-design/excel-template-spec.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md` | `README.md` |
 | 产品版图、资产归档、跨模块依赖 | `docs/test-design/archive-and-index-guidelines.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | `README.md` |
+| 批次运行状态与质量门禁 | `docs/test-assets/batch-runs/README.md`、`docs/test-assets/batch-runs/templates/`、`.codebuddy/skills/test-design/SKILL.md` | Rule、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md`、`docs/test-design/archive-and-index-guidelines.md` | `README.md`、`docs/test-design/README.md` |
 | 客户交付与内部资产边界 | `docs/test-design/archive-and-index-guidelines.md`、`docs/test-assets/README.md` | `README.md`、`README_IMPORT.md`、`docs/ARCHITECTURE.md` | Skill 中的长篇资产目录说明 |
 | 外网到内网升级 | `docs/UPGRADE.md`、`UPGRADE_MANIFEST.md`、`scripts/new-framework-upgrade-package.ps1`、`scripts/upgrade-framework.ps1` | `README.md`、`README_IMPORT.md`、`docs/ARCHITECTURE.md` | Skill、Rule 中的长篇升级流程 |
 | 架构分层与维护边界 | `docs/ARCHITECTURE.md`、`docs/RULE_OWNERSHIP.md` | `README.md`、`README_IMPORT.md` | Skill、Rule |
@@ -39,6 +40,6 @@
 | 修改硬性测试质量规则 | 两个 Rule 文件、校验脚本 | Skill 自检摘要、AGENTS/CODEBUDDY 摘要 |
 | 修改执行流程 | Skill、校验脚本 | AGENTS/CODEBUDDY 摘要 |
 | 修改 Excel 字段或枚举 | Excel 模板、`excel-template-spec.md`、校验脚本 | Skill/Rule 中的摘要 |
-| 修改归档或产品版图规则 | `archive-and-index-guidelines.md`、校验脚本 | Skill/Rule/AGENTS/CODEBUDDY 摘要 |
+| 修改归档、批次运行状态或产品版图规则 | `archive-and-index-guidelines.md`、`docs/test-assets/batch-runs/README.md`、批次模板、校验脚本 | Skill/Rule/AGENTS/CODEBUDDY 摘要 |
 | 修改升级机制 | `docs/UPGRADE.md`、`UPGRADE_MANIFEST.md`、升级脚本、校验脚本 | README/README_IMPORT |
 | 修改架构分层 | `docs/ARCHITECTURE.md`、`docs/RULE_OWNERSHIP.md`、校验脚本 | README |

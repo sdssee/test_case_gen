@@ -300,6 +300,29 @@ def main() -> int:
         if not path.exists():
             fail(f"Missing architecture file: {path}")
 
+    batch_runs_dir = repo_root / "docs" / "test-assets" / "batch-runs"
+    batch_templates_dir = batch_runs_dir / "templates"
+    batch_plan_template = batch_templates_dir / "batch-plan-template.md"
+    batch_status_template = batch_templates_dir / "batch-status-template.csv"
+    batch_review_template = batch_templates_dir / "batch-review-template.md"
+    for path in [
+        batch_runs_dir / "README.md",
+        batch_plan_template,
+        batch_status_template,
+        batch_review_template,
+    ]:
+        if not path.exists():
+            fail(f"Missing batch run asset: {path}")
+
+    expected_batch_status_header = (
+        "批次ID,一级模块,二级菜单,三级菜单/页面域,批次范围,状态,页面遍历完成,功能用例完成,"
+        "性能设计完成,异常边界权限覆盖完成,页面元素覆盖完成,产品版图已更新,覆盖质量自检,"
+        "归档路径,待确认问题,下一步动作"
+    )
+    actual_batch_status_header = read_text(batch_status_template).splitlines()[0]
+    if actual_batch_status_header != expected_batch_status_header:
+        fail("batch-status-template.csv header changed unexpectedly")
+
     required_markers = [
         "正式测试设计",
         "测试系统导入用例",
@@ -339,6 +362,7 @@ def main() -> int:
         "docs/test-design/excel-template-spec.md",
         "docs/test-design/archive-and-index-guidelines.md",
         "docs/UPGRADE.md",
+        "docs/test-assets/batch-runs/README.md",
         "README.md",
     ]
     assert_contains(ownership_file, ownership_markers)
@@ -351,7 +375,7 @@ def main() -> int:
     full_rule_markers = [
         "测试用例必须尽可能详细",
         "批次队列",
-        "不得重新一次性改写各批完整用例",
+        "不得重新生成各批完整用例",
         "分批默认按一级模块下的二级菜单",
     ]
     for path in summary_only_files:
@@ -501,7 +525,7 @@ def main() -> int:
         "批次队列",
         "覆盖质量自检",
         "才能进入下一批",
-        "不得重新一次性改写各批完整用例",
+        "不得重新生成各批完整用例",
         "测试用例必须尽可能详细",
         "每个测试点",
         "每个页面元素",
@@ -524,6 +548,39 @@ def main() -> int:
         repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
     ]:
         assert_contains(path, batch_design_markers)
+
+    batch_run_state_markers = [
+        "docs/test-assets/batch-runs/",
+        "batch-plan.md",
+        "batch-status.csv",
+        "batch-review.md",
+        "artifacts/",
+        "覆盖质量自检",
+        "才能进入下一批",
+        "最终汇总",
+        "不得重新生成各批完整用例",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+    ]:
+        assert_contains(path, batch_run_state_markers)
+    for path in [
+        repo_root / "README.md",
+        repo_root / "README_IMPORT.md",
+        repo_root / "docs" / "RULE_OWNERSHIP.md",
+        repo_root / "docs" / "test-assets" / "README.md",
+    ]:
+        assert_contains(path, ["docs/test-assets/batch-runs/"])
+    assert_contains(batch_plan_template, ["批次执行计划", "batch-status.csv", "才能进入下一批", "不得重新生成各批完整用例"])
+    assert_contains(batch_review_template, ["批次执行复盘", "最终交付约束", "不得重新生成各批完整用例"])
 
     batch_exploration_markers = [
         "当前批次",

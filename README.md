@@ -28,6 +28,7 @@
 | `docs/test-design/archive-and-index-guidelines.md` | 测试资产归档、模块能力索引和跨模块依赖维护规范。 |
 | `docs/test-assets/product-map.xlsx` | 内部产品测试知识图谱主入口，不作为默认客户交付件。 |
 | `docs/test-assets/` | 内部产品级测试资产库，保存模块归档、导入副本和产品版图。 |
+| `docs/test-assets/batch-runs/` | 内部批次运行状态目录，保存大范围任务的计划、状态和复盘。 |
 | `README_IMPORT.md` | 将本规范复制到业务项目的说明。 |
 | `scripts/validate-test-design.ps1` | 模板稳定性自检入口。 |
 
@@ -62,6 +63,7 @@
 - 产品测试知识图谱主入口为 `docs/test-assets/product-map.xlsx`
 - 正式测试设计最终版归档到 `docs/test-assets/modules/`
 - 测试系统导入文件副本归档到 `docs/test-assets/imports/`
+- 大范围任务的批次计划、状态和复盘归档到 `docs/test-assets/batch-runs/`
 - 每次生成前读取产品版图和依赖模块归档；正式生成前展示产品理解摘要；每次生成后回存最终版并更新产品版图
 - 不依赖 AI 对话记忆保存具体业务事实
 
@@ -110,6 +112,7 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 - 无已落地自动化资产时，导入文件中的 `执行方式` 默认填写 `手动`
 - `用例标题`/`测试用例名称` 使用 `功能点-当前用例标题` 格式，避免导入系统后丢失功能点信息
 - 产品版图文件存在且包含标准 Sheet
+- 批次运行状态目录和模板存在
 - 规则归属矩阵存在，Rule 双入口保持一致，入口文档引用权威源而不是复制完整规则
 
 ## 维护原则

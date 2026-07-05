@@ -166,7 +166,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 10. 大范围任务进入每个批次正式写测试用例前，如果存在可访问页面、原型或桌面窗口，必须使用浏览器能力或 computer use 遍历当前批次对应模块、页面域或业务链路的所有可点击/可交互功能点，并把发现结果写入页面元素覆盖清单和功能测试用例。
 11. 具体写测试用例时，必须在对应页面或功能点内做深遍历，覆盖所有可点击、可输入、可测试元素，包括按钮、链接、菜单、Tab、图标按钮、筛选、排序、分页、表格行操作、批量操作、输入框、下拉项、上传下载、弹窗、抽屉、开关、禁用态、空状态和错误态。
 12. 每一批测试设计都必须严格执行完整 test-design Skill 和 Rule，不得因为分批而降级；每批都必须覆盖功能测试、性能测试、异常流程、边界值、权限/角色、状态流转、数据一致性、兼容性/稳定性、风险与待确认问题、自动化建议和页面元素覆盖清单。
-13. 当任务范围超过一个二级菜单时，禁止直接生成完整测试用例；必须先建立批次队列，并在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本，包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md` 和 `artifacts/`。应优先复制 `docs/test-assets/batch-runs/templates/` 中的模板；每批完成页面元素覆盖、功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险与待确认问题、自动化建议、资产回存和 `batch-status.csv` 覆盖质量自检后，才能进入下一批。所有批次完成后只做最终汇总、跨模块汇总、回归范围、风险清单和客户总览，不得重新生成各批完整用例。
+13. 当任务范围超过一个二级菜单时，禁止直接生成完整测试用例；必须先建立批次队列，并在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本，包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`。应优先复制 `docs/test-assets/batch-runs/templates/` 中的模板；每批完成页面元素覆盖、功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险与待确认问题、自动化建议、资产回存和 `batch-status.csv` 覆盖质量自检后，才能进入下一批。`batch-status.csv` 必须记录页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数和数据一致性用例数。所有批次完成后只做最终汇总、跨模块汇总、回归范围、风险清单和客户总览，不得重新生成各批完整用例。
 14. 测试用例必须尽可能详细。每个测试点、每个页面元素（包括可点击/可输入/可选择/可上传下载/可展开收起/可批量操作/可行内操作的元素），都必须严格按 Skill 从不同测试方向展开：主流程、异常流程、边界值、权限/角色、状态流转、数据一致性、组合条件、禁用态/空状态/错误态、兼容性/稳定性、性能影响、审计/日志/通知、副作用和可恢复路径；不能只写一个笼统用例替代多个可验证方向。
 
 ### 2. 测试范围定义
@@ -450,9 +450,11 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 如果任务范围是全产品、多个一级模块或大模块，是否已先遍历一级菜单、二级菜单和必要的三级菜单，并输出默认按二级菜单分批的设计计划；如未按二级菜单分批，是否说明了二级过大、过小或跨二级菜单强依赖的调整原因，且没有一次性生成完整测试用例
 - 如果当前批次存在可访问页面、原型或桌面窗口，是否已使用浏览器或 computer use 遍历当前批次所有可点击/可交互功能点
 - 当前批次是否严格执行完整 test-design Skill 和 Rule，并覆盖功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险、自动化建议和页面元素覆盖清单
-- 如果范围超过一个二级菜单，是否已建立批次队列，并在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新 `batch-plan.md`、`batch-status.csv`、`batch-review.md` 和 `artifacts/`
-- 是否已在 `batch-status.csv` 记录当前批次状态，并确认页面遍历完成、功能用例完成、性能设计完成、异常边界权限覆盖完成、页面元素覆盖完成、产品版图已更新和覆盖质量自检通过后才进入下一批
+- 如果范围超过一个二级菜单，是否已建立批次队列，并在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`
+- 是否已在 `page-discovery.csv` 记录当前批次页面入口、元素、完整点击路径、观察行为、覆盖状态、证据路径和关联用例 ID
+- 是否已在 `batch-status.csv` 记录当前批次状态，并确认页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数、数据一致性用例数、页面遍历完成、功能用例完成、性能设计完成、异常边界权限覆盖完成、页面元素覆盖完成、产品版图已更新和覆盖质量自检通过后才进入下一批
 - 当前批次是否已对每个测试点和每个页面元素按主流程、异常、边界、权限、状态、数据一致性、组合条件、禁用态/空状态/错误态、兼容性/稳定性、性能影响和可恢复路径等方向展开，而不是只写笼统用例
+- 正式测试设计 Excel 生成后，是否已运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务是否传入 `-BatchStatusPath <batch-status.csv>`
 - 是否已规划将客户交付件保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`，将最终测试设计回存 `docs/test-assets/modules/`，将导入文件副本回存 `docs/test-assets/imports/`，并更新 `product-map.xlsx`
 - 外网到内网做普通框架升级时，是否已保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`，且未覆盖内网真实资产。标识：PROTECTED_ASSET_DIRS
 

@@ -112,6 +112,8 @@ def main() -> int:
     upgrade_doc = repo_root / "docs" / "UPGRADE.md"
     package_script = repo_root / "scripts" / "new-framework-upgrade-package.ps1"
     upgrade_script = repo_root / "scripts" / "upgrade-framework.ps1"
+    deliverable_validator = repo_root / "scripts" / "validate-test-design-deliverable.py"
+    deliverable_validator_ps1 = repo_root / "scripts" / "validate-test-design-deliverable.ps1"
 
     if not design_template.exists():
         fail(f"Missing design template: {design_template}")
@@ -119,7 +121,7 @@ def main() -> int:
         fail(f"Missing system import template: {system_template}")
     if not product_map.exists():
         fail(f"Missing product map: {product_map}")
-    for path in [version_file, upgrade_manifest, upgrade_doc, package_script, upgrade_script]:
+    for path in [version_file, upgrade_manifest, upgrade_doc, package_script, upgrade_script, deliverable_validator, deliverable_validator_ps1]:
         if not path.exists():
             fail(f"Missing upgrade mechanism file: {path}")
 
@@ -305,19 +307,22 @@ def main() -> int:
     batch_plan_template = batch_templates_dir / "batch-plan-template.md"
     batch_status_template = batch_templates_dir / "batch-status-template.csv"
     batch_review_template = batch_templates_dir / "batch-review-template.md"
+    page_discovery_template = batch_templates_dir / "page-discovery-template.csv"
     for path in [
         batch_runs_dir / "README.md",
         batch_plan_template,
         batch_status_template,
         batch_review_template,
+        page_discovery_template,
     ]:
         if not path.exists():
             fail(f"Missing batch run asset: {path}")
 
     expected_batch_status_header = (
-        "批次ID,一级模块,二级菜单,三级菜单/页面域,批次范围,状态,页面遍历完成,功能用例完成,"
-        "性能设计完成,异常边界权限覆盖完成,页面元素覆盖完成,产品版图已更新,覆盖质量自检,"
-        "归档路径,待确认问题,下一步动作"
+        "批次ID,一级模块,二级菜单,三级菜单/页面域,批次范围,状态,页面数,元素总数,已覆盖元素数,"
+        "待确认元素数,功能用例数,性能场景数,异常用例数,边界用例数,权限/状态用例数,数据一致性用例数,"
+        "页面遍历完成,功能用例完成,性能设计完成,异常边界权限覆盖完成,页面元素覆盖完成,产品版图已更新,"
+        "覆盖质量自检,未覆盖元素清单路径,归档路径,待确认问题,下一步动作"
     )
     actual_batch_status_header = read_text(batch_status_template).splitlines()[0]
     if actual_batch_status_header != expected_batch_status_header:
@@ -363,6 +368,7 @@ def main() -> int:
         "docs/test-design/archive-and-index-guidelines.md",
         "docs/UPGRADE.md",
         "docs/test-assets/batch-runs/README.md",
+        "docs/test-assets/batch-runs/templates/",
         "README.md",
     ]
     assert_contains(ownership_file, ownership_markers)
@@ -554,7 +560,12 @@ def main() -> int:
         "batch-plan.md",
         "batch-status.csv",
         "batch-review.md",
+        "page-discovery.csv",
         "artifacts/",
+        "页面数",
+        "元素总数",
+        "已覆盖元素数",
+        "功能用例数",
         "覆盖质量自检",
         "才能进入下一批",
         "最终汇总",
@@ -579,8 +590,24 @@ def main() -> int:
         repo_root / "docs" / "test-assets" / "README.md",
     ]:
         assert_contains(path, ["docs/test-assets/batch-runs/"])
-    assert_contains(batch_plan_template, ["批次执行计划", "batch-status.csv", "才能进入下一批", "不得重新生成各批完整用例"])
-    assert_contains(batch_review_template, ["批次执行复盘", "最终交付约束", "不得重新生成各批完整用例"])
+    assert_contains(batch_plan_template, ["批次执行计划", "batch-status.csv", "page-discovery.csv", "才能进入下一批", "不得重新生成各批完整用例"])
+    assert_contains(batch_review_template, ["批次执行复盘", "页面数", "元素总数", "最终交付约束", "不得重新生成各批完整用例"])
+    expected_page_discovery_header = (
+        "批次ID,一级模块,二级菜单,三级菜单/页面域,页面/入口,菜单路径/URL,发现方式,角色/权限,数据状态,"
+        "元素名称/文案,元素类型,交互方式,完整点击路径,预期/观察行为,业务依据/规则来源,测试数据来源,"
+        "是否已生成用例,关联用例ID,覆盖状态,未覆盖/待确认原因,证据路径,备注"
+    )
+    actual_page_discovery_header = read_text(page_discovery_template).splitlines()[0]
+    if actual_page_discovery_header != expected_page_discovery_header:
+        fail("page-discovery-template.csv header changed unexpectedly")
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / "README.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+    ]:
+        assert_contains(path, ["validate-test-design-deliverable.ps1"])
 
     batch_exploration_markers = [
         "当前批次",

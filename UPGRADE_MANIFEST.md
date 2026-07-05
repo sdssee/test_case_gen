@@ -23,6 +23,8 @@
 - `docs/test-design/*.md`
 - `docs/test-design/*.xlsx`
 - `docs/test-assets/README.md`
+- `docs/test-assets/batch-runs/README.md`
+- `docs/test-assets/batch-runs/templates/`
 - `scripts/`
 - `README.md`
 - `README_IMPORT.md`

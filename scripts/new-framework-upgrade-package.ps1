@@ -39,12 +39,14 @@ $includeFiles = @(
   "UPGRADE_MANIFEST.md",
   "docs/ARCHITECTURE.md",
   "docs/UPGRADE.md",
-  "docs/test-assets/README.md"
+  "docs/test-assets/README.md",
+  "docs/test-assets/batch-runs/README.md"
 )
 
 $includeDirs = @(
   ".codebuddy",
-  "scripts"
+  "scripts",
+  "docs/test-assets/batch-runs/templates"
 )
 
 $includeGlobs = @(

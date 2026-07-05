@@ -24,6 +24,8 @@ $allowedPrefixes = @(
   "docs/ARCHITECTURE.md",
   "docs/UPGRADE.md",
   "docs/test-assets/README.md",
+  "docs/test-assets/batch-runs/README.md",
+  "docs/test-assets/batch-runs/templates/",
   "scripts/",
   "AGENTS.md",
   "CODEBUDDY.md",
@@ -41,7 +43,9 @@ function Normalize-RelativePath {
 function Test-ProtectedPath {
   param([string]$RelativePath)
   $normalized = Normalize-RelativePath $RelativePath
-  if ($normalized -eq "docs/test-assets/README.md") {
+  if ($normalized -eq "docs/test-assets/README.md" -or
+      $normalized -eq "docs/test-assets/batch-runs/README.md" -or
+      $normalized.StartsWith("docs/test-assets/batch-runs/templates/")) {
     return $false
   }
   foreach ($prefix in $protectedPrefixes) {

@@ -31,6 +31,7 @@
 | `docs/test-assets/batch-runs/` | 内部批次运行状态目录，保存大范围任务的计划、状态和复盘。 |
 | `README_IMPORT.md` | 将本规范复制到业务项目的说明。 |
 | `scripts/validate-test-design.ps1` | 模板稳定性自检入口。 |
+| `scripts/validate-test-design-deliverable.ps1` | 已生成测试设计 Excel 的交付件质量校验入口。 |
 
 ## 正式测试设计 Sheet
 
@@ -114,6 +115,14 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 - 产品版图文件存在且包含标准 Sheet
 - 批次运行状态目录和模板存在
 - 规则归属矩阵存在，Rule 双入口保持一致，入口文档引用权威源而不是复制完整规则
+
+生成正式测试设计 Excel 后运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
+```
+
+大范围任务可追加 `-BatchStatusPath <batch-status.csv>`，用于校验批次状态中的覆盖数量、用例数量和质量门禁。
 
 ## 维护原则
 

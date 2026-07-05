@@ -52,6 +52,8 @@ powershell -ExecutionPolicy Bypass -File scripts\new-framework-upgrade-package.p
 
 脚本会生成只包含框架文件的 zip 包，默认排除内网资产目录。
 
+`docs/test-assets/batch-runs/README.md` 和 `docs/test-assets/batch-runs/templates/` 是框架模板资产，允许随普通框架升级进入升级包；真实批次运行目录和历史业务资产仍受保护，不得覆盖。
+
 ## 内网应用升级包
 
 在内网项目根目录执行：
@@ -68,6 +70,14 @@ powershell -ExecutionPolicy Bypass -File scripts\upgrade-framework.ps1 -PackageP
 4. 跳过 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。
 5. 对比 `asset_schema_version`。
 6. 执行稳定性校验。
+
+生成正式测试设计交付件后，可额外执行交付件质量校验：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
+```
+
+大范围任务可追加 `-BatchStatusPath <batch-status.csv>` 校验批次状态中的覆盖数量和质量门禁。
 
 ## 资产结构升级
 

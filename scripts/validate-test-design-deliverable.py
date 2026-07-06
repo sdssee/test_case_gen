@@ -123,6 +123,8 @@ PAGE_DISCOVERY_REQUIRED_HEADERS = [
     "元素名称/文案",
     "元素类型",
     "交互方式",
+    "选项取值/输入值",
+    "联动/依赖变化",
     "完整点击路径",
     "是否已生成用例",
     "关联用例ID",
@@ -492,6 +494,18 @@ def is_passed_batch(row: dict[str, str]) -> bool:
     return row.get("覆盖质量自检", "").strip() == "通过"
 
 
+def is_selection_element(row: dict[str, str]) -> bool:
+    selection_markers = ["下拉", "级联", "选择", "单选", "复选", "枚举", "树选择"]
+    text = " ".join(
+        [
+            row.get("元素名称/文案", ""),
+            row.get("元素类型", ""),
+            row.get("交互方式", ""),
+        ]
+    )
+    return any(marker in text for marker in selection_markers)
+
+
 def validate_batch_granularity(row: dict[str, str], numbers: dict[str, int]) -> None:
     batch_id = row.get("批次ID", "")
     leaf_path = row.get("最小标题路径", "").strip()
@@ -690,6 +704,11 @@ def validate_product_map_sync(
         element = row.get("元素名称/文案", "")
         if not page or not element:
             fail(f"page-discovery.csv row {index} must include 页面/入口 and 元素名称/文案")
+        if is_selection_element(row):
+            if not row.get("选项取值/输入值"):
+                fail(f"page-discovery.csv row {index} selection element must record selected option values: {page} / {element}")
+            if row.get("是否已生成用例", "") == "是" and not row.get("联动/依赖变化"):
+                fail(f"page-discovery.csv row {index} generated selection case must record 联动/依赖变化: {page} / {element}")
         if normalized_key(page, element) not in workbook_elements:
             fail(f"page-discovery.csv row {index} element is missing from workbook 页面元素覆盖清单: {page} / {element}")
         if normalized_key(page, element) not in product_elements:

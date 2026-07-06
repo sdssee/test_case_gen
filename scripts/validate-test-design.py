@@ -774,6 +774,28 @@ def main() -> int:
     ]:
         assert_contains(path, create_flow_markers)
 
+    existing_data_probe_markers = [
+        "既有数据",
+        "只读深探",
+        "确认弹窗",
+        "二次确认",
+        "取消路径",
+        "复制既有数据",
+        "改名或改编码",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+    ]:
+        assert_contains(path, existing_data_probe_markers)
+
     batch_run_state_markers = [
         "docs/test-assets/batch-runs/",
         "batch-plan.md",

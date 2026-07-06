@@ -138,6 +138,8 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 
 如果 `batch-status.csv` 同级存在 `page-discovery.csv`，脚本会自动使用 `docs/test-assets/product-map.xlsx` 启用产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，用于校验页面实探、正式 Excel 和产品版图之间的页面元素、关联用例、用例资产索引和变更记录是否同步。
 
+交付件校验会拦截 `batch-status.csv`/`page-discovery.csv` 自定义精简表头、CSV 字段错位、`batch-plan.md` 状态与页面数不一致、`product-map.xlsx` 未沉淀真实资产或仍保留 `示例产品`/`示例模块`/`示例页面`、用例资产索引和页面元素地图未覆盖正式 Excel、以及疑似真实密钥/Token/密码未替换为 `<valid_api_key>`、`<test_token>`、`<test_service_url>` 等占位符的问题。
+
 如果当前批次生成了 Python 临时脚本，执行前先预检：
 
 ```powershell

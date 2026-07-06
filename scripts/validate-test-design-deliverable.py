@@ -52,6 +52,39 @@ BATCH_REQUIRED_HEADERS = [
     "最小标题路径",
 ]
 
+BATCH_EXPECTED_HEADERS = [
+    "批次ID",
+    "一级模块",
+    "二级菜单",
+    "三级菜单/页面域",
+    "批次范围",
+    "状态",
+    "页面数",
+    "元素总数",
+    "已覆盖元素数",
+    "待确认元素数",
+    "功能用例数",
+    "性能场景数",
+    "异常用例数",
+    "边界用例数",
+    "权限/状态用例数",
+    "数据一致性用例数",
+    "页面遍历完成",
+    "功能用例完成",
+    "性能设计完成",
+    "异常边界权限覆盖完成",
+    "页面元素覆盖完成",
+    "产品版图已更新",
+    "覆盖质量自检",
+    "未覆盖元素清单路径",
+    "归档路径",
+    "导入文件路径",
+    "导入文件已生成",
+    "最小标题路径",
+    "待确认问题",
+    "下一步动作",
+]
+
 MULTI_LEAF_SEPARATORS = ["、", "，", ",", "；", ";", "／", "/"]
 
 BATCH_NUMBER_FIELDS = [
@@ -143,6 +176,35 @@ PAGE_DISCOVERY_REQUIRED_HEADERS = [
     "覆盖状态",
 ]
 
+PAGE_DISCOVERY_EXPECTED_HEADERS = [
+    "批次ID",
+    "一级模块",
+    "二级菜单",
+    "三级菜单/页面域",
+    "最小标题路径",
+    "页面/入口",
+    "菜单路径/URL",
+    "发现方式",
+    "角色/权限",
+    "数据状态",
+    "元素名称/文案",
+    "元素类型",
+    "交互方式",
+    "选项取值/输入值",
+    "联动/依赖变化",
+    "结果分支/后续状态",
+    "完整点击路径",
+    "预期/观察行为",
+    "业务依据/规则来源",
+    "测试数据来源",
+    "是否已生成用例",
+    "关联用例ID",
+    "覆盖状态",
+    "未覆盖/待确认原因",
+    "证据路径",
+    "备注",
+]
+
 PRODUCT_MAP_PAGE_ELEMENT_HEADERS = [
     "产品/系统",
     "模块",
@@ -173,6 +235,25 @@ PRODUCT_MAP_CHANGE_HEADERS = [
     "影响模块",
     "变更内容",
     "是否已同步产品版图",
+]
+
+PRODUCT_MAP_REQUIRED_REAL_SHEETS = [
+    "产品模块地图",
+    "业务对象地图",
+    "业务链路地图",
+    "页面元素地图",
+    "用例资产索引",
+    "模块能力索引",
+    "跨模块依赖关系",
+    "可复用测试数据",
+    "变更影响分析",
+    "变更记录",
+]
+
+SENSITIVE_VALUE_PATTERNS = [
+    re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{8,}\b"),
+    re.compile(r"\b(secret|password|passwd|pwd|token)\s*[:=：]\s*[^<\s;，,]+", re.IGNORECASE),
+    re.compile(r"密钥\s*[:=：]\s*(?!<)[^<\s;，,]+", re.IGNORECASE),
 ]
 
 
@@ -334,6 +415,24 @@ def assert_no_residual_markers(path: Path, sheet_names: list[str] | None = None)
                         fail(f"{sheet_name} row {row_number} column {column_number} contains unresolved template marker: {marker}")
 
 
+def assert_no_sensitive_values(path: Path, sheet_names: list[str] | None = None) -> None:
+    with zipfile.ZipFile(path) as zf:
+        available_sheets = workbook_sheet_paths(zf)
+    target_sheets = sheet_names or list(available_sheets)
+    for sheet_name in target_sheets:
+        rows = sheet_rows(path, sheet_name)
+        for row_number, row in enumerate(rows, start=1):
+            for column_number, value in enumerate(row, start=1):
+                if not value:
+                    continue
+                for pattern in SENSITIVE_VALUE_PATTERNS:
+                    if pattern.search(value):
+                        fail(
+                            f"{sheet_name} row {row_number} column {column_number} contains a possible unmasked secret. "
+                            "Use placeholders such as <valid_api_key>, <test_token>, or <test_service_url> in deliverables and internal ledgers."
+                        )
+
+
 def validate_formal_workbook_styles(workbook: Path) -> None:
     for sheet_name, fields in FORMAL_MULTILINE_FIELDS.items():
         assert_multiline_cells_wrapped(workbook, sheet_name, fields)
@@ -400,10 +499,44 @@ def csv_row_dicts(path: Path, required: list[str], label: str) -> list[dict[str,
         for index, row in enumerate(reader, start=2):
             if None in row:
                 fail(f"{label} row {index} has more columns than the header; do not append summary rows or shifted CSV data")
+            missing_columns = [key for key, value in row.items() if value is None]
+            if missing_columns:
+                fail(f"{label} row {index} has fewer columns than the header; missing values for: {missing_columns}")
             cleaned = {key: (value or "").strip() for key, value in row.items()}
             if any(value for value in cleaned.values()):
                 rows.append(cleaned)
         return rows
+
+
+def csv_rows_with_exact_header(path: Path, expected: list[str], label: str) -> list[dict[str, str]]:
+    if not path.exists():
+        fail(f"{label} not found: {path}")
+    with path.open("r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.reader(fp)
+        try:
+            headers = next(reader)
+        except StopIteration:
+            fail(f"{label} has no header row")
+        if headers != expected:
+            fail(f"{label} header must match the standard template exactly. Expected {expected}, got {headers}")
+        rows: list[dict[str, str]] = []
+        for index, row in enumerate(reader, start=2):
+            if not any(cell.strip() for cell in row):
+                continue
+            if len(row) != len(headers):
+                fail(f"{label} row {index} column count mismatch: expected {len(headers)}, got {len(row)}")
+            rows.append({header: row[col].strip() for col, header in enumerate(headers)})
+        return rows
+
+
+def assert_no_sensitive_csv_values(rows: list[dict[str, str]], label: str) -> None:
+    for index, row in enumerate(rows, start=2):
+        for field, value in row.items():
+            if not value:
+                continue
+            for pattern in SENSITIVE_VALUE_PATTERNS:
+                if pattern.search(value):
+                    fail(f"{label} row {index} field {field} contains a possible unmasked secret; use a placeholder value")
 
 
 def require_headers(rows: list[list[str]], required: list[str], sheet_name: str) -> None:
@@ -450,6 +583,7 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
     if sheet_names != EXPECTED_SHEETS:
         fail(f"Workbook sheets mismatch. Expected {EXPECTED_SHEETS}, got {sheet_names}")
     assert_no_residual_markers(workbook, EXPECTED_SHEETS)
+    assert_no_sensitive_values(workbook, EXPECTED_SHEETS)
     validate_formal_workbook_styles(workbook)
 
     function_rows_raw = sheet_rows(workbook, "功能测试用例")
@@ -536,6 +670,7 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
     if headers[: len(IMPORT_HEADERS)] != IMPORT_HEADERS:
         fail(f"Import workbook headers mismatch. Expected {IMPORT_HEADERS}, got {headers}")
     assert_no_residual_markers(import_workbook)
+    assert_no_sensitive_values(import_workbook)
     first_sheet_name = ""
     with zipfile.ZipFile(import_workbook) as zf:
         sheet_paths = workbook_sheet_paths(zf)
@@ -684,17 +819,12 @@ def resolve_project_path(raw_path: str, batch_status: Path) -> Path:
 def validate_batch_status(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         fail(f"Batch status file not found: {path}")
-    with path.open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.DictReader(fp)
-        headers = reader.fieldnames or []
-        missing = [header for header in BATCH_REQUIRED_HEADERS if header not in headers]
-        if missing:
-            fail(f"batch-status.csv is missing headers: {missing}")
-        rows = [
-            {key: (value or "").strip() for key, value in row.items()}
-            for row in reader
-            if (row.get("批次ID") or "").strip()
-        ]
+    rows = [
+        row
+        for row in csv_rows_with_exact_header(path, BATCH_EXPECTED_HEADERS, "batch-status.csv")
+        if (row.get("批次ID") or "").strip()
+    ]
+    assert_no_sensitive_csv_values(rows, "batch-status.csv")
     if not rows:
         fail("batch-status.csv must contain at least one batch row")
 
@@ -796,13 +926,49 @@ def validate_batch_review(batch_status: Path, batch_rows: list[dict[str, str]]) 
                 fail(f"batch-review.md must reference {field} for completed batch {batch_id}: {value}")
 
 
+def validate_batch_plan(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
+    plan_path = batch_status.resolve().parent / "batch-plan.md"
+    if not plan_path.exists():
+        fail(f"batch-plan.md not found beside batch-status.csv: {plan_path}")
+    text = plan_path.read_text(encoding="utf-8-sig")
+    completed_rows = [row for row in batch_rows if is_passed_batch(row)]
+    for row in completed_rows:
+        batch_id = row.get("批次ID", "")
+        leaf_path = row.get("最小标题路径", "")
+        if batch_id and batch_id not in text:
+            fail(f"batch-plan.md must include completed batch ID: {batch_id}")
+        if leaf_path and leaf_path not in text:
+            fail(f"batch-plan.md must include completed batch 最小标题路径: {leaf_path}")
+        stale_status_pattern = rf"\|\s*{re.escape(batch_id)}\s*\|[^\n|]*\|[^\n|]*\|\s*(执行中|待开始)\s*\|"
+        if batch_id and re.search(stale_status_pattern, text):
+            fail(f"batch-plan.md still marks completed batch {batch_id} as 执行中/待开始")
+
+    page_section = re.search(r"##\s*页面清单(?P<body>.*?)(?:\n##\s|\Z)", text, re.S)
+    if page_section and len(completed_rows) == 1:
+        page_lines = [
+            line
+            for line in page_section.group("body").splitlines()
+            if re.match(r"^\s*\d+\.\s+\S+", line)
+        ]
+        declared_pages = positive_int(completed_rows[0].get("页面数", ""), "页面数", completed_rows[0].get("批次ID", ""))
+        if page_lines and len(page_lines) != declared_pages:
+            fail(
+                f"batch-plan.md 页面清单 count must match batch-status.csv 页面数 for completed single batch: "
+                f"{len(page_lines)} != {declared_pages}"
+            )
+
+
 def validate_product_map_sync(
     workbook_data: dict[str, object],
     product_map: Path,
     page_discovery: Path,
     batch_rows: list[dict[str, str]] | None = None,
 ) -> None:
-    discovery_rows = csv_row_dicts(page_discovery, PAGE_DISCOVERY_REQUIRED_HEADERS, "page-discovery.csv")
+    discovery_rows = csv_rows_with_exact_header(page_discovery, PAGE_DISCOVERY_EXPECTED_HEADERS, "page-discovery.csv")
+    missing_discovery_required = [header for header in PAGE_DISCOVERY_REQUIRED_HEADERS if header not in PAGE_DISCOVERY_EXPECTED_HEADERS]
+    if missing_discovery_required:
+        fail(f"Internal validator configuration error, missing page discovery required headers: {missing_discovery_required}")
+    assert_no_sensitive_csv_values(discovery_rows, "page-discovery.csv")
     if not discovery_rows:
         fail("page-discovery.csv must contain at least one discovery row when product map sync validation is enabled")
 
@@ -832,6 +998,19 @@ def validate_product_map_sync(
     ]:
         if not any("示例" not in "".join(row.values()) for row in rows):
             fail(f"{label} still only contains sample/template rows and has not been synced with real product facts")
+        sample_rows = [index for index, row in enumerate(rows, start=2) if "示例" in "".join(row.values())]
+        if sample_rows:
+            fail(f"{label} contains sample/template rows after sync: rows {sample_rows[:10]}")
+    assert_no_sensitive_values(product_map, PRODUCT_MAP_REQUIRED_REAL_SHEETS)
+
+    for sheet_name in PRODUCT_MAP_REQUIRED_REAL_SHEETS:
+        rows_raw = sheet_rows(product_map, sheet_name)
+        rows = row_dicts(rows_raw, f"product-map {sheet_name}")
+        if not rows:
+            fail(f"product-map {sheet_name} must contain real synced rows")
+        sample_rows = [index for index, row in enumerate(rows, start=2) if "示例" in "".join(row.values())]
+        if sample_rows:
+            fail(f"product-map {sheet_name} contains sample/template rows after sync: rows {sample_rows[:10]}")
 
     coverage_rows = workbook_data["coverage_rows"]
     case_ids = workbook_data["case_ids"]
@@ -853,6 +1032,10 @@ def validate_product_map_sync(
         if row.get("页面/入口") and row.get("元素名称/文案")
     }
     product_case_ids = {row.get("用例ID", "") for row in product_case_rows if row.get("用例ID")}
+    if len(product_case_ids) < len(case_ids):
+        fail(f"product-map 用例资产索引 has fewer unique case IDs than workbook 功能测试用例: {len(product_case_ids)} < {len(case_ids)}")
+    if len(product_elements) < len(workbook_elements):
+        fail(f"product-map 页面元素地图 has fewer unique page elements than workbook 页面元素覆盖清单: {len(product_elements)} < {len(workbook_elements)}")
 
     passed_batches = {
         row.get("批次ID", ""): row.get("最小标题路径", "").strip()
@@ -947,6 +1130,14 @@ def validate_product_map_sync(
     ]
     if not synced_changes:
         fail("product-map 变更记录 must include at least one synced change row with 是否已同步产品版图=是")
+    discovery_elements = {
+        normalized_key(row.get("页面/入口", ""), row.get("元素名称/文案", ""))
+        for row in discovery_rows
+        if row.get("页面/入口") and row.get("元素名称/文案")
+    }
+    missing_discovery_elements = sorted(workbook_elements - discovery_elements)
+    if missing_discovery_elements:
+        fail(f"Workbook 页面元素覆盖清单 elements missing from page-discovery.csv: {missing_discovery_elements[:10]}")
     for batch_id, numbers in passed_batch_numbers.items():
         discovered = discovery_count_by_batch.get(batch_id, 0)
         generated = generated_count_by_batch.get(batch_id, 0)
@@ -989,6 +1180,7 @@ def main() -> int:
     if args.batch_status:
         batch_rows = validate_batch_status(args.batch_status)
         validate_batch_file_consistency(args.batch_status, batch_rows)
+        validate_batch_plan(args.batch_status, batch_rows)
         validate_batch_review(args.batch_status, batch_rows)
         validate_batch_import_workbooks(args.batch_status, batch_rows)
     if args.import_workbook:

@@ -86,10 +86,16 @@ docs/test-assets/product-map.xlsx
 
 当范围超过一个最小标题时，必须在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本。账本必须包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`，并优先基于 `docs/test-assets/batch-runs/templates/` 复制生成。`batch-plan.md` 承载分批设计计划，`batch-status.csv` 承载每批状态、最小标题路径、覆盖数量、用例数量和覆盖质量自检，`page-discovery.csv` 承载页面实探证据并记录最小标题路径，`batch-review.md` 承载最终汇总、跨模块汇总、回归范围、风险与待确认问题，`artifacts/` 保存页面遍历笔记、截图或中间核对材料。
 
+`batch-status.csv` 和 `page-discovery.csv` 必须复制标准模板或保持与模板完全一致的表头，禁止自定义精简表头、增删列或在末尾追加汇总行。`page-discovery.csv` 必须使用 CSV writer 或等价结构化写入方式生成，每一行列数必须与表头一致，避免页面元素、选项取值、联动变化、预期观察和关联用例 ID 字段错位。
+
+已完成批次在 `batch-plan.md` 中不得仍标记为执行中或待开始；`batch-plan.md` 的页面清单数量必须与 `batch-status.csv` 的页面数一致。`batch-review.md` 必须引用已完成批次的批次 ID、归档路径和导入文件路径。
+
 
 大范围任务禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件。脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 artifacts/scripts/，不得把多个最小标题路径、多个批次或全产品测试用例先集中写入一个文件后再统一生成 Excel。每批的测试用例正文必须以当前批次正式测试设计 Excel、`page-discovery.csv` 和 `batch-status.csv` 为边界进行维护。
 
 如确需生成当前批次 Python 临时脚本，写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取，禁止手工拼接包含中文弯引号、智能引号或未转义双引号的字符串字面量。执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过语法编译和高风险引号扫描后才能执行。
+
+正式测试设计、测试系统导入文件、`batch-plan.md`、`batch-status.csv`、`page-discovery.csv`、`batch-review.md`、临时脚本和 `product-map.xlsx` 都不得保留疑似真实密钥、Token、密码或内部敏感凭据；必须改写为 `<valid_api_key>`、`<test_token>`、`<test_service_url>` 等占位符。
 
 每个批次正式写测试用例前，如果存在可访问页面、原型或桌面窗口，必须使用浏览器能力或 computer use 遍历当前批次最小标题路径对应模块、页面域或业务链路的所有可点击/可交互功能点。遍历结果必须同步到 `page-discovery.csv`、页面元素覆盖清单、功能测试用例和 `product-map.xlsx` 的产品模块地图、页面元素地图、业务对象地图、业务链路地图、模块能力索引、跨模块依赖关系和变更记录；无法确认业务规则的入口登记为待确认问题。
 
@@ -127,6 +133,7 @@ docs/test-assets/product-map.xlsx
 2. 将正式测试设计最终版保存到 `docs/test-assets/modules/`。
 3. 如需导入测试系统，将导入文件副本保存到 `docs/test-assets/imports/`。
 4. 将本模块提供的能力、业务对象、关键状态、业务链路、可复用前置条件、可复用测试数据、跨模块依赖、影响分析和关联用例 ID 更新到 `product-map.xlsx`。
+   `product-map.xlsx` 的十个 Sheet 都必须沉淀真实产品资产，禁止保留 `示例产品`、`示例模块`、`示例页面` 等模板样例行；其中 `用例资产索引` 必须覆盖正式测试设计中的全部功能用例 ID，`页面元素地图` 必须覆盖正式测试设计中的全部页面元素。
 5. 如果用户人工修改了测试设计，最终版必须回存内部资产库，并更新产品版图中的变更记录。
 6. 生成正式测试设计 Excel 后，必须运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务追加 `-BatchStatusPath <batch-status.csv>`，并强制读取同级 `page-discovery.csv` 与 `docs/test-assets/product-map.xlsx` 做产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的最小标题路径、页面元素、关联用例、用例资产索引和变更记录是否同步。
 

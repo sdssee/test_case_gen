@@ -873,6 +873,7 @@ def main() -> int:
     ]:
         assert_contains(path, ["docs/test-assets/batch-runs/"])
     assert_contains(batch_plan_template, ["批次执行计划", "最小标题路径", "最深标题级别", "禁止合并", "禁止再拆分", "batch-status.csv", "page-discovery.csv", "导入文件", "才能进入下一批", "不得重新生成各批完整用例"])
+    assert_contains(batch_plan_template, ["标准模板", "CSV writer", "示例产品", "<valid_api_key>", "执行中或待开始"])
     assert_contains(batch_review_template, ["批次执行复盘", "页面数", "元素总数", "导入文件路径", "最终交付约束", "不得重新生成各批完整用例"])
     expected_page_discovery_header = (
         "批次ID,一级模块,二级菜单,三级菜单/页面域,最小标题路径,页面/入口,菜单路径/URL,发现方式,角色/权限,数据状态,"
@@ -928,6 +929,31 @@ def main() -> int:
         batch_plan_template,
     ]:
         assert_contains(path, generated_python_script_markers)
+    strict_batch_quality_markers = [
+        "自定义精简表头",
+        "CSV writer",
+        "字段错位",
+        "执行中或待开始",
+        "示例产品",
+        "用例资产索引",
+        "页面元素地图",
+        "<valid_api_key>",
+        "<test_token>",
+        "<test_service_url>",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
+        repo_root / "docs" / "test-assets" / "batch-runs" / "templates" / "batch-plan-template.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+    ]:
+        assert_contains(path, strict_batch_quality_markers)
     for path in [
         repo_root / "AGENTS.md",
         repo_root / "CODEBUDDY.md",
@@ -968,7 +994,14 @@ def main() -> int:
             "assert_multiline_cells_wrapped",
             "assert_no_residual_markers",
             "validate_batch_file_consistency",
+            "validate_batch_plan",
             "MULTI_LEAF_SEPARATORS",
+            "BATCH_EXPECTED_HEADERS",
+            "PAGE_DISCOVERY_EXPECTED_HEADERS",
+            "csv_rows_with_exact_header",
+            "assert_no_sensitive_values",
+            "PRODUCT_MAP_REQUIRED_REAL_SHEETS",
+            "SENSITIVE_VALUE_PATTERNS",
             "最小标题路径",
             "--import-workbook",
             "default_page_discovery_path",

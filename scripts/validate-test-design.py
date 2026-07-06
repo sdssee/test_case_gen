@@ -753,6 +753,27 @@ def main() -> int:
     ]:
         assert_contains(path, input_control_markers)
 
+    create_flow_markers = [
+        "新增类流程",
+        "实填实走",
+        "详情页",
+        "下一级页面",
+        "停留页面",
+        "可恢复路径",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+    ]:
+        assert_contains(path, create_flow_markers)
+
     batch_run_state_markers = [
         "docs/test-assets/batch-runs/",
         "batch-plan.md",

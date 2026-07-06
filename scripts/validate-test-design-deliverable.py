@@ -519,6 +519,24 @@ def is_input_element(row: dict[str, str]) -> bool:
     return any(marker in text for marker in input_markers)
 
 
+def is_create_flow_element(row: dict[str, str]) -> bool:
+    create_markers = ["新增", "创建", "添加", "新建", "保存", "提交", "下一步", "完成", "测试连接"]
+    text = " ".join(
+        [
+            row.get("元素名称/文案", ""),
+            row.get("元素类型", ""),
+            row.get("交互方式", ""),
+            row.get("完整点击路径", ""),
+        ]
+    )
+    return any(marker in text for marker in create_markers)
+
+
+def has_create_result_branch(value: str) -> bool:
+    result_markers = ["成功", "失败", "校验", "错误", "重复", "为空", "无权限", "停留", "进入", "跳转", "详情", "下一级", "下一步"]
+    return any(marker in (value or "") for marker in result_markers)
+
+
 def validate_batch_granularity(row: dict[str, str], numbers: dict[str, int]) -> None:
     batch_id = row.get("批次ID", "")
     leaf_path = row.get("最小标题路径", "").strip()
@@ -732,6 +750,16 @@ def validate_product_map_sync(
                     fail(f"page-discovery.csv row {index} generated input case must record 预期/观察行为: {page} / {element}")
                 if not row.get("结果分支/后续状态"):
                     fail(f"page-discovery.csv row {index} generated input case must record 结果分支/后续状态: {page} / {element}")
+        if is_create_flow_element(row) and row.get("是否已生成用例", "") == "是":
+            if not row.get("选项取值/输入值"):
+                fail(f"page-discovery.csv row {index} generated create flow must record actual submitted data: {page} / {element}")
+            if not row.get("预期/观察行为"):
+                fail(f"page-discovery.csv row {index} generated create flow must record success/failure observation: {page} / {element}")
+            result_branch = row.get("结果分支/后续状态", "")
+            if not result_branch:
+                fail(f"page-discovery.csv row {index} generated create flow must record next page or failure state: {page} / {element}")
+            if not has_create_result_branch(result_branch):
+                fail(f"page-discovery.csv row {index} generated create flow result must mention success/failure/next state: {page} / {element}")
         if normalized_key(page, element) not in workbook_elements:
             fail(f"page-discovery.csv row {index} element is missing from workbook 页面元素覆盖清单: {page} / {element}")
         if normalized_key(page, element) not in product_elements:

@@ -671,6 +671,7 @@ def main() -> int:
 
     for path in [upgrade_manifest, upgrade_doc, repo_root / "README.md", repo_root / "README_IMPORT.md"]:
         assert_contains(path, ["new-framework-upgrade-package.ps1", "upgrade-framework.ps1"])
+    assert_contains(package_script, ["Test-GeneratedPath", "__pycache__", ".pyc"])
 
     batch_design_markers = [
         "全产品",
@@ -953,6 +954,18 @@ def main() -> int:
     assert_contains(
         excel_tools,
         ["generate-import", "fix-formal-styles", "header_map", "IMPORT_AUTO_FIELDS", "wrap_text=True"],
+    )
+    for path in [
+        repo_root / "README.md",
+        repo_root / "README_IMPORT.md",
+        repo_root / "docs" / "UPGRADE.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+    ]:
+        assert_contains(path, ["scripts/test_design_excel_tools.py", "generate-import"])
+    assert_contains(
+        repo_root / "docs" / "RULE_OWNERSHIP.md",
+        ["scripts/test_design_excel_tools.py", "交付件质量校验"],
     )
 
     batch_exploration_markers = [

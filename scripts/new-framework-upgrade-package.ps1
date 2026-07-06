@@ -75,6 +75,15 @@ function Test-ProtectedPath {
   return $false
 }
 
+function Test-GeneratedPath {
+  param([string]$RelativePath)
+  $normalized = $RelativePath.Replace("\", "/")
+  if ($normalized -match "(^|/)__pycache__/" -or $normalized -match "\.pyc$") {
+    return $true
+  }
+  return $false
+}
+
 function Get-RelativePath {
   param(
     [string]$BasePath,
@@ -101,7 +110,7 @@ foreach ($dir in $includeDirs) {
   if (Test-Path $absoluteDir) {
     Get-ChildItem -Path $absoluteDir -Recurse -File | ForEach-Object {
       $relative = Get-RelativePath -BasePath $repoRoot -FullPath $_.FullName
-      if (-not (Test-ProtectedPath $relative)) {
+      if (-not (Test-ProtectedPath $relative) -and -not (Test-GeneratedPath $relative)) {
         $files.Add($relative)
       }
     }
@@ -111,7 +120,7 @@ foreach ($dir in $includeDirs) {
 foreach ($glob in $includeGlobs) {
   Get-ChildItem -Path (Join-Path $repoRoot $glob) -File | ForEach-Object {
     $relative = Get-RelativePath -BasePath $repoRoot -FullPath $_.FullName
-    if (-not (Test-ProtectedPath $relative)) {
+    if (-not (Test-ProtectedPath $relative) -and -not (Test-GeneratedPath $relative)) {
       $files.Add($relative)
     }
   }

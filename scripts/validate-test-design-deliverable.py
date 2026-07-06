@@ -114,6 +114,17 @@ IMPORT_ALLOWED_VALUES = {
 
 IMPORT_REQUIRED_FIELDS = ["一级模块名称", "二级模块名称", "三级模块名称", "测试用例名称", "测试类型", "测试用例级别", "执行方式"]
 IMPORT_AUTO_FIELDS = ["测试用例系统编号", "作者"]
+IMPORT_MULTILINE_FIELDS = ["测试步骤描述", "测试步骤预期结果", "前置条件", "测试用例说明", "备注"]
+
+FORMAL_MULTILINE_FIELDS = {
+    "功能测试用例": ["前置条件", "测试数据", "操作步骤", "预期结果", "备注"],
+    "性能测试设计": ["前置条件/数据准备", "执行步骤", "监控指标", "通过标准", "风险备注"],
+    "风险与待确认问题": ["问题描述", "影响范围", "建议处理方式"],
+    "自动化建议": ["建议说明", "前置条件", "维护要求"],
+    "页面元素覆盖清单": ["业务依据/规则来源", "待确认问题/备注"],
+}
+
+RESIDUAL_MARKERS = ["{NAV}", "{NL}", "{Q}", "{E}", "${", "{{", "TODO", "TBD"]
 
 PAGE_DISCOVERY_REQUIRED_HEADERS = [
     "批次ID",
@@ -189,6 +200,14 @@ def cell_text(cell: ET.Element, shared: list[str]) -> str:
     return value.text.strip()
 
 
+def cell_style_id(cell: ET.Element) -> int:
+    raw = cell.attrib.get("s", "0")
+    try:
+        return int(raw)
+    except ValueError:
+        return 0
+
+
 def column_index(cell_ref: str) -> int:
     letters = re.match(r"[A-Z]+", cell_ref)
     if not letters:
@@ -237,6 +256,87 @@ def sheet_rows(path: Path, sheet_name: str) -> list[list[str]]:
             values[index] = cell_text(cell, shared)
         rows.append(values)
     return rows
+
+
+def sheet_cell_rows(path: Path, sheet_name: str) -> list[list[tuple[str, str, int]]]:
+    with zipfile.ZipFile(path) as zf:
+        paths = workbook_sheet_paths(zf)
+        if sheet_name not in paths:
+            fail(f"Workbook is missing sheet: {sheet_name}")
+        shared = shared_strings(zf)
+        root = ET.fromstring(zf.read(paths[sheet_name]))
+    rows: list[list[tuple[str, str, int]]] = []
+    for row in root.findall(".//x:sheetData/x:row", NS):
+        values: list[tuple[str, str, int]] = []
+        for cell in row.findall("x:c", NS):
+            index = column_index(cell.attrib.get("r", "A1"))
+            while len(values) <= index:
+                values.append(("", "", 0))
+            values[index] = (
+                cell.attrib.get("r", ""),
+                cell_text(cell, shared),
+                cell_style_id(cell),
+            )
+        rows.append(values)
+    return rows
+
+
+def wrapped_style_ids(path: Path) -> set[int]:
+    with zipfile.ZipFile(path) as zf:
+        try:
+            root = ET.fromstring(zf.read("xl/styles.xml"))
+        except KeyError:
+            return set()
+    wrapped: set[int] = set()
+    cell_xfs = root.find("x:cellXfs", NS)
+    if cell_xfs is None:
+        return wrapped
+    for index, xf in enumerate(cell_xfs.findall("x:xf", NS)):
+        alignment = xf.find("x:alignment", NS)
+        if alignment is not None and alignment.attrib.get("wrapText") in {"1", "true", "True"}:
+            wrapped.add(index)
+    return wrapped
+
+
+def assert_multiline_cells_wrapped(path: Path, sheet_name: str, field_names: list[str]) -> None:
+    rows = sheet_cell_rows(path, sheet_name)
+    if not rows:
+        return
+    headers = [cell[1] for cell in rows[0]]
+    header_index = {header: index for index, header in enumerate(headers) if header}
+    target_indexes = [header_index[field] for field in field_names if field in header_index]
+    if not target_indexes:
+        return
+    wrapped = wrapped_style_ids(path)
+    for row_number, row in enumerate(rows[1:], start=2):
+        for index in target_indexes:
+            if index >= len(row):
+                continue
+            ref, value, style_id = row[index]
+            if "\n" in value and style_id not in wrapped:
+                field = headers[index]
+                cell_ref = ref or f"{field} row {row_number}"
+                fail(f"{sheet_name} {cell_ref} contains multiline text but wrapText is not enabled for field {field}")
+
+
+def assert_no_residual_markers(path: Path, sheet_names: list[str] | None = None) -> None:
+    with zipfile.ZipFile(path) as zf:
+        available_sheets = workbook_sheet_paths(zf)
+    target_sheets = sheet_names or list(available_sheets)
+    for sheet_name in target_sheets:
+        rows = sheet_rows(path, sheet_name)
+        for row_number, row in enumerate(rows, start=1):
+            for column_number, value in enumerate(row, start=1):
+                if not value:
+                    continue
+                for marker in RESIDUAL_MARKERS:
+                    if marker in value:
+                        fail(f"{sheet_name} row {row_number} column {column_number} contains unresolved template marker: {marker}")
+
+
+def validate_formal_workbook_styles(workbook: Path) -> None:
+    for sheet_name, fields in FORMAL_MULTILINE_FIELDS.items():
+        assert_multiline_cells_wrapped(workbook, sheet_name, fields)
 
 
 def row_dicts(rows: list[list[str]], sheet_name: str) -> list[dict[str, str]]:
@@ -296,11 +396,14 @@ def csv_row_dicts(path: Path, required: list[str], label: str) -> list[dict[str,
         missing = [header for header in required if header not in headers]
         if missing:
             fail(f"{label} is missing headers: {missing}")
-        return [
-            {key: (value or "").strip() for key, value in row.items()}
-            for row in reader
-            if any((value or "").strip() for value in row.values())
-        ]
+        rows: list[dict[str, str]] = []
+        for index, row in enumerate(reader, start=2):
+            if None in row:
+                fail(f"{label} row {index} has more columns than the header; do not append summary rows or shifted CSV data")
+            cleaned = {key: (value or "").strip() for key, value in row.items()}
+            if any(value for value in cleaned.values()):
+                rows.append(cleaned)
+        return rows
 
 
 def require_headers(rows: list[list[str]], required: list[str], sheet_name: str) -> None:
@@ -346,6 +449,8 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
         sheet_names = list(workbook_sheet_paths(zf))
     if sheet_names != EXPECTED_SHEETS:
         fail(f"Workbook sheets mismatch. Expected {EXPECTED_SHEETS}, got {sheet_names}")
+    assert_no_residual_markers(workbook, EXPECTED_SHEETS)
+    validate_formal_workbook_styles(workbook)
 
     function_rows_raw = sheet_rows(workbook, "功能测试用例")
     require_headers(function_rows_raw, ["用例 ID", "功能点", "用例标题", "操作步骤", "预期结果"], "功能测试用例")
@@ -430,6 +535,12 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
     headers = rows_raw[0]
     if headers[: len(IMPORT_HEADERS)] != IMPORT_HEADERS:
         fail(f"Import workbook headers mismatch. Expected {IMPORT_HEADERS}, got {headers}")
+    assert_no_residual_markers(import_workbook)
+    first_sheet_name = ""
+    with zipfile.ZipFile(import_workbook) as zf:
+        sheet_paths = workbook_sheet_paths(zf)
+        first_sheet_name = next(iter(sheet_paths))
+    assert_multiline_cells_wrapped(import_workbook, first_sheet_name, IMPORT_MULTILINE_FIELDS)
 
     rows = row_dicts(rows_raw, "测试系统导入文件")
     if not rows:
@@ -621,6 +732,30 @@ def validate_batch_status(path: Path) -> list[dict[str, str]]:
     return rows
 
 
+def validate_batch_file_consistency(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
+    project_root = project_root_from_batch_status(batch_status)
+    current_dirs = [
+        project_root / "docs" / "test-design" / "current",
+        project_root / "docs" / "test-design" / "deliverables",
+    ]
+    completed_statuses = {"已完成", "完成"}
+    for row in batch_rows:
+        batch_id = row.get("批次ID", "")
+        if not batch_id:
+            continue
+        status = row.get("状态", "")
+        if status in completed_statuses:
+            continue
+        for directory in current_dirs:
+            if not directory.exists():
+                continue
+            matches = list(directory.glob(f"*{batch_id}*.xlsx"))
+            if matches:
+                fail(
+                    f"batch {batch_id} has generated current/deliverable workbook but batch-status.csv status is {status}: {matches[0]}"
+                )
+
+
 def validate_batch_import_workbooks(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
     for row in batch_rows:
         if not is_passed_batch(row):
@@ -690,6 +825,13 @@ def validate_product_map_sync(
         fail("product-map 用例资产索引 must contain synced case assets")
     if not product_change_rows:
         fail("product-map 变更记录 must record this product map sync")
+    for label, rows in [
+        ("product-map 页面元素地图", product_page_rows),
+        ("product-map 用例资产索引", product_case_rows),
+        ("product-map 变更记录", product_change_rows),
+    ]:
+        if not any("示例" not in "".join(row.values()) for row in rows):
+            fail(f"{label} still only contains sample/template rows and has not been synced with real product facts")
 
     coverage_rows = workbook_data["coverage_rows"]
     case_ids = workbook_data["case_ids"]
@@ -717,6 +859,16 @@ def validate_product_map_sync(
         for row in (batch_rows or [])
         if is_passed_batch(row)
     }
+    passed_batch_numbers = {
+        row.get("批次ID", ""): {
+            field: positive_int(row.get(field, ""), field, row.get("批次ID", ""))
+            for field in ["元素总数", "已覆盖元素数"]
+        }
+        for row in (batch_rows or [])
+        if is_passed_batch(row)
+    }
+    discovery_count_by_batch: dict[str, int] = {}
+    generated_count_by_batch: dict[str, int] = {}
 
     for index, row in enumerate(discovery_rows, start=2):
         batch_id = row.get("批次ID", "")
@@ -735,6 +887,9 @@ def validate_product_map_sync(
         element = row.get("元素名称/文案", "")
         if not page or not element:
             fail(f"page-discovery.csv row {index} must include 页面/入口 and 元素名称/文案")
+        discovery_count_by_batch[batch_id] = discovery_count_by_batch.get(batch_id, 0) + 1
+        if row.get("是否已生成用例", "") == "是":
+            generated_count_by_batch[batch_id] = generated_count_by_batch.get(batch_id, 0) + 1
         if is_selection_element(row):
             if not row.get("选项取值/输入值"):
                 fail(f"page-discovery.csv row {index} selection element must record selected option values: {page} / {element}")
@@ -792,6 +947,17 @@ def validate_product_map_sync(
     ]
     if not synced_changes:
         fail("product-map 变更记录 must include at least one synced change row with 是否已同步产品版图=是")
+    for batch_id, numbers in passed_batch_numbers.items():
+        discovered = discovery_count_by_batch.get(batch_id, 0)
+        generated = generated_count_by_batch.get(batch_id, 0)
+        if discovered < numbers["元素总数"]:
+            fail(
+                f"page-discovery.csv has fewer element-level rows for {batch_id} than batch-status.csv 元素总数: {discovered} < {numbers['元素总数']}"
+            )
+        if generated < numbers["已覆盖元素数"]:
+            fail(
+                f"page-discovery.csv has fewer generated coverage rows for {batch_id} than batch-status.csv 已覆盖元素数: {generated} < {numbers['已覆盖元素数']}"
+            )
 
 
 def default_product_map_path() -> Path:
@@ -822,6 +988,7 @@ def main() -> int:
     batch_rows = None
     if args.batch_status:
         batch_rows = validate_batch_status(args.batch_status)
+        validate_batch_file_consistency(args.batch_status, batch_rows)
         validate_batch_review(args.batch_status, batch_rows)
         validate_batch_import_workbooks(args.batch_status, batch_rows)
     if args.import_workbook:

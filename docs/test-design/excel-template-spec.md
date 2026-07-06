@@ -326,6 +326,12 @@
 
 生成正式测试设计 Excel 后，应运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务追加 `-BatchStatusPath <batch-status.csv>`，并强制读取同级 `page-discovery.csv` 与 `docs/test-assets/product-map.xlsx` 做产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的最小标题路径、页面元素、关联用例、用例资产索引和变更记录是否同步。
 
+测试系统导入文件必须优先使用 `scripts/test_design_excel_tools.py generate-import` 或等价的统一表头映射逻辑生成。禁止在批次临时脚本中按固定列序号数组直接写入导入模板；如确需临时脚本，只能调用统一工具或复用同一套表头映射函数。导入文件生成后必须通过 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx>` 校验，确认字段未错位、自动生成字段为空、下拉字段合法、模板数据验证保留、多行字段开启自动换行。
+
+正式测试设计和导入文件中的多行字段必须设置自动换行和顶部对齐，不得只依赖模板前几行样式继承。正式测试设计至少包括 `前置条件`、`测试数据`、`操作步骤`、`预期结果`、`备注`；导入文件至少包括 `测试步骤描述`、`测试步骤预期结果`、`前置条件`、`测试用例说明`、`备注`。新增数据行应复制模板行样式并统一设置合理行高。
+
+交付件不得残留 `{NAV}`、`{NL}`、`{Q}`、`{E}`、`${...}`、`{{...}}`、`TODO`、`TBD` 等模板占位符或未完成标记。当前批次各 Sheet 的内容必须与最小标题路径一致，不得残留其他模块的模板内容、示例内容或无效用例 ID 引用。
+
 跨模块用例只保留一个主归属模块。当前模块依赖已有模块能力时，应优先引用已有用例 ID 作为前置条件，不重复复制已有用例。
 
 

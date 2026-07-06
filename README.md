@@ -32,6 +32,7 @@
 | `README_IMPORT.md` | 将本规范复制到业务项目的说明。 |
 | `scripts/validate-test-design.ps1` | 模板稳定性自检入口。 |
 | `scripts/validate-test-design-deliverable.ps1` | 已生成测试设计 Excel 的交付件质量校验入口。 |
+| `scripts/test_design_excel_tools.py` | 统一 Excel 工具，用于从正式测试设计按表头生成测试系统导入文件，并修复多行字段样式。 |
 
 ## 正式测试设计 Sheet
 
@@ -56,6 +57,16 @@
 2. 将 `功能测试用例` 中需要导入的内容映射填入副本。
 3. 保留原模板中的字段顺序、下拉框、必填样式、标红字段和自动生成字段空值。
 4. 不修改原始 `测试用例模板.xlsx`。
+
+推荐使用统一工具生成导入文件，避免字段错位：
+
+```powershell
+python scripts/test_design_excel_tools.py generate-import `
+  --formal-workbook docs/test-design/current/<测试设计.xlsx> `
+  --import-template docs/test-design/测试用例模板.xlsx `
+  --output docs/test-assets/imports/<导入文件.xlsx> `
+  --module-path "一级模块>二级菜单>三级菜单"
+```
 
 ## 客户交付与内部资产
 

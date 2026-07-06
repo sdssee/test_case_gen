@@ -95,6 +95,8 @@ Codex 应优先读取并遵守以下文件：
 - 对本次创建且带测试标识的数据，可以执行删除、审批、启停、发布、批量处理、外部调用等敏感操作以确认真实页面反馈；测试用例必须明确“仅操作本次创建的测试数据”。对已有数据仍只允许查看或进入编辑页观察，不保存不提交。
 - 修改 `.xlsx` 文件时，应保持现有样式和字段结构，修改后检查 Sheet、表头、换行、筛选和公式错误。
 - 生成测试系统导入文件时，除字段值合法外，还必须保留模板中的测试系统下拉字段、必填字段样式和自动生成字段空值；不得通过新建空白 Sheet 或手工仿制表头替代模板副本。
+- 生成测试系统导入文件时，必须优先使用 `scripts/test_design_excel_tools.py generate-import` 或同等表头映射逻辑；禁止批次脚本按固定列序号数组直接写入模板。生成后必须使用 `-ImportWorkbookPath <导入文件.xlsx>` 校验字段错位、下拉框、自动字段空值、模板数据验证和多行换行样式。
+- 正式测试设计和导入文件不得残留 `{NAV}`、`{NL}`、`{Q}`、`{E}`、`${...}`、`{{...}}`、`TODO`、`TBD` 等模板占位符或未完成标记。
 - 生成正式测试设计 Excel 后，应使用 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>` 校验交付件结构、页面元素覆盖关系、标题格式、编号步骤和性能设计；大范围任务还应传入 `-BatchStatusPath <batch-status.csv>` 校验批次状态与交付件一致，并强制读取同级 `page-discovery.csv` 与 `docs/test-assets/product-map.xlsx` 做产品版图同步校验；也可以显式传入 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的最小标题路径、页面元素、关联用例、用例资产索引和变更记录是否同步。
 
 ## 用例编排

@@ -63,6 +63,8 @@
 - 跨模块用例只保留一个主归属模块，依赖模块通过产品模块地图、业务对象地图、业务链路地图、用例资产索引、跨模块依赖关系、标签、备注和关联用例 ID 追踪。
 - 生成、评审或人工修订后的最终版测试设计应回存 `docs/test-assets/modules/`；测试系统导入文件副本应回存 `docs/test-assets/imports/`；客户交付件应保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`；产品模块、业务对象、业务链路、页面元素、用例资产、模块能力、跨模块依赖、可复用测试数据、变更影响分析和变更记录应同步到 `product-map.xlsx`。
 - 生成正式测试设计 Excel 后，应运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务追加 `-BatchStatusPath <batch-status.csv>`，并强制读取同级 `page-discovery.csv` 与 `docs/test-assets/product-map.xlsx` 做产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的最小标题路径、页面元素、关联用例、用例资产索引和变更记录是否同步。
+- 测试系统导入文件必须优先通过 `scripts/test_design_excel_tools.py generate-import` 或同等表头映射逻辑生成；禁止批次脚本按固定列序号数组直接写入导入模板。导入文件生成后必须使用 `-ImportWorkbookPath <导入文件.xlsx>` 校验字段错位、下拉框、自动字段空值、模板数据验证和多行换行样式。
+- 正式测试设计和导入文件不得残留 `{NAV}`、`{NL}`、`{Q}`、`{E}`、`${...}`、`{{...}}`、`TODO`、`TBD` 等模板占位符或未完成标记。
 
 ## 页面材料处理规则
 

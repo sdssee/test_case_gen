@@ -263,6 +263,7 @@ def main() -> int:
     upgrade_script = repo_root / "scripts" / "upgrade-framework.ps1"
     deliverable_validator = repo_root / "scripts" / "validate-test-design-deliverable.py"
     deliverable_validator_ps1 = repo_root / "scripts" / "validate-test-design-deliverable.ps1"
+    excel_tools = repo_root / "scripts" / "test_design_excel_tools.py"
 
     if not design_template.exists():
         fail(f"Missing design template: {design_template}")
@@ -270,7 +271,7 @@ def main() -> int:
         fail(f"Missing system import template: {system_template}")
     if not product_map.exists():
         fail(f"Missing product map: {product_map}")
-    for path in [version_file, upgrade_manifest, upgrade_doc, package_script, upgrade_script, deliverable_validator, deliverable_validator_ps1]:
+    for path in [version_file, upgrade_manifest, upgrade_doc, package_script, upgrade_script, deliverable_validator, deliverable_validator_ps1, excel_tools]:
         if not path.exists():
             fail(f"Missing upgrade mechanism file: {path}")
 
@@ -931,6 +932,9 @@ def main() -> int:
             "validate_import_workbook",
             "validate_batch_granularity",
             "validate_batch_import_workbooks",
+            "assert_multiline_cells_wrapped",
+            "assert_no_residual_markers",
+            "validate_batch_file_consistency",
             "MULTI_LEAF_SEPARATORS",
             "最小标题路径",
             "--import-workbook",
@@ -945,6 +949,10 @@ def main() -> int:
     assert_contains(
         deliverable_validator_ps1,
         ["ProductMapPath", "PageDiscoveryPath", "ImportWorkbookPath", "--product-map", "--page-discovery", "--import-workbook", "page-discovery.csv"],
+    )
+    assert_contains(
+        excel_tools,
+        ["generate-import", "fix-formal-styles", "header_map", "IMPORT_AUTO_FIELDS", "wrap_text=True"],
     )
 
     batch_exploration_markers = [

@@ -472,6 +472,8 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 是否没有创建承载全量测试用例正文的单一 Python/JSON/CSV/Markdown/临时脚本文件，脚本是否只处理当前批次的模板填充、格式转换或校验
 - 当前批次是否已对每个测试点和每个页面元素按主流程、异常、边界、权限、状态、数据一致性、组合条件、禁用态/空状态/错误态、兼容性/稳定性、性能影响和可恢复路径等方向展开，而不是只写笼统用例
 - 正式测试设计 Excel 生成后，是否已运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务是否传入 `-BatchStatusPath <batch-status.csv>`，并强制读取同级 `page-discovery.csv` 与 `docs/test-assets/product-map.xlsx` 做产品版图同步校验；也可以显式传入 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的最小标题路径、页面元素、关联用例、用例资产索引和变更记录是否同步
+- 测试系统导入文件是否通过 `scripts/test_design_excel_tools.py generate-import` 或同等表头映射逻辑生成，是否没有在批次临时脚本中按固定列序号数组写入模板，是否已用 `-ImportWorkbookPath <导入文件.xlsx>` 校验字段错位、下拉框、自动字段空值和多行换行样式
+- 正式测试设计和导入文件是否没有残留 `{NAV}`、`{NL}`、`{Q}`、`{E}`、`${...}`、`{{...}}`、`TODO`、`TBD` 等模板占位符或未完成标记
 - 是否已规划将客户交付件保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`，将最终测试设计回存 `docs/test-assets/modules/`，将导入文件副本回存 `docs/test-assets/imports/`，并更新 `product-map.xlsx`
 - 外网到内网做普通框架升级时，是否已保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`，且未覆盖内网真实资产。标识：PROTECTED_ASSET_DIRS
 

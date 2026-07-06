@@ -796,6 +796,29 @@ def main() -> int:
     ]:
         assert_contains(path, existing_data_probe_markers)
 
+    incremental_supplement_markers = [
+        "增量补充",
+        "二次补充",
+        "覆盖缺口",
+        "补充批次",
+        "不得只追加用例",
+        "重新页面实探",
+        "复用已有用例",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+    ]:
+        assert_contains(path, incremental_supplement_markers)
+    assert_contains(batch_plan_template, incremental_supplement_markers)
+
     batch_run_state_markers = [
         "docs/test-assets/batch-runs/",
         "batch-plan.md",

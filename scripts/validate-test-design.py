@@ -264,6 +264,8 @@ def main() -> int:
     deliverable_validator = repo_root / "scripts" / "validate-test-design-deliverable.py"
     deliverable_validator_ps1 = repo_root / "scripts" / "validate-test-design-deliverable.ps1"
     excel_tools = repo_root / "scripts" / "test_design_excel_tools.py"
+    generated_python_validator = repo_root / "scripts" / "validate-generated-python-scripts.py"
+    generated_python_validator_ps1 = repo_root / "scripts" / "validate-generated-python-scripts.ps1"
 
     if not design_template.exists():
         fail(f"Missing design template: {design_template}")
@@ -271,7 +273,18 @@ def main() -> int:
         fail(f"Missing system import template: {system_template}")
     if not product_map.exists():
         fail(f"Missing product map: {product_map}")
-    for path in [version_file, upgrade_manifest, upgrade_doc, package_script, upgrade_script, deliverable_validator, deliverable_validator_ps1, excel_tools]:
+    for path in [
+        version_file,
+        upgrade_manifest,
+        upgrade_doc,
+        package_script,
+        upgrade_script,
+        deliverable_validator,
+        deliverable_validator_ps1,
+        excel_tools,
+        generated_python_validator,
+        generated_python_validator_ps1,
+    ]:
         if not path.exists():
             fail(f"Missing upgrade mechanism file: {path}")
 
@@ -896,6 +909,25 @@ def main() -> int:
         batch_plan_template,
     ]:
         assert_contains(path, no_global_intermediate_markers)
+    generated_python_script_markers = [
+        "repr()",
+        "json.dumps(..., ensure_ascii=False)",
+        "validate-generated-python-scripts.ps1",
+        "中文弯引号",
+        "未转义双引号",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
+        batch_plan_template,
+    ]:
+        assert_contains(path, generated_python_script_markers)
     for path in [
         repo_root / "AGENTS.md",
         repo_root / "CODEBUDDY.md",
@@ -955,6 +987,14 @@ def main() -> int:
         excel_tools,
         ["generate-import", "fix-formal-styles", "header_map", "IMPORT_AUTO_FIELDS", "wrap_text=True"],
     )
+    assert_contains(
+        generated_python_validator,
+        ["FORBIDDEN_QUOTE_CHARS", "py_compile", "repr/json.dumps", "left double smart quote"],
+    )
+    assert_contains(
+        generated_python_validator_ps1,
+        ["validate-generated-python-scripts.py", "Python was not found in PATH"],
+    )
     for path in [
         repo_root / "README.md",
         repo_root / "README_IMPORT.md",
@@ -965,7 +1005,7 @@ def main() -> int:
         assert_contains(path, ["scripts/test_design_excel_tools.py", "generate-import"])
     assert_contains(
         repo_root / "docs" / "RULE_OWNERSHIP.md",
-        ["scripts/test_design_excel_tools.py", "交付件质量校验"],
+        ["scripts/test_design_excel_tools.py", "scripts/validate-generated-python-scripts.py", "交付件质量校验"],
     )
 
     batch_exploration_markers = [

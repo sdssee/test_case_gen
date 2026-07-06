@@ -337,6 +337,8 @@
 
 大范围任务禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件。脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 artifacts/scripts/，不得把多个最小标题路径、多个批次或全产品测试用例先集中写入一个文件后再统一生成 Excel。
 
+如确需生成当前批次 Python 临时脚本，写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取，禁止手工拼接包含中文弯引号、智能引号或未转义双引号的字符串字面量。执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过语法编译和高风险引号扫描后才能执行。
+
 当范围超过一个最小标题时，必须在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本，包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`。该账本是内部执行状态，不作为默认客户交付件；生成正式 Excel 和导入文件时，应以 `batch-status.csv` 的最小标题路径、覆盖数量、用例数量和覆盖质量自检结果判断能否进入下一批或最终汇总。`batch-status.csv` 必须记录最小标题路径、页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数和数据一致性用例数、导入文件路径和导入文件已生成。
 
 每个批次正式写测试用例前，如果存在可访问页面、原型或桌面窗口，必须使用浏览器能力或 computer use 遍历当前批次最小标题路径下所有可点击/可交互功能点，并把发现结果写入 `page-discovery.csv`、页面元素覆盖清单、功能测试用例和产品版图。

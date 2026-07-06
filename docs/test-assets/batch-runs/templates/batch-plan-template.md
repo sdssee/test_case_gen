@@ -36,4 +36,5 @@
 - 二次补充仍要执行完整 Skill 规则，新增用例放在对应小功能块附近，能复用已有用例时引用已有用例 ID，不重复复制；补充后同步正式测试设计、独立导入文件副本、页面元素覆盖清单、性能测试设计、风险与待确认问题、自动化建议、`docs/test-assets/modules/`、`docs/test-assets/imports/` 和 `product-map.xlsx`。
 - 每个正式批次必须复制 `docs/test-design/测试用例模板.xlsx` 生成测试系统导入文件，回存到 `docs/test-assets/imports/`，并在 `batch-status.csv` 填写导入文件路径和导入文件已生成；已通过批次的导入文件路径必须真实存在，并能与归档测试设计逐个匹配校验。
 - 禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件；脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 `artifacts/scripts/`，不得统一生成 Excel。
+- 如确需生成当前批次 Python 临时脚本，写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取，禁止手工拼接包含中文弯引号、智能引号或未转义双引号的字符串字面量；执行前运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过语法编译和高风险引号扫描后才能执行。
 - 最终汇总只引用已归档批次成果和用例 ID，不得重新生成各批完整用例。

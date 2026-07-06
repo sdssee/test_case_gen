@@ -33,6 +33,7 @@
 | `scripts/validate-test-design.ps1` | 模板稳定性自检入口。 |
 | `scripts/validate-test-design-deliverable.ps1` | 已生成测试设计 Excel 的交付件质量校验入口。 |
 | `scripts/test_design_excel_tools.py` | 统一 Excel 工具，用于从正式测试设计按表头生成测试系统导入文件，并修复多行字段样式。 |
+| `scripts/validate-generated-python-scripts.ps1` | 当前批次 Python 临时脚本预检入口，执行前检查语法和中文弯引号/智能引号风险。 |
 
 ## 正式测试设计 Sheet
 
@@ -136,6 +137,12 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 大范围任务可追加 `-BatchStatusPath <batch-status.csv>`，用于校验批次状态中的覆盖数量、用例数量和质量门禁。
 
 如果 `batch-status.csv` 同级存在 `page-discovery.csv`，脚本会自动使用 `docs/test-assets/product-map.xlsx` 启用产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，用于校验页面实探、正式 Excel 和产品版图之间的页面元素、关联用例、用例资产索引和变更记录是否同步。
+
+如果当前批次生成了 Python 临时脚本，执行前先预检：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scripts.ps1 -Path docs/test-assets/batch-runs/<任务>/artifacts/scripts
+```
 
 ## 维护原则
 

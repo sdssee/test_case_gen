@@ -182,7 +182,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 13. 具体写测试用例时，必须在对应页面或功能点内做深遍历，覆盖所有可点击、可输入、可测试元素，包括按钮、链接、菜单、Tab、图标按钮、筛选、排序、分页、表格行操作、批量操作、输入框、下拉项、上传下载、弹窗、抽屉、开关、禁用态、空状态和错误态。
 14. 每一批测试设计都必须严格执行完整 test-design Skill 和 Rule，不得因为分批而降级；每批都必须覆盖功能测试、性能测试、异常流程、边界值、权限/角色、状态流转、数据一致性、兼容性/稳定性、风险与待确认问题、自动化建议和页面元素覆盖清单。
 15. 当任务范围超过一个最小标题时，禁止直接生成完整测试用例；必须先建立批次队列，并在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本，包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`。应优先复制 `docs/test-assets/batch-runs/templates/` 中的模板；每批必须按最深可识别标题形成唯一 `最小标题路径`，完成页面元素覆盖、功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险与待确认问题、自动化建议、资产回存和 `batch-status.csv` 覆盖质量自检后，才能进入下一批。`batch-status.csv` 必须记录最小标题路径、页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数和数据一致性用例数、导入文件路径和导入文件已生成。所有批次完成后只做最终汇总、跨模块汇总、回归范围、风险清单和客户总览，不得重新生成各批完整用例。
-16. 大范围任务禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件；脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 artifacts/scripts/，不得把多个最小标题路径、多个批次或全产品测试用例先集中写入一个文件后再统一生成 Excel。
+16. 大范围任务禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件；脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 artifacts/scripts/，不得把多个最小标题路径、多个批次或全产品测试用例先集中写入一个文件后再统一生成 Excel。如确需生成当前批次 Python 临时脚本，写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取，禁止手工拼接包含中文弯引号、智能引号或未转义双引号的字符串字面量；执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过语法编译和高风险引号扫描后才能执行。
 17. 测试用例必须尽可能详细。每个测试点、每个页面元素（包括可点击/可输入/可选择/可上传下载/可展开收起/可批量操作/可行内操作的元素），都必须严格按 Skill 从不同测试方向展开：主流程、异常流程、边界值、权限/角色、状态流转、数据一致性、组合条件、禁用态/空状态/错误态、兼容性/稳定性、性能影响、审计/日志/通知、副作用和可恢复路径；不能只写一个笼统用例替代多个可验证方向。
 
 ### 2. 测试范围定义
@@ -470,6 +470,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 是否已在 `page-discovery.csv` 记录当前批次最小标题路径、页面入口、元素、完整点击路径、观察行为、覆盖状态、证据路径和关联用例 ID
 - 是否已在 `batch-status.csv` 记录当前批次状态，并确认页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数、数据一致性用例数、导入文件路径、导入文件已生成、页面遍历完成、功能用例完成、性能设计完成、异常边界权限覆盖完成、页面元素覆盖完成、产品版图已更新和覆盖质量自检通过后才进入下一批
 - 是否没有创建承载全量测试用例正文的单一 Python/JSON/CSV/Markdown/临时脚本文件，脚本是否只处理当前批次的模板填充、格式转换或校验
+- 当前批次 Python 临时脚本是否已使用 `repr()` 或 `json.dumps(..., ensure_ascii=False)` 安全写入中文文本，并在执行前通过 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>` 预检
 - 当前批次是否已对每个测试点和每个页面元素按主流程、异常、边界、权限、状态、数据一致性、组合条件、禁用态/空状态/错误态、兼容性/稳定性、性能影响和可恢复路径等方向展开，而不是只写笼统用例
 - 正式测试设计 Excel 生成后，是否已运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务是否传入 `-BatchStatusPath <batch-status.csv>`，并强制读取同级 `page-discovery.csv` 与 `docs/test-assets/product-map.xlsx` 做产品版图同步校验；也可以显式传入 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的最小标题路径、页面元素、关联用例、用例资产索引和变更记录是否同步
 - 测试系统导入文件是否通过 `scripts/test_design_excel_tools.py generate-import` 或同等表头映射逻辑生成，是否没有在批次临时脚本中按固定列序号数组写入模板，是否已用 `-ImportWorkbookPath <导入文件.xlsx>` 校验字段错位、下拉框、自动字段空值和多行换行样式

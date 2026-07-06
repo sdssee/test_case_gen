@@ -733,6 +733,26 @@ def main() -> int:
     ]:
         assert_contains(path, selection_control_markers)
 
+    input_control_markers = [
+        "输入类控件",
+        "不得只观察字段存在",
+        "实际输入",
+        "结果分支/后续状态",
+        "真实提示",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+    ]:
+        assert_contains(path, input_control_markers)
+
     batch_run_state_markers = [
         "docs/test-assets/batch-runs/",
         "batch-plan.md",
@@ -775,7 +795,7 @@ def main() -> int:
     assert_contains(batch_review_template, ["批次执行复盘", "页面数", "元素总数", "导入文件路径", "最终交付约束", "不得重新生成各批完整用例"])
     expected_page_discovery_header = (
         "批次ID,一级模块,二级菜单,三级菜单/页面域,最小标题路径,页面/入口,菜单路径/URL,发现方式,角色/权限,数据状态,"
-        "元素名称/文案,元素类型,交互方式,选项取值/输入值,联动/依赖变化,完整点击路径,预期/观察行为,业务依据/规则来源,测试数据来源,"
+        "元素名称/文案,元素类型,交互方式,选项取值/输入值,联动/依赖变化,结果分支/后续状态,完整点击路径,预期/观察行为,业务依据/规则来源,测试数据来源,"
         "是否已生成用例,关联用例ID,覆盖状态,未覆盖/待确认原因,证据路径,备注"
     )
     actual_page_discovery_header = read_text(page_discovery_template).splitlines()[0]

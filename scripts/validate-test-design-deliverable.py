@@ -125,6 +125,7 @@ PAGE_DISCOVERY_REQUIRED_HEADERS = [
     "交互方式",
     "选项取值/输入值",
     "联动/依赖变化",
+    "结果分支/后续状态",
     "完整点击路径",
     "是否已生成用例",
     "关联用例ID",
@@ -506,6 +507,18 @@ def is_selection_element(row: dict[str, str]) -> bool:
     return any(marker in text for marker in selection_markers)
 
 
+def is_input_element(row: dict[str, str]) -> bool:
+    input_markers = ["输入", "文本框", "文本域", "搜索", "查询", "名称", "编码", "地址", "URL", "端口", "邮箱", "手机号", "数字", "日期"]
+    text = " ".join(
+        [
+            row.get("元素名称/文案", ""),
+            row.get("元素类型", ""),
+            row.get("交互方式", ""),
+        ]
+    )
+    return any(marker in text for marker in input_markers)
+
+
 def validate_batch_granularity(row: dict[str, str], numbers: dict[str, int]) -> None:
     batch_id = row.get("批次ID", "")
     leaf_path = row.get("最小标题路径", "").strip()
@@ -709,6 +722,16 @@ def validate_product_map_sync(
                 fail(f"page-discovery.csv row {index} selection element must record selected option values: {page} / {element}")
             if row.get("是否已生成用例", "") == "是" and not row.get("联动/依赖变化"):
                 fail(f"page-discovery.csv row {index} generated selection case must record 联动/依赖变化: {page} / {element}")
+            if row.get("是否已生成用例", "") == "是" and not row.get("结果分支/后续状态"):
+                fail(f"page-discovery.csv row {index} generated selection case must record 结果分支/后续状态: {page} / {element}")
+        if is_input_element(row):
+            if not row.get("选项取值/输入值"):
+                fail(f"page-discovery.csv row {index} input element must record actual input values: {page} / {element}")
+            if row.get("是否已生成用例", "") == "是":
+                if not row.get("预期/观察行为"):
+                    fail(f"page-discovery.csv row {index} generated input case must record 预期/观察行为: {page} / {element}")
+                if not row.get("结果分支/后续状态"):
+                    fail(f"page-discovery.csv row {index} generated input case must record 结果分支/后续状态: {page} / {element}")
         if normalized_key(page, element) not in workbook_elements:
             fail(f"page-discovery.csv row {index} element is missing from workbook 页面元素覆盖清单: {page} / {element}")
         if normalized_key(page, element) not in product_elements:

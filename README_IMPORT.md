@@ -60,6 +60,10 @@ CodeBuddy Code/CLI 兼容规则文件。内容与 `.codebuddy/.rules/test-design
 
 Excel 字段说明，方便 CodeBuddy 和团队成员理解每个 Sheet 的结构，包括页面元素覆盖清单和测试系统导入字段。
 
+`docs/test-design/rules/`
+
+按任务类型拆分的详细规则。Skill、Rule、CODEBUDDY、AGENTS 是轻入口，目标低于 10000 字符，避免 CodeBuddy 加载时截断；执行时按页面、批次、导入、产品版图等场景读取对应专题规则。
+
 `docs/test-design/archive-and-index-guidelines.md`
 
 测试资产归档、模块能力索引、跨模块依赖和可复用测试数据维护规范。

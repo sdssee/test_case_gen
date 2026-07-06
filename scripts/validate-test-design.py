@@ -86,6 +86,8 @@ CASE_BODY_MARKERS = [
     "expected result",
 ]
 
+ENTRY_FILE_CHAR_LIMIT = 10000
+
 
 def fail(message: str) -> None:
     raise AssertionError(message)
@@ -150,11 +152,55 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def is_lightweight_entry(path: Path) -> bool:
+    normalized = str(path).replace("\\", "/")
+    return any(
+        normalized.endswith(suffix)
+        for suffix in [
+            "AGENTS.md",
+            "CODEBUDDY.md",
+            ".codebuddy/skills/test-design/SKILL.md",
+            ".codebuddy/.rules/test-design-rule.mdc",
+            ".codebuddy/rules/test-design-rule.md",
+        ]
+    )
+
+
+def lightweight_entry_reference_text(path: Path) -> str:
+    for parent in [path.resolve(), *path.resolve().parents]:
+        rules_dir = parent / "docs" / "test-design" / "rules"
+        if rules_dir.is_dir():
+            references = sorted(rules_dir.glob("*.md"))
+            references.extend(
+                [
+                    parent / "docs" / "test-design" / "excel-template-spec.md",
+                    parent / "docs" / "test-design" / "archive-and-index-guidelines.md",
+                    parent / "docs" / "test-assets" / "batch-runs" / "README.md",
+                ]
+            )
+            return "\n".join(read_text(item) for item in references if item.exists())
+    return ""
+
+
 def assert_contains(path: Path, markers: list[str]) -> None:
     text = read_text(path)
+    reference_text = lightweight_entry_reference_text(path) if is_lightweight_entry(path) else ""
     for marker in markers:
-        if marker not in text:
+        if marker not in text and marker not in reference_text:
             fail(f"{path.relative_to(path.parents[1])} is missing required marker: {marker}")
+
+
+def assert_contains_across(paths: list[Path], markers: list[str], label: str) -> None:
+    combined = "\n".join(read_text(path) for path in paths)
+    for marker in markers:
+        if marker not in combined:
+            fail(f"{label} is missing required marker across rule sources: {marker}")
+
+
+def assert_max_chars(path: Path, limit: int) -> None:
+    length = len(read_text(path))
+    if length > limit:
+        fail(f"{path.relative_to(path.parents[1])} is too large for a lightweight AI entry: {length} > {limit} characters")
 
 
 def assert_not_contains(path: Path, markers: list[str]) -> None:
@@ -266,6 +312,24 @@ def main() -> int:
     excel_tools = repo_root / "scripts" / "test_design_excel_tools.py"
     generated_python_validator = repo_root / "scripts" / "validate-generated-python-scripts.py"
     generated_python_validator_ps1 = repo_root / "scripts" / "validate-generated-python-scripts.ps1"
+    rules_dir = repo_root / "docs" / "test-design" / "rules"
+    rule_docs = [
+        rules_dir / "README.md",
+        rules_dir / "case-design.md",
+        rules_dir / "page-discovery.md",
+        rules_dir / "batch-run.md",
+        rules_dir / "excel-deliverable.md",
+        rules_dir / "import-template.md",
+        rules_dir / "product-map-sync.md",
+        rules_dir / "data-safety.md",
+    ]
+    lightweight_entries = [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+    ]
 
     if not design_template.exists():
         fail(f"Missing design template: {design_template}")
@@ -284,9 +348,12 @@ def main() -> int:
         excel_tools,
         generated_python_validator,
         generated_python_validator_ps1,
+        *rule_docs,
     ]:
         if not path.exists():
             fail(f"Missing upgrade mechanism file: {path}")
+    for path in lightweight_entries:
+        assert_max_chars(path, ENTRY_FILE_CHAR_LIMIT)
 
     versions = parse_key_value_file(version_file)
     for key in ["framework_version", "asset_schema_version"]:

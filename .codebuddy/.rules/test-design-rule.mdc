@@ -25,15 +25,17 @@
 11. 选择类控件不得只展开查看，必须选择代表性选项并记录 `选项取值/输入值` 与 `联动/依赖变化`。
 12. 输入类控件不得只观察字段存在，必须实际输入正常、异常、边界或用户提供数据，并记录真实提示、结果分支/后续状态和可恢复路径。
 13. 新增类流程必须实填实走；成功进入详情页、下一级页面或后续配置页继续观察，失败记录真实失败提示、停留页面和可恢复路径。
-14. 生成或补充前必须读取 `docs/test-assets/product-map.xlsx`；不得依赖 AI 对话记忆判断已有模块能力、已有用例或跨模块依赖。
-15. 正式生成前必须展示产品理解摘要或模块理解摘要；生成后回存模块归档、导入副本并同步产品版图。
-16. 范围超过一个最小标题时，必须按最深标题级别建立批次队列，逐个最小标题路径执行；禁止合并多个最小标题，禁止再拆分一个最小标题。
-17. 每一批都必须完整覆盖功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险、自动化建议和页面元素覆盖清单，不得因为分批而降级。
-18. `batch-status.csv` 和 `page-discovery.csv` 必须使用标准模板表头，禁止自定义精简表头；`page-discovery.csv` 必须结构化写入，防止字段错位。
-19. 禁止创建承载全量测试用例正文的单一 Python/JSON/CSV/Markdown/临时脚本；脚本只能处理当前批次并放在 `artifacts/scripts/`。
-20. 当前批次 Python 临时脚本必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件写入中文文本，执行前运行生成脚本预检。
-21. 测试系统导入文件必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，优先使用 `scripts/test_design_excel_tools.py generate-import`，保留下拉框、必填样式、标红字段和自动生成字段空值。
-22. 导入文件 `执行方式` 默认 `手动`；只有已有可运行、可维护且覆盖主要校验点的自动化资产，并且本次明确按自动化导入或关联资产时，才允许填写 `自动化`。
-23. 正式交付件、导入文件、批次账本、页面实探记录、临时脚本和产品版图不得写入真实密钥、Token、密码或内部敏感凭据；使用 `<valid_api_key>`、`<test_token>`、`<test_service_url>` 等占位符。
-24. 生成正式测试设计后必须运行 `scripts/validate-test-design-deliverable.ps1`；有批次、页面实探、产品版图或导入文件时必须追加对应参数。
-25. 外网到内网普通框架升级必须保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。标识：PROTECTED_ASSET_DIRS。
+14. 弹窗、下拉、输入、编辑、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环。
+15. 生成或补充前必须读取 `docs/test-assets/product-map.xlsx`；不得依赖 AI 对话记忆判断已有模块能力、已有用例或跨模块依赖。
+16. 正式生成前必须展示产品理解摘要或模块理解摘要；生成后回存模块归档、导入副本并同步产品版图。
+17. 范围超过一个最小标题时，必须按最深标题级别建立批次队列，逐个最小标题路径执行；禁止合并多个最小标题，禁止再拆分一个最小标题。
+18. 每一批都必须完整覆盖功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险、自动化建议和页面元素覆盖清单，不得因为分批而降级。
+19. `batch-status.csv` 和 `page-discovery.csv` 必须使用标准模板表头，禁止自定义精简表头；`page-discovery.csv` 必须结构化写入，防止字段错位。
+20. 禁止创建承载全量测试用例正文的单一 Python/JSON/CSV/Markdown/临时脚本；脚本只能处理当前批次并放在 `artifacts/scripts/`。
+21. 批次截图、临时脚本和证据必须放在当前任务 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享根目录 artifacts。
+22. 当前批次 Python 临时脚本必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件写入中文文本，执行前运行生成脚本预检。
+23. 测试系统导入文件必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，优先使用 `scripts/test_design_excel_tools.py generate-import`，保留下拉框、必填样式、标红字段和自动生成字段空值。
+24. 导入文件 `执行方式` 默认 `手动`；只有已有可运行、可维护且覆盖主要校验点的自动化资产，并且本次明确按自动化导入或关联资产时，才允许填写 `自动化`。
+25. 正式交付件、导入文件、批次账本、页面实探记录、临时脚本和产品版图不得写入真实环境 URL/IP、真实账号、真实密钥、Token、密码或内部敏感凭据；使用 `<product_login_url>` 等占位符。
+26. 生成正式测试设计后必须运行 `scripts/validate-test-design-deliverable.ps1`；有批次、页面实探、产品版图或导入文件时必须追加对应参数。
+27. 外网到内网普通框架升级必须保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。标识：PROTECTED_ASSET_DIRS。

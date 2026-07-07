@@ -19,6 +19,8 @@
 ## 脱敏要求
 
 - 正式交付件、导入文件、批次账本、页面实探记录、临时脚本和产品版图不得写入疑似真实密钥、Token 或密码。
+- 正式交付件、导入文件、批次账本、页面实探记录、临时脚本和产品版图不得写入真实环境地址、登录 URL、内网 IP、部署路径、真实账号或真实密码；测试设计针对产品能力，不针对某个环境实例。
+- 环境入口统一使用 `<product_login_url>`，环境基址统一使用 `<test_env_base_url>`，账号和密码统一使用 `<test_user_account>`、`<test_user_password>` 等占位符。
 - 例如 `sk-...`、`secret=...`、`password=...`、`token=...`、`密钥:真实值` 都必须替换。
 - 使用 `<valid_api_key>`、`<test_token>`、`<test_service_url>`、`<masked_phone>`、`<masked_account>` 等占位符。
 - 生产账号、手机号、身份证号、真实地址、真实密钥、真实密码、真实 Token 不得原样输出到测试用例或产品版图。

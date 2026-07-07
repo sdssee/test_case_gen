@@ -1046,6 +1046,11 @@ def main() -> int:
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
     ]:
         assert_contains(path, operation_navigation_markers)
+
+    assert_contains(repo_root / "docs" / "test-design" / "rules" / "data-safety.md", ["<product_login_url>", "环境地址"])
+    assert_contains(repo_root / "docs" / "test-design" / "rules" / "case-design.md", ["闭环", "取消或关闭"])
+    assert_contains(repo_root / "docs" / "test-design" / "rules" / "excel-deliverable.md", ["表格对象", "修复提示"])
+    assert_contains(repo_root / "docs" / "test-design" / "rules" / "batch-run.md", ["batch-runs/<task>/artifacts", "根目录 artifacts"])
     assert_contains(
         deliverable_validator,
         [
@@ -1060,6 +1065,10 @@ def main() -> int:
             "validate_batch_import_workbooks",
             "assert_multiline_cells_wrapped",
             "assert_no_residual_markers",
+            "assert_no_unmasked_value",
+            "assert_transient_flow_closed",
+            "validate_table_ranges",
+            "validate_batch_artifacts_location",
             "validate_batch_file_consistency",
             "validate_batch_plan",
             "MULTI_LEAF_SEPARATORS",

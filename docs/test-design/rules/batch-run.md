@@ -19,6 +19,7 @@
 - `artifacts/`
 
 必须优先复制 `docs/test-assets/batch-runs/templates/` 中的模板。
+所有截图、临时脚本、页面证据和过程材料必须保存到当前任务目录的 `docs/test-assets/batch-runs/<task>/artifacts/` 下，禁止写入共享的 `docs/test-assets/batch-runs/artifacts/` 根目录 artifacts，避免不同任务证据混淆。
 
 ## 每批质量门禁
 

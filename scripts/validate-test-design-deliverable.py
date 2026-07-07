@@ -261,6 +261,84 @@ def fail(message: str) -> None:
     raise AssertionError(message)
 
 
+ENVIRONMENT_VALUE_PATTERNS = [
+    re.compile(r"https?://(?!<)[^\s\"'<>，,；;]+", re.IGNORECASE),
+    re.compile(r"\b(?:10|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"),
+    re.compile(r"\b172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}\b"),
+    re.compile(r"\b192\.168\.\d{1,3}\.\d{1,3}\b"),
+    re.compile(r"/hub/hub(?:/[^\s\"'<>，,；;]*)?", re.IGNORECASE),
+    re.compile(r"\badmin@\d+\b", re.IGNORECASE),
+]
+
+UNMASKED_VALUE_PATTERNS = [
+    (
+        "secret",
+        SENSITIVE_VALUE_PATTERNS,
+        "Use placeholders such as <valid_api_key>, <test_token>, or <test_service_url>.",
+    ),
+    (
+        "environment address/account",
+        ENVIRONMENT_VALUE_PATTERNS,
+        "Use placeholders such as <product_login_url>, <test_env_base_url>, <test_user_account>, or <test_user_password>.",
+    ),
+]
+
+TRANSIENT_STEP_MARKERS = [
+    "modal",
+    "dialog",
+    "drawer",
+    "dropdown",
+    "select",
+    "confirm",
+    "edit",
+    "delete",
+    "add variable",
+    "input",
+    "弹窗",
+    "对话框",
+    "抽屉",
+    "下拉",
+    "选择",
+    "确认框",
+    "编辑",
+    "删除",
+    "添加变量",
+    "输入",
+    "尝试点击",
+    "观察",
+]
+
+TERMINAL_STEP_MARKERS = [
+    "click OK",
+    "click Cancel",
+    "close",
+    "return",
+    "back to list",
+    "save",
+    "submit",
+    "not save",
+    "no data changed",
+    "点击确定",
+    "点击「确定」",
+    "点击取消",
+    "点击「取消」",
+    "点击关闭",
+    "点击「关闭」",
+    "返回",
+    "回到列表",
+    "返回列表",
+    "保存",
+    "提交",
+    "确认",
+    "不保存",
+    "关闭弹窗",
+    "弹窗关闭",
+    "列表不变",
+    "数据不变",
+    "退出编辑",
+]
+
+
 def shared_strings(zf: zipfile.ZipFile) -> list[str]:
     try:
         root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
@@ -318,6 +396,107 @@ def workbook_sheet_paths(zf: zipfile.ZipFile) -> dict[str, str]:
             path = posixpath.normpath(posixpath.join("xl", target))
         paths[name] = path
     return paths
+
+
+def relationship_target(base_path: str, target: str) -> str:
+    if target.startswith("/"):
+        return target.lstrip("/")
+    return posixpath.normpath(posixpath.join(posixpath.dirname(base_path), target))
+
+
+def cell_reference_to_position(cell_ref: str) -> tuple[int, int]:
+    match = re.match(r"^([A-Z]+)(\d+)$", cell_ref)
+    if not match:
+        return (0, 0)
+    col = 0
+    for char in match.group(1):
+        col = col * 26 + ord(char) - ord("A") + 1
+    return (int(match.group(2)), col)
+
+
+def range_bounds(ref: str) -> tuple[int, int, int, int]:
+    cells = ref.split(":")
+    if len(cells) == 1:
+        start = end = cells[0]
+    else:
+        start, end = cells[0], cells[-1]
+    start_row, start_col = cell_reference_to_position(start)
+    end_row, end_col = cell_reference_to_position(end)
+    return (start_row, start_col, end_row, end_col)
+
+
+def range_covers(actual_ref: str, expected_ref: str) -> bool:
+    actual_start_row, actual_start_col, actual_end_row, actual_end_col = range_bounds(actual_ref)
+    expected_start_row, expected_start_col, expected_end_row, expected_end_col = range_bounds(expected_ref)
+    return (
+        actual_start_row <= expected_start_row
+        and actual_start_col <= expected_start_col
+        and actual_end_row >= expected_end_row
+        and actual_end_col >= expected_end_col
+    )
+
+
+def assert_no_unmasked_value(value: str, label: str) -> None:
+    for kind, patterns, guidance in UNMASKED_VALUE_PATTERNS:
+        for pattern in patterns:
+            if pattern.search(value):
+                fail(f"{label} contains a possible unmasked {kind}. {guidance}")
+
+
+def assert_no_sensitive_text_values(path: Path, label: str) -> None:
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8-sig", errors="ignore")
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if line.strip():
+            assert_no_unmasked_value(line, f"{label} line {line_number}")
+
+
+def validate_table_ranges(path: Path, sheet_names: list[str] | None = None) -> None:
+    with zipfile.ZipFile(path) as zf:
+        available_sheets = workbook_sheet_paths(zf)
+        target_sheets = sheet_names or list(available_sheets)
+        for sheet_name in target_sheets:
+            sheet_path = available_sheets.get(sheet_name)
+            if not sheet_path:
+                continue
+            root = ET.fromstring(zf.read(sheet_path))
+            dimension = root.find("x:dimension", NS)
+            auto_filter = root.find("x:autoFilter", NS)
+            dimension_ref = dimension.attrib.get("ref", "") if dimension is not None else ""
+            auto_filter_ref = auto_filter.attrib.get("ref", "") if auto_filter is not None else ""
+            expected_ref = auto_filter_ref or dimension_ref
+            table_parts = root.findall("x:tableParts/x:tablePart", NS)
+            if not expected_ref or not table_parts:
+                continue
+
+            rels_path = posixpath.join(posixpath.dirname(sheet_path), "_rels", f"{posixpath.basename(sheet_path)}.rels")
+            try:
+                rels = ET.fromstring(zf.read(rels_path))
+            except KeyError:
+                fail(f"{sheet_name} has tableParts but no worksheet relationship file")
+            rel_targets = {rel.attrib["Id"]: rel.attrib["Target"] for rel in rels.findall("rel:Relationship", NS)}
+            for table_part in table_parts:
+                rel_id = table_part.attrib.get(f"{{{NS['r']}}}id", "")
+                table_target = rel_targets.get(rel_id)
+                if not table_target:
+                    fail(f"{sheet_name} has tablePart without a valid relationship: {rel_id}")
+                table_path = relationship_target(sheet_path, table_target)
+                table_root = ET.fromstring(zf.read(table_path))
+                table_ref = table_root.attrib.get("ref", "")
+                table_filter = table_root.find("x:autoFilter", NS)
+                table_auto_filter = table_filter.attrib.get("ref", "") if table_filter is not None else ""
+                if not table_ref:
+                    fail(f"{sheet_name} table {table_path} has no ref range")
+                if not range_covers(table_ref, expected_ref):
+                    fail(
+                        f"{sheet_name} table range is stale: table {table_path} ref {table_ref} "
+                        f"does not cover worksheet range {expected_ref}. Regenerate or resize the Excel table before delivery."
+                    )
+                if table_auto_filter and table_auto_filter != table_ref:
+                    fail(
+                        f"{sheet_name} table {table_path} autoFilter ref {table_auto_filter} must match table ref {table_ref}"
+                    )
 
 
 def sheet_rows(path: Path, sheet_name: str) -> list[list[str]]:
@@ -425,12 +604,7 @@ def assert_no_sensitive_values(path: Path, sheet_names: list[str] | None = None)
             for column_number, value in enumerate(row, start=1):
                 if not value:
                     continue
-                for pattern in SENSITIVE_VALUE_PATTERNS:
-                    if pattern.search(value):
-                        fail(
-                            f"{sheet_name} row {row_number} column {column_number} contains a possible unmasked secret. "
-                            "Use placeholders such as <valid_api_key>, <test_token>, or <test_service_url> in deliverables and internal ledgers."
-                        )
+                assert_no_unmasked_value(value, f"{sheet_name} row {row_number} column {column_number}")
 
 
 def validate_formal_workbook_styles(workbook: Path) -> None:
@@ -472,6 +646,21 @@ def assert_complete_operation_steps(text: str, label: str) -> None:
         fail(f"{label} must include complete menu/module navigation before operating target controls")
     if re.match(r"^1\.\s*在[^，,。]*页面", lines[0]):
         fail(f"{label} must not assume the tester is already on the target module page")
+
+
+def assert_transient_flow_closed(steps: str, expected: str, label: str) -> None:
+    normalized_steps = re.sub(r"\s+", "", steps or "").lower()
+    combined = re.sub(r"\s+", "", f"{steps}\n{expected}").lower()
+    if not normalized_steps:
+        return
+    has_transient_action = any(marker.lower() in normalized_steps for marker in TRANSIENT_STEP_MARKERS)
+    if not has_transient_action:
+        return
+    has_terminal_action = any(marker.lower() in combined for marker in TERMINAL_STEP_MARKERS)
+    if not has_terminal_action:
+        fail(
+            f"{label} opens or changes a transient UI state but does not describe a confirm/cancel/close/return/recovery path"
+        )
 
 
 def parse_ids(text: str) -> set[str]:
@@ -534,9 +723,7 @@ def assert_no_sensitive_csv_values(rows: list[dict[str, str]], label: str) -> No
         for field, value in row.items():
             if not value:
                 continue
-            for pattern in SENSITIVE_VALUE_PATTERNS:
-                if pattern.search(value):
-                    fail(f"{label} row {index} field {field} contains a possible unmasked secret; use a placeholder value")
+            assert_no_unmasked_value(value, f"{label} row {index} field {field}")
 
 
 def require_headers(rows: list[list[str]], required: list[str], sheet_name: str) -> None:
@@ -584,6 +771,7 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
         fail(f"Workbook sheets mismatch. Expected {EXPECTED_SHEETS}, got {sheet_names}")
     assert_no_residual_markers(workbook, EXPECTED_SHEETS)
     assert_no_sensitive_values(workbook, EXPECTED_SHEETS)
+    validate_table_ranges(workbook, EXPECTED_SHEETS)
     validate_formal_workbook_styles(workbook)
 
     function_rows_raw = sheet_rows(workbook, "功能测试用例")
@@ -613,6 +801,11 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
         assert_numbered(row.get("操作步骤", ""), f"功能测试用例 row {index} 操作步骤")
         assert_complete_operation_steps(row.get("操作步骤", ""), f"功能测试用例 row {index} 操作步骤")
         assert_numbered(row.get("预期结果", ""), f"功能测试用例 row {index} 预期结果")
+        assert_transient_flow_closed(
+            row.get("操作步骤", ""),
+            row.get("预期结果", ""),
+            f"功能测试用例 row {index}",
+        )
         if row.get("前置条件"):
             assert_numbered(row["前置条件"], f"功能测试用例 row {index} 前置条件")
 
@@ -671,6 +864,7 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
         fail(f"Import workbook headers mismatch. Expected {IMPORT_HEADERS}, got {headers}")
     assert_no_residual_markers(import_workbook)
     assert_no_sensitive_values(import_workbook)
+    validate_table_ranges(import_workbook)
     first_sheet_name = ""
     with zipfile.ZipFile(import_workbook) as zf:
         sheet_paths = workbook_sheet_paths(zf)
@@ -706,6 +900,11 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
         assert_numbered(row.get("测试步骤描述", ""), f"Import workbook row {index} 测试步骤描述")
         assert_complete_operation_steps(row.get("测试步骤描述", ""), f"Import workbook row {index} 测试步骤描述")
         assert_numbered(row.get("测试步骤预期结果", ""), f"Import workbook row {index} 测试步骤预期结果")
+        assert_transient_flow_closed(
+            row.get("测试步骤描述", ""),
+            row.get("测试步骤预期结果", ""),
+            f"Import workbook row {index}",
+        )
         if row.get("前置条件"):
             assert_numbered(row["前置条件"], f"Import workbook row {index} 前置条件")
         imported_titles.add(title)
@@ -886,6 +1085,16 @@ def validate_batch_file_consistency(batch_status: Path, batch_rows: list[dict[st
                 )
 
 
+def validate_batch_artifacts_location(batch_status: Path) -> None:
+    batch_runs_dir = batch_status.resolve().parent.parent
+    root_artifacts = batch_runs_dir / "artifacts"
+    if root_artifacts.exists() and any(root_artifacts.iterdir()):
+        fail(
+            "Batch artifacts must be stored under docs/test-assets/batch-runs/<task>/artifacts/, "
+            f"not the shared batch-runs/artifacts directory: {root_artifacts}"
+        )
+
+
 def validate_batch_import_workbooks(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
     for row in batch_rows:
         if not is_passed_batch(row):
@@ -911,6 +1120,7 @@ def validate_batch_review(batch_status: Path, batch_rows: list[dict[str, str]]) 
     review_path = batch_status.resolve().parent / "batch-review.md"
     if not review_path.exists():
         fail(f"batch-review.md not found beside batch-status.csv: {review_path}")
+    assert_no_sensitive_text_values(review_path, "batch-review.md")
     text = review_path.read_text(encoding="utf-8-sig")
     completed_rows = [row for row in batch_rows if is_passed_batch(row)]
     for row in completed_rows:
@@ -930,6 +1140,7 @@ def validate_batch_plan(batch_status: Path, batch_rows: list[dict[str, str]]) ->
     plan_path = batch_status.resolve().parent / "batch-plan.md"
     if not plan_path.exists():
         fail(f"batch-plan.md not found beside batch-status.csv: {plan_path}")
+    assert_no_sensitive_text_values(plan_path, "batch-plan.md")
     text = plan_path.read_text(encoding="utf-8-sig")
     completed_rows = [row for row in batch_rows if is_passed_batch(row)]
     for row in completed_rows:
@@ -1002,6 +1213,7 @@ def validate_product_map_sync(
         if sample_rows:
             fail(f"{label} contains sample/template rows after sync: rows {sample_rows[:10]}")
     assert_no_sensitive_values(product_map, PRODUCT_MAP_REQUIRED_REAL_SHEETS)
+    validate_table_ranges(product_map, PRODUCT_MAP_REQUIRED_REAL_SHEETS)
 
     for sheet_name in PRODUCT_MAP_REQUIRED_REAL_SHEETS:
         rows_raw = sheet_rows(product_map, sheet_name)
@@ -1179,6 +1391,7 @@ def main() -> int:
     batch_rows = None
     if args.batch_status:
         batch_rows = validate_batch_status(args.batch_status)
+        validate_batch_artifacts_location(args.batch_status)
         validate_batch_file_consistency(args.batch_status, batch_rows)
         validate_batch_plan(args.batch_status, batch_rows)
         validate_batch_review(args.batch_status, batch_rows)

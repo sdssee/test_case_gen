@@ -1094,7 +1094,7 @@ def main() -> int:
     )
     assert_contains(
         excel_tools,
-        ["generate-import", "fix-formal-styles", "header_map", "IMPORT_AUTO_FIELDS", "wrap_text=True"],
+        ["generate-import", "fix-formal-styles", "header_map", "IMPORT_AUTO_FIELDS", "wrap_text=True", "resize_worksheet_tables", "table.ref", "性能测试设计"],
     )
     assert_contains(
         generated_python_validator,

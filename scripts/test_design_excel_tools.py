@@ -9,6 +9,7 @@ from pathlib import Path
 try:
     from openpyxl import load_workbook
     from openpyxl.styles import Alignment
+    from openpyxl.utils import get_column_letter, range_boundaries
 except ImportError as exc:  # pragma: no cover - depends on local runtime packaging.
     raise SystemExit(
         "ERROR: openpyxl is required. Run this script in the CodeBuddy/Codex spreadsheet runtime "
@@ -18,7 +19,13 @@ except ImportError as exc:  # pragma: no cover - depends on local runtime packag
 
 FORMAL_FUNCTION_SHEET = "功能测试用例"
 IMPORT_MULTILINE_FIELDS = ["测试步骤描述", "测试步骤预期结果", "前置条件", "测试用例说明", "备注"]
-FORMAL_MULTILINE_FIELDS = ["前置条件", "测试数据", "操作步骤", "预期结果", "备注"]
+FORMAL_MULTILINE_FIELDS = {
+    "功能测试用例": ["前置条件", "测试数据", "操作步骤", "预期结果", "备注"],
+    "性能测试设计": ["前置条件/数据准备", "执行步骤", "监控指标", "通过标准", "风险备注"],
+    "风险与待确认问题": ["问题描述", "影响范围", "建议处理方式"],
+    "自动化建议": ["建议说明", "前置条件", "维护要求"],
+    "页面元素覆盖清单": ["业务依据/规则来源", "待确认问题/备注"],
+}
 
 IMPORT_AUTO_FIELDS = {"测试用例系统编号", "作者"}
 IMPORT_ALLOWED_VALUES = {
@@ -124,6 +131,29 @@ def clear_data_rows(ws, start_row: int = 2) -> None:
             cell.value = None
 
 
+def worksheet_used_range(ws) -> str:
+    return f"A1:{get_column_letter(ws.max_column)}{max(ws.max_row, 1)}"
+
+
+def resize_worksheet_tables(ws) -> None:
+    if not ws.tables:
+        return
+    sheet_ref = worksheet_used_range(ws)
+    for table in ws.tables.values():
+        min_col, min_row, _, _ = range_boundaries(table.ref)
+        new_ref = f"{get_column_letter(min_col)}{min_row}:{get_column_letter(ws.max_column)}{max(ws.max_row, min_row)}"
+        table.ref = new_ref
+        if table.autoFilter is not None:
+            table.autoFilter.ref = new_ref
+    if ws.auto_filter and ws.auto_filter.ref:
+        ws.auto_filter.ref = sheet_ref
+
+
+def resize_workbook_tables(wb) -> None:
+    for ws in wb.worksheets:
+        resize_worksheet_tables(ws)
+
+
 def generate_import_workbook(formal_workbook: Path, import_template: Path, output: Path, module_path: str) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(import_template, output)
@@ -174,6 +204,7 @@ def generate_import_workbook(formal_workbook: Path, import_template: Path, outpu
         import_ws.row_dimensions[write_row].height = max(import_ws.row_dimensions[write_row].height or 18, 60)
         write_row += 1
 
+    resize_workbook_tables(import_wb)
     import_wb.save(output)
 
 
@@ -183,12 +214,15 @@ def apply_formal_workbook_styles(workbook: Path, output: Path | None = None) -> 
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(workbook, output)
     wb = load_workbook(target)
-    if FORMAL_FUNCTION_SHEET in wb.sheetnames:
-        ws = wb[FORMAL_FUNCTION_SHEET]
+    for sheet_name, fields in FORMAL_MULTILINE_FIELDS.items():
+        if sheet_name not in wb.sheetnames:
+            continue
+        ws = wb[sheet_name]
         headers = header_map(ws)
         for row_index in range(2, ws.max_row + 1):
-            set_wrap(ws, headers, row_index, FORMAL_MULTILINE_FIELDS)
+            set_wrap(ws, headers, row_index, fields)
             ws.row_dimensions[row_index].height = max(ws.row_dimensions[row_index].height or 18, 60)
+    resize_workbook_tables(wb)
     wb.save(target)
 
 

@@ -21,7 +21,7 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/
 - `batch-status.csv`：记录每个批次的执行状态、最小标题路径、覆盖数量、用例数量和覆盖质量自检结果，是进入下一批的门禁文件。
 - `batch-review.md`：记录所有批次完成后的跨模块汇总、回归范围、风险与待确认问题。
 - `page-discovery.csv`：记录页面或功能点实探证据，包括最小标题路径、页面入口、元素、交互方式、选择类控件的选项取值/输入值、联动/依赖变化、输入类控件的实际输入、结果分支/后续状态、完整点击路径、观察行为、覆盖状态和关联用例 ID。
-- `artifacts/`：保存本次批次执行过程中产生的中间截图、页面遍历笔记、临时导出或核对材料。
+- `artifacts/`：保存本次批次执行过程中产生的中间截图、页面遍历笔记、临时导出或核对材料；证据只能放在当前任务目录下，禁止写入共享的 `docs/test-assets/batch-runs/artifacts/` 根目录。
 
 ## 执行规则
 
@@ -41,7 +41,7 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/
 6. 当前批次的覆盖质量自检通过后，才能进入下一批。
 7. 禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件；脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 artifacts/scripts/，不得把多个最小标题路径、多个批次或全产品测试用例先集中写入一个文件后再统一生成 Excel。
    如确需生成当前批次 Python 临时脚本，写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取，禁止手工拼接包含中文弯引号、智能引号或未转义双引号的字符串字面量。执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过语法编译和高风险引号扫描后才能执行。
-   正式测试设计、导入文件、`batch-plan.md`、`batch-status.csv`、`page-discovery.csv`、`batch-review.md`、临时脚本和 `product-map.xlsx` 都不得保留疑似真实密钥、Token、密码或内部敏感凭据；必须改写为 `<valid_api_key>`、`<test_token>`、`<test_service_url>` 等占位符。
+   正式测试设计、导入文件、`batch-plan.md`、`batch-status.csv`、`page-discovery.csv`、`batch-review.md`、临时脚本和 `product-map.xlsx` 都不得保留真实环境 URL/IP、真实账号、真实密码、疑似真实密钥、Token 或内部敏感凭据；必须改写为 `<product_login_url>`、`<test_env_base_url>`、`<test_user_account>`、`<test_user_password>`、`<valid_api_key>`、`<test_token>`、`<test_service_url>` 等占位符。
 8. 首次交付后的补充、追加、二次补充或页面未覆盖反馈必须建立或更新补充批次，不得只追加用例；补充前读取产品版图、归档测试设计、现有交付件、页面元素覆盖清单、`page-discovery.csv` 和 `batch-status.csv`，识别覆盖缺口、受影响最小标题路径、已有用例 ID 和可复用历史用例。
 9. 增量补充必须按最小标题路径重新页面实探目标覆盖缺口，新增用例放在对应小功能块附近，能复用已有用例时引用已有用例 ID，不重复复制；二次补充完成后同步正式测试设计、独立导入文件副本、页面元素覆盖清单、性能测试设计、风险与待确认问题、自动化建议、`docs/test-assets/modules/`、`docs/test-assets/imports/` 和 `product-map.xlsx`。
 10. 最终汇总只引用已归档批次成果和用例 ID，不得重新生成各批完整用例。
@@ -49,5 +49,4 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/
 ## 运行期门禁
 
 `scripts/validate-test-design.ps1` 会扫描 `docs/test-assets/batch-runs/`、`docs/test-design/current/` 和 `docs/test-design/deliverables/`，拦截疑似承载全量测试用例正文的单一中间文件，例如 `all_cases.py`、`full_product_cases.json`、`merged_cases.csv`、`case_pool.md` 或包含“全量测试用例”“多个最小标题”“统一生成 Excel”等聚合痕迹的文件。标准批次账本文件 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 以及 `templates/` 模板目录不会被误判。
-- 分批必须按当前产品或模块可识别的最深标题级别执行，例如一级标题、二级标题、三级标题、四级标题等，哪个标题级别最小就以哪个最小标题作为一个批次。每个已通过批次只能覆盖 1 个最小标题路径，`最小标题路径` 使用 `一级>二级>三级>四级` 形式记录唯一叶子节点；禁止合并多个最小标题，禁止再拆分一个最小标题为多个批次。已通过批次的导入文件路径必须真实存在，并能与归档测试设计逐个匹配校验。
-- 当任务范围超过一个最小标题时，必须建立批次队列并按最小标题路径逐批执行。
+`scripts/validate-test-design-deliverable.ps1` 会在传入 `-BatchStatusPath` 后校验批次账本、页面实探、归档测试设计、导入文件、产品版图和 artifacts 归属；任一已通过批次缺少归档文件、导入文件、标准表头、页面证据或质量自检数据时都应失败。

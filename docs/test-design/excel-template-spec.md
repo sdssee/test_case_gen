@@ -332,6 +332,8 @@
 
 正式测试设计、导入文件和产品版图中的 Excel 表格对象、自动筛选范围和实际数据区域必须一致；不得出现打开文件时 Microsoft Excel 提示修复、表格对象仍停留在模板前三行、自动筛选范围未覆盖新增行等问题。使用 `scripts/test_design_excel_tools.py generate-import` 或 `fix-formal-styles` 时，工具必须同步调整表格对象范围。
 
+批次交付收口必须优先使用 `scripts/test_design_excel_tools.py finalize-deliverables`，一次性复制正式测试设计到 `docs/test-design/current/`、`docs/test-design/deliverables/` 和 `docs/test-assets/modules/`，复制导入文件到 `docs/test-design/deliverables/` 和 `docs/test-assets/imports/`，并回写 `batch-status.csv` 的 `归档路径`、`导入文件路径`、`导入文件已生成`，同时清理 artifacts/scripts 下的 `__pycache__`。传入 `--product-map` 和 `--page-discovery` 时，工具会同步执行 `sync-product-map`，减少手写同步脚本。
+
 交付件不得残留 `{NAV}`、`{NL}`、`{Q}`、`{E}`、`${...}`、`{{...}}`、`TODO`、`TBD` 等模板占位符或未完成标记。当前批次各 Sheet 的内容必须与最小标题路径一致，不得残留其他模块的模板内容、示例内容或无效用例 ID 引用。
 
 跨模块用例只保留一个主归属模块。当前模块依赖已有模块能力时，应优先引用已有用例 ID 作为前置条件，不重复复制已有用例。

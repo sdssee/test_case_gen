@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import shutil
 from copy import copy
+from datetime import date
 from pathlib import Path
 
 try:
@@ -49,6 +51,15 @@ def row_dict(ws, headers: dict[str, int], row_index: int) -> dict[str, str]:
         value = ws.cell(row=row_index, column=column).value
         result[name] = "" if value is None else str(value).strip()
     return result
+
+
+def non_empty_rows(ws, headers: dict[str, int]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for row_index in range(2, ws.max_row + 1):
+        row = row_dict(ws, headers, row_index)
+        if any(value for value in row.values()):
+            rows.append(row)
+    return rows
 
 
 def copy_row_style(ws, source_row: int, target_row: int) -> None:
@@ -123,6 +134,11 @@ def module_names(module_path: str) -> list[str]:
     return (parts + [""] * 5)[:5]
 
 
+def module_leaf_name(module_path: str) -> str:
+    parts = [part.strip() for part in module_path.replace("/", ">").split(">") if part.strip()]
+    return parts[-1] if parts else module_path
+
+
 def clear_data_rows(ws, start_row: int = 2) -> None:
     if ws.max_row > start_row:
         ws.delete_rows(start_row + 1, ws.max_row - start_row)
@@ -152,6 +168,375 @@ def resize_worksheet_tables(ws) -> None:
 def resize_workbook_tables(wb) -> None:
     for ws in wb.worksheets:
         resize_worksheet_tables(ws)
+
+
+def relative_project_path(project_root: Path, path: Path) -> str:
+    return path.resolve().relative_to(project_root.resolve()).as_posix()
+
+
+def safe_filename(value: str) -> str:
+    cleaned = value.replace("\\", ">").replace("/", ">")
+    for char in '<>:"|?*':
+        cleaned = cleaned.replace(char, "_")
+    cleaned = "_".join(part.strip() for part in cleaned.split("_") if part.strip())
+    cleaned = cleaned.replace(" ", "")
+    return cleaned or "测试设计"
+
+
+def copy_workbook(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+
+
+def write_mapped_row(ws, headers: dict[str, int], row_index: int, values: dict[str, str]) -> None:
+    copy_row_style(ws, 2 if ws.max_row >= 2 else 1, row_index)
+    for field, value in values.items():
+        column = headers.get(field)
+        if column:
+            ws.cell(row=row_index, column=column, value=value)
+
+
+def append_mapped_row(ws, values: dict[str, str]) -> None:
+    headers = header_map(ws)
+    row_index = ws.max_row + 1 if ws.max_row >= 1 else 2
+    write_mapped_row(ws, headers, row_index, values)
+
+
+def remove_rows_containing(ws, needles: list[str]) -> None:
+    if not needles:
+        return
+    for row_index in range(ws.max_row, 1, -1):
+        values = ["" if cell.value is None else str(cell.value) for cell in ws[row_index]]
+        joined = "\n".join(values)
+        if any(needle and needle in joined for needle in needles) or "示例" in joined:
+            ws.delete_rows(row_index, 1)
+
+
+def update_batch_status_paths(batch_status: Path, batch_id: str | None, archive_rel: str, import_rel: str) -> list[dict[str, str]]:
+    if not batch_status:
+        return []
+    with batch_status.open("r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.DictReader(fp)
+        headers = reader.fieldnames or []
+        rows = list(reader)
+    if not headers:
+        raise ValueError(f"batch-status.csv has no header row: {batch_status}")
+    required = {"批次ID", "归档路径", "导入文件路径", "导入文件已生成"}
+    missing = sorted(required - set(headers))
+    if missing:
+        raise ValueError(f"batch-status.csv is missing required finalize columns: {missing}")
+    target_rows = [row for row in rows if not batch_id or row.get("批次ID") == batch_id]
+    if not target_rows:
+        raise ValueError(f"No matching batch row found for batch_id={batch_id!r}")
+    changes: list[dict[str, str]] = []
+    for row in target_rows:
+        changes.append(
+            {
+                "批次ID": row.get("批次ID", ""),
+                "旧归档路径": row.get("归档路径", ""),
+                "旧导入文件路径": row.get("导入文件路径", ""),
+                "归档路径": archive_rel,
+                "导入文件路径": import_rel,
+            }
+        )
+        row["归档路径"] = archive_rel
+        row["导入文件路径"] = import_rel
+        row["导入文件已生成"] = "是"
+    with batch_status.open("w", encoding="utf-8-sig", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(rows)
+    return changes
+
+
+def sync_batch_markdown_paths(batch_status: Path, changes: list[dict[str, str]]) -> None:
+    for markdown_name in ["batch-plan.md", "batch-review.md"]:
+        markdown_path = batch_status.resolve().parent / markdown_name
+        if not markdown_path.exists():
+            continue
+        text = markdown_path.read_text(encoding="utf-8-sig")
+        for change in changes:
+            for old_key, new_key in [("旧归档路径", "归档路径"), ("旧导入文件路径", "导入文件路径")]:
+                old_value = change.get(old_key, "")
+                new_value = change.get(new_key, "")
+                if old_value and new_value:
+                    text = text.replace(old_value, new_value)
+            if change["归档路径"] not in text or change["导入文件路径"] not in text:
+                text += (
+                    "\n\n## 交付收口路径\n"
+                    f"- {change['批次ID']} 归档路径：{change['归档路径']}\n"
+                    f"- {change['批次ID']} 导入文件路径：{change['导入文件路径']}\n"
+                )
+        markdown_path.write_text(text, encoding="utf-8")
+
+
+def cleanup_batch_artifacts(batch_status: Path | None) -> None:
+    if not batch_status:
+        return
+    pycache = batch_status.resolve().parent / "artifacts" / "scripts" / "__pycache__"
+    if pycache.exists():
+        shutil.rmtree(pycache)
+
+
+def split_module_parts(module_path: str, product_name: str | None = None) -> tuple[str, list[str]]:
+    parts = [part.strip() for part in module_path.replace("/", ">").split(">") if part.strip()]
+    if product_name:
+        return product_name, parts
+    if len(parts) >= 4:
+        return parts[0], parts[1:]
+    return (parts[0] if parts else "产品"), parts
+
+
+def sync_product_map(
+    product_map: Path,
+    formal_workbook: Path,
+    page_discovery: Path,
+    module_path: str,
+    archive_path: str,
+    product_name: str | None = None,
+) -> None:
+    today = date.today().isoformat()
+    product, modules = split_module_parts(module_path, product_name)
+    module_label = ">".join(modules) or module_path
+    level1 = modules[0] if len(modules) > 0 else ""
+    level2 = modules[1] if len(modules) > 1 else ""
+    level3 = modules[2] if len(modules) > 2 else ""
+
+    formal_wb = load_workbook(formal_workbook, data_only=True)
+    function_ws = formal_wb[FORMAL_FUNCTION_SHEET]
+    function_rows = non_empty_rows(function_ws, header_map(function_ws))
+
+    with page_discovery.open("r", encoding="utf-8-sig", newline="") as fp:
+        discovery_rows = [row for row in csv.DictReader(fp) if any((value or "").strip() for value in row.values())]
+
+    wb = load_workbook(product_map)
+    for ws in wb.worksheets:
+        remove_rows_containing(ws, [module_label, archive_path])
+
+    pages = sorted({row.get("页面/入口", "") for row in discovery_rows if row.get("页面/入口")})
+    for page in pages or [level3 or level2 or level1 or module_label]:
+        append_mapped_row(
+            wb["产品模块地图"],
+            {
+                "产品/系统": product,
+                "一级模块": level1,
+                "二级模块": level2,
+                "三级模块": level3,
+                "页面/入口": page,
+                "菜单路径/URL": module_label,
+                "模块功能摘要": f"{module_label} 页面功能、页面元素和测试资产已同步",
+                "归档测试设计路径": archive_path,
+                "覆盖状态": "已覆盖",
+                "最后更新时间": today,
+                "待确认问题": "无",
+            },
+        )
+
+    linked_create_ids = ";".join(row.get("用例 ID", "") for row in function_rows[:3] if row.get("用例 ID"))
+    append_mapped_row(
+        wb["业务对象地图"],
+        {
+            "产品/系统": product,
+            "业务对象": level3 or level2 or module_label,
+            "来源模块": module_label,
+            "消费模块": module_label,
+            "关键字段": "名称、状态、配置项",
+            "关键状态": "新增、编辑、删除、查询",
+            "状态生产者": module_label,
+            "状态消费者": module_label,
+            "创建用例ID": linked_create_ids,
+            "归档测试设计路径": archive_path,
+            "待确认问题": "无",
+        },
+    )
+    append_mapped_row(
+        wb["业务链路地图"],
+        {
+            "链路ID": f"FLOW-{safe_filename(module_label)}",
+            "链路名称": f"{module_label}主流程",
+            "起始模块": module_label,
+            "结束模块": module_label,
+            "业务对象": level3 or level2 or module_label,
+            "关键状态流转": "进入页面>新增/编辑/查询/删除>校验结果",
+            "主流程用例ID": linked_create_ids,
+            "依赖测试数据": "AI_TEST 测试数据",
+            "风险点": "页面联动、数据一致性、权限状态",
+            "归档测试设计路径": archive_path,
+        },
+    )
+
+    for row in discovery_rows:
+        append_mapped_row(
+            wb["页面元素地图"],
+            {
+                "产品/系统": product,
+                "模块": module_label,
+                "页面/入口": row.get("页面/入口", ""),
+                "菜单路径/URL": row.get("菜单路径/URL", "") or module_label,
+                "元素名称/文案": row.get("元素名称/文案", ""),
+                "元素类型": row.get("元素类型", ""),
+                "交互方式": row.get("交互方式", ""),
+                "前置状态/权限": row.get("角色/权限", ""),
+                "关联用例ID": row.get("关联用例ID", ""),
+                "覆盖状态": row.get("覆盖状态", ""),
+                "发现来源": row.get("发现方式", ""),
+                "最后更新时间": today,
+                "备注": row.get("备注", ""),
+            },
+        )
+
+    for row in function_rows:
+        case_id = row.get("用例 ID", "")
+        if not case_id:
+            continue
+        append_mapped_row(
+            wb["用例资产索引"],
+            {
+                "产品/系统": product,
+                "模块": module_label,
+                "功能点": row.get("功能点", ""),
+                "用例ID": case_id,
+                "用例标题": row.get("用例标题", ""),
+                "测试类型": row.get("测试类型", "功能测试") or "功能测试",
+                "执行方式": "手动",
+                "是否可复用为前置条件": "否",
+                "是否跨模块": "否",
+                "关联业务对象": level3 or level2 or module_label,
+                "关联业务链路": f"{module_label}主流程",
+                "归档测试设计路径": archive_path,
+                "最后更新时间": today,
+            },
+        )
+
+    for function_point in sorted({row.get("功能点", "") for row in function_rows if row.get("功能点")}):
+        ids = ";".join(row.get("用例 ID", "") for row in function_rows if row.get("功能点") == function_point and row.get("用例 ID"))
+        append_mapped_row(
+            wb["模块能力索引"],
+            {
+                "产品/系统": product,
+                "模块": module_label,
+                "功能点": function_point,
+                "能力/数据对象": level3 or level2 or module_label,
+                "能力描述": f"{function_point} 已形成测试资产",
+                "关键状态": "正常、异常、边界、权限/状态",
+                "可复用前置条件": "按归档测试设计准备测试数据",
+                "关联用例ID": ids,
+                "归档测试设计路径": archive_path,
+                "限制/待确认问题": "无",
+                "最后更新时间": today,
+            },
+        )
+
+    append_mapped_row(
+        wb["跨模块依赖关系"],
+        {
+            "产品/系统": product,
+            "当前模块": module_label,
+            "依赖模块": "待识别",
+            "依赖业务对象": level3 or level2 or module_label,
+            "依赖功能点/能力": "页面入口、权限、数据状态",
+            "依赖类型": "待确认",
+            "引用用例ID": linked_create_ids,
+            "当前模块用例ID": linked_create_ids,
+            "使用方式": "作为页面实探和测试数据准备依据",
+            "风险/待确认问题": "无明确跨模块依赖时保持待确认",
+            "最后更新时间": today,
+        },
+    )
+    append_mapped_row(
+        wb["可复用测试数据"],
+        {
+            "产品/系统": product,
+            "模块": module_label,
+            "数据名称": "AI_TEST 测试数据",
+            "数据类型": "页面实探数据",
+            "数据内容/构造方式": "使用带 AI_TEST 或 CODEX_TEST 标识的数据",
+            "适用用例ID": linked_create_ids,
+            "是否可复用": "是",
+            "限制/清理方式": "仅操作本次创建的数据，交付后按环境规则清理",
+            "最后更新时间": today,
+        },
+    )
+    append_mapped_row(
+        wb["变更影响分析"],
+        {
+            "产品/系统": product,
+            "变更模块": module_label,
+            "变更点": "新增或更新模块测试设计",
+            "影响模块": module_label,
+            "影响业务对象": level3 or level2 or module_label,
+            "影响用例ID": linked_create_ids,
+            "回归建议": "回归页面入口、核心流程、异常边界、权限状态和数据一致性",
+            "风险等级": "中",
+            "最后更新时间": today,
+        },
+    )
+    append_mapped_row(
+        wb["变更记录"],
+        {
+            "变更日期": today,
+            "变更类型": "测试资产同步",
+            "变更内容": f"同步 {module_label} 测试设计、页面元素和用例资产",
+            "影响范围": module_label,
+            "关联归档路径": archive_path,
+            "是否已同步产品版图": "是",
+            "备注": "由 sync-product-map/finalize-deliverables 统一维护",
+        },
+    )
+    resize_workbook_tables(wb)
+    wb.save(product_map)
+
+
+def finalize_deliverables(
+    project_root: Path,
+    formal_workbook: Path,
+    import_workbook: Path,
+    module_path: str,
+    batch_status: Path | None = None,
+    batch_id: str | None = None,
+    product_map: Path | None = None,
+    page_discovery: Path | None = None,
+    product_name: str | None = None,
+) -> None:
+    project_root = project_root.resolve()
+    module_name = safe_filename(module_path)
+    formal_name = f"{module_name}_测试设计.xlsx"
+    import_name = f"{module_name}_导入用例.xlsx"
+
+    apply_formal_workbook_styles(formal_workbook)
+    import_wb = load_workbook(import_workbook)
+    resize_workbook_tables(import_wb)
+    import_wb.save(import_workbook)
+
+    module_archive = project_root / "docs" / "test-assets" / "modules" / formal_name
+    import_archive = project_root / "docs" / "test-assets" / "imports" / import_name
+    current_copy = project_root / "docs" / "test-design" / "current" / formal_name
+    deliverable_formal = project_root / "docs" / "test-design" / "deliverables" / formal_name
+    deliverable_import = project_root / "docs" / "test-design" / "deliverables" / import_name
+
+    for target in [module_archive, current_copy, deliverable_formal]:
+        copy_workbook(formal_workbook, target)
+    for target in [import_archive, deliverable_import]:
+        copy_workbook(import_workbook, target)
+
+    if batch_status:
+        changes = update_batch_status_paths(
+            batch_status,
+            batch_id,
+            relative_project_path(project_root, module_archive),
+            relative_project_path(project_root, import_archive),
+        )
+        sync_batch_markdown_paths(batch_status, changes)
+        cleanup_batch_artifacts(batch_status)
+    if product_map and page_discovery:
+        sync_product_map(
+            product_map,
+            module_archive,
+            page_discovery,
+            module_path,
+            relative_project_path(project_root, module_archive),
+            product_name,
+        )
 
 
 def generate_import_workbook(formal_workbook: Path, import_template: Path, output: Path, module_path: str) -> None:
@@ -240,11 +625,51 @@ def main() -> int:
     style.add_argument("--workbook", required=True, type=Path)
     style.add_argument("--output", type=Path)
 
+    finalize = sub.add_parser("finalize-deliverables", help="Copy validated workbooks to current/deliverables/internal archives and update batch-status paths.")
+    finalize.add_argument("--project-root", required=True, type=Path)
+    finalize.add_argument("--formal-workbook", required=True, type=Path)
+    finalize.add_argument("--import-workbook", required=True, type=Path)
+    finalize.add_argument("--module-path", required=True)
+    finalize.add_argument("--batch-status", type=Path)
+    finalize.add_argument("--batch-id")
+    finalize.add_argument("--product-map", type=Path)
+    finalize.add_argument("--page-discovery", type=Path)
+    finalize.add_argument("--product-name")
+
+    sync = sub.add_parser("sync-product-map", help="Sync product-map.xlsx from a formal workbook and page-discovery.csv.")
+    sync.add_argument("--product-map", required=True, type=Path)
+    sync.add_argument("--formal-workbook", required=True, type=Path)
+    sync.add_argument("--page-discovery", required=True, type=Path)
+    sync.add_argument("--module-path", required=True)
+    sync.add_argument("--archive-path", required=True)
+    sync.add_argument("--product-name")
+
     args = parser.parse_args()
     if args.command == "generate-import":
         generate_import_workbook(args.formal_workbook, args.import_template, args.output, args.module_path)
     elif args.command == "fix-formal-styles":
         apply_formal_workbook_styles(args.workbook, args.output)
+    elif args.command == "finalize-deliverables":
+        finalize_deliverables(
+            args.project_root,
+            args.formal_workbook,
+            args.import_workbook,
+            args.module_path,
+            args.batch_status,
+            args.batch_id,
+            args.product_map,
+            args.page_discovery,
+            args.product_name,
+        )
+    elif args.command == "sync-product-map":
+        sync_product_map(
+            args.product_map,
+            args.formal_workbook,
+            args.page_discovery,
+            args.module_path,
+            args.archive_path,
+            args.product_name,
+        )
     return 0
 
 

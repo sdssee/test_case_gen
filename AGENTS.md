@@ -49,6 +49,7 @@ Codex 应优先读取并遵守：
 - `batch-status.csv` 和 `page-discovery.csv` 使用标准模板表头，禁止自定义精简表头和字段错位。
 - 批次截图、临时脚本和证据必须放在当前任务 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享根目录 artifacts。
 - 导入文件优先使用 `scripts/test_design_excel_tools.py generate-import`，保留模板下拉框、必填样式、标红字段和自动生成字段空值。
+- 批次交付收口优先使用 `scripts/test_design_excel_tools.py finalize-deliverables`，同步 current、deliverables、modules、imports 和 `batch-status.csv` 路径。
 - 导入文件 `执行方式` 默认 `手动`，也就是默认填写 `手动`；自动化建议或 AI 页面实探不能作为填写 `自动化` 的依据。
 - 正式交付件、导入文件、批次账本、页面实探记录、临时脚本和产品版图不得保留真实环境 URL/IP、真实账号、真实密钥、Token、密码或内部敏感凭据，使用 `<product_login_url>` 等占位符。
 

@@ -944,7 +944,6 @@ def is_selection_element(row: dict[str, str]) -> bool:
     selection_markers = ["下拉", "级联", "选择", "单选", "复选", "枚举", "树选择"]
     text = " ".join(
         [
-            row.get("元素名称/文案", ""),
             row.get("元素类型", ""),
             row.get("交互方式", ""),
         ]
@@ -953,25 +952,31 @@ def is_selection_element(row: dict[str, str]) -> bool:
 
 
 def is_input_element(row: dict[str, str]) -> bool:
-    input_markers = ["输入", "文本框", "文本域", "搜索", "查询", "名称", "编码", "地址", "URL", "端口", "邮箱", "手机号", "数字", "日期"]
-    text = " ".join(
-        [
-            row.get("元素名称/文案", ""),
-            row.get("元素类型", ""),
-            row.get("交互方式", ""),
-        ]
+    non_input_types = ["按钮", "图标", "表格列", "分页", "链接", "开关"]
+    element_type = row.get("元素类型", "")
+    interaction = row.get("交互方式", "")
+    element_name = row.get("元素名称/文案", "")
+    if any(marker in element_type for marker in non_input_types):
+        return False
+    input_markers = ["输入", "文本框", "文本域", "搜索框", "查询框", "数字框", "日期框"]
+    name_markers = ["输入框", "搜索框", "查询框", "文本域", "名称字段", "编码字段", "地址字段", "URL字段", "端口字段", "邮箱字段", "手机号字段"]
+    return any(marker in f"{element_type} {interaction}" for marker in input_markers) or any(
+        marker in element_name for marker in name_markers
     )
-    return any(marker in text for marker in input_markers)
 
 
 def is_create_flow_element(row: dict[str, str]) -> bool:
     create_markers = ["新增", "创建", "添加", "新建", "保存", "提交", "下一步", "完成", "测试连接"]
+    non_create_types = ["表格列", "分页", "图标"]
+    element_type = row.get("元素类型", "")
+    interaction = row.get("交互方式", "")
+    if any(marker in element_type for marker in non_create_types) or interaction == "查看":
+        return False
     text = " ".join(
         [
             row.get("元素名称/文案", ""),
             row.get("元素类型", ""),
             row.get("交互方式", ""),
-            row.get("完整点击路径", ""),
         ]
     )
     return any(marker in text for marker in create_markers)
@@ -1093,6 +1098,18 @@ def validate_batch_artifacts_location(batch_status: Path) -> None:
             "Batch artifacts must be stored under docs/test-assets/batch-runs/<task>/artifacts/, "
             f"not the shared batch-runs/artifacts directory: {root_artifacts}"
         )
+    scripts_dir = batch_status.resolve().parent / "artifacts" / "scripts"
+    pycache_dir = scripts_dir / "__pycache__"
+    if pycache_dir.exists():
+        fail(f"Batch artifacts must not keep Python __pycache__ directories. Remove before delivery: {pycache_dir}")
+
+
+def is_relative_to_path(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def validate_batch_import_workbooks(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
@@ -1112,6 +1129,17 @@ def validate_batch_import_workbooks(batch_status: Path, batch_rows: list[dict[st
             fail(f"batch {batch_id} 归档路径 does not exist: {archive_raw}")
         if not import_path.exists():
             fail(f"batch {batch_id} 导入文件路径 does not exist: {import_raw}")
+        project_root = project_root_from_batch_status(batch_status)
+        modules_dir = project_root / "docs" / "test-assets" / "modules"
+        imports_dir = project_root / "docs" / "test-assets" / "imports"
+        if not is_relative_to_path(archive_path, modules_dir):
+            fail(
+                f"batch {batch_id} 归档路径 must point to internal module archive under docs/test-assets/modules/: {archive_raw}"
+            )
+        if not is_relative_to_path(import_path, imports_dir):
+            fail(
+                f"batch {batch_id} 导入文件路径 must point to internal import archive under docs/test-assets/imports/: {import_raw}"
+            )
         archive_data = validate_workbook(archive_path)
         validate_import_workbook(import_path, archive_data)
 

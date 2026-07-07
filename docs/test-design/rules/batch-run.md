@@ -35,6 +35,8 @@
 
 当前批次覆盖质量自检通过后，才能进入下一批。所有批次完成后只做最终汇总、跨模块汇总、回归范围、风险清单和客户总览，不得重新生成各批完整用例。
 
+批次交付收口必须使用统一工具 `scripts/test_design_excel_tools.py finalize-deliverables` 或等价自动化流程完成，禁止手工在 `current/`、`deliverables/`、`docs/test-assets/modules/`、`docs/test-assets/imports/` 之间反复复制。`batch-status.csv` 中已通过批次的 `归档路径` 必须指向 `docs/test-assets/modules/` 下的内部模块归档，`导入文件路径` 必须指向 `docs/test-assets/imports/` 下的导入归档。需要同步产品版图时传入 `--product-map` 和 `--page-discovery`，由工具调用 `sync-product-map`。
+
 ## 文件格式门禁
 
 - `batch-status.csv` 和 `page-discovery.csv` 必须复制标准模板或按完全相同表头生成，禁止自定义精简表头。
@@ -48,3 +50,4 @@
 - 脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 `artifacts/scripts/`。
 - 当前批次 Python 临时脚本写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取。
 - 执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过语法编译和中文弯引号、智能引号、未转义双引号风险扫描后才能执行。
+- 交付前必须清理 `artifacts/scripts/__pycache__/`，不得把 Python 缓存目录作为运行结果保留。

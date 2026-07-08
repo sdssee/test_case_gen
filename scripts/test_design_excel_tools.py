@@ -278,6 +278,121 @@ def cleanup_batch_artifacts(batch_status: Path | None) -> None:
         shutil.rmtree(pycache)
 
 
+def copy_template_if_missing(source: Path, target: Path) -> bool:
+    if target.exists():
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+    return True
+
+
+def write_single_csv_row(path: Path, values: dict[str, str]) -> None:
+    with path.open("r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.reader(fp)
+        headers = next(reader, [])
+    if not headers:
+        raise ValueError(f"CSV template has no header row: {path}")
+    row = {header: "" for header in headers}
+    for key, value in values.items():
+        if key in row:
+            row[key] = value
+    with path.open("w", encoding="utf-8-sig", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=headers)
+        writer.writeheader()
+        writer.writerow(row)
+
+
+def init_batch_run(project_root: Path, run_id: str, module_path: str, batch_id: str, product_name: str | None = None) -> Path:
+    run_dir = project_root / "docs" / "test-assets" / "batch-runs" / run_id
+    templates_dir = project_root / "docs" / "test-assets" / "batch-runs" / "templates"
+    required_templates = {
+        "batch-plan.md": templates_dir / "batch-plan-template.md",
+        "batch-status.csv": templates_dir / "batch-status-template.csv",
+        "batch-review.md": templates_dir / "batch-review-template.md",
+        "page-discovery.csv": templates_dir / "page-discovery-template.csv",
+    }
+    missing = [str(path) for path in required_templates.values() if not path.exists()]
+    if missing:
+        raise ValueError(f"Batch template files are missing: {missing}")
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_dir = run_dir / "artifacts"
+    scripts_dir = artifacts_dir / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+
+    for target_name, template_path in required_templates.items():
+        copy_template_if_missing(template_path, run_dir / target_name)
+
+    product, modules = split_module_parts(module_path, product_name)
+    level1 = modules[0] if len(modules) > 0 else ""
+    level2 = modules[1] if len(modules) > 1 else ""
+    level3 = modules[2] if len(modules) > 2 else ""
+    leaf_path = ">".join(modules) or module_path
+
+    write_single_csv_row(
+        run_dir / "batch-status.csv",
+        {
+            "批次ID": batch_id,
+            "一级模块": level1,
+            "二级菜单": level2,
+            "三级菜单/页面域": level3,
+            "批次范围": leaf_path,
+            "状态": "待开始",
+            "页面数": "0",
+            "元素总数": "0",
+            "已覆盖元素数": "0",
+            "待确认元素数": "0",
+            "功能用例数": "0",
+            "性能场景数": "0",
+            "异常用例数": "0",
+            "边界用例数": "0",
+            "权限/状态用例数": "0",
+            "数据一致性用例数": "0",
+            "页面遍历完成": "否",
+            "功能用例完成": "否",
+            "性能设计完成": "否",
+            "异常边界权限覆盖完成": "否",
+            "页面元素覆盖完成": "否",
+            "产品版图已更新": "否",
+            "覆盖质量自检": "未通过",
+            "导入文件已生成": "否",
+            "最小标题路径": leaf_path,
+            "下一步动作": "开始页面实探并补充 page-discovery.csv",
+        },
+    )
+    write_single_csv_row(
+        run_dir / "page-discovery.csv",
+        {
+            "批次ID": batch_id,
+            "一级模块": level1,
+            "二级菜单": level2,
+            "三级菜单/页面域": level3,
+            "最小标题路径": leaf_path,
+            "菜单路径/URL": leaf_path,
+            "发现方式": "浏览器实探/页面资料",
+            "是否已生成用例": "否",
+            "覆盖状态": "待确认",
+            "备注": "按当前批次页面实探结果补充页面、元素、取值、联动和关联用例",
+        },
+    )
+
+    init_note = (
+        "\n\n## 批次初始化\n"
+        f"- 产品/系统：{product}\n"
+        f"- 模块路径：{leaf_path}\n"
+        f"- 批次ID：{batch_id}\n"
+        "- 执行要求：先补全 page-discovery.csv，再生成测试设计、导入文件和 batch-status.csv 覆盖数据。\n"
+    )
+    for markdown_name in ["batch-plan.md", "batch-review.md"]:
+        markdown_path = run_dir / markdown_name
+        text = markdown_path.read_text(encoding="utf-8-sig")
+        if "## 批次初始化" not in text:
+            markdown_path.write_text(text.rstrip() + init_note, encoding="utf-8")
+
+    print(f"Initialized batch run: {run_dir}")
+    return run_dir
+
+
 def split_module_parts(module_path: str, product_name: str | None = None) -> tuple[str, list[str]]:
     parts = [part.strip() for part in module_path.replace("/", ">").split(">") if part.strip()]
     if product_name:
@@ -625,6 +740,13 @@ def main() -> int:
     style.add_argument("--workbook", required=True, type=Path)
     style.add_argument("--output", type=Path)
 
+    init = sub.add_parser("init-batch-run", help="Create a standard batch-run ledger from templates before page discovery.")
+    init.add_argument("--project-root", required=True, type=Path)
+    init.add_argument("--run-id", required=True)
+    init.add_argument("--module-path", required=True)
+    init.add_argument("--batch-id", default="BATCH-001")
+    init.add_argument("--product-name")
+
     finalize = sub.add_parser("finalize-deliverables", help="Copy validated workbooks to current/deliverables/internal archives and update batch-status paths.")
     finalize.add_argument("--project-root", required=True, type=Path)
     finalize.add_argument("--formal-workbook", required=True, type=Path)
@@ -649,7 +771,14 @@ def main() -> int:
         generate_import_workbook(args.formal_workbook, args.import_template, args.output, args.module_path)
     elif args.command == "fix-formal-styles":
         apply_formal_workbook_styles(args.workbook, args.output)
+    elif args.command == "init-batch-run":
+        init_batch_run(args.project_root, args.run_id, args.module_path, args.batch_id, args.product_name)
     elif args.command == "finalize-deliverables":
+        if args.page_discovery and not args.batch_status:
+            raise SystemExit(
+                "ERROR: --batch-status is required when --page-discovery is provided. "
+                "Run init-batch-run first and keep batch-plan.md, batch-status.csv, batch-review.md, and page-discovery.csv together."
+            )
         finalize_deliverables(
             args.project_root,
             args.formal_workbook,

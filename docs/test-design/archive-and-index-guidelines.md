@@ -84,7 +84,7 @@ docs/test-assets/product-map.xlsx
 - 每批预计交付物和回存路径
 - 跨模块汇总方式和待确认问题
 
-当范围超过一个最小标题时，必须在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本。账本必须包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`，并优先基于 `docs/test-assets/batch-runs/templates/` 复制生成。`batch-plan.md` 承载分批设计计划，`batch-status.csv` 承载每批状态、最小标题路径、覆盖数量、用例数量和覆盖质量自检，`page-discovery.csv` 承载页面实探证据并记录最小标题路径，`batch-review.md` 承载最终汇总、跨模块汇总、回归范围、风险与待确认问题，`artifacts/` 保存页面遍历笔记、截图或中间核对材料。
+当范围超过一个最小标题时，必须在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本。只要发生页面实探或生成 `page-discovery.csv`，即使当前任务只有一个最小标题路径，也必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录。账本必须包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`，并优先基于 `docs/test-assets/batch-runs/templates/` 复制生成。`batch-plan.md` 承载分批设计计划，`batch-status.csv` 承载每批状态、最小标题路径、覆盖数量、用例数量和覆盖质量自检，`page-discovery.csv` 承载页面实探证据并记录最小标题路径，`batch-review.md` 承载最终汇总、跨模块汇总、回归范围、风险与待确认问题，`artifacts/` 保存页面遍历笔记、截图或中间核对材料。
 
 `batch-status.csv` 和 `page-discovery.csv` 必须复制标准模板或保持与模板完全一致的表头，禁止自定义精简表头、增删列或在末尾追加汇总行。`page-discovery.csv` 必须使用 CSV writer 或等价结构化写入方式生成，每一行列数必须与表头一致，避免页面元素、选项取值、联动变化、预期观察和关联用例 ID 字段错位。
 
@@ -137,7 +137,7 @@ docs/test-assets/product-map.xlsx
 5. 如果用户人工修改了测试设计，最终版必须回存内部资产库，并更新产品版图中的变更记录。
 6. 生成正式测试设计 Excel 后，必须运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务追加 `-BatchStatusPath <batch-status.csv>`，并强制读取同级 `page-discovery.csv` 与 `docs/test-assets/product-map.xlsx` 做产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的最小标题路径、页面元素、关联用例、用例资产索引和变更记录是否同步。
 
-批次交付收口优先使用 `scripts/test_design_excel_tools.py finalize-deliverables`。该命令负责复制正式测试设计到客户交付目录和 `docs/test-assets/modules/`，复制导入文件到客户交付目录和 `docs/test-assets/imports/`，回写 `batch-status.csv` 的归档路径与导入文件路径，并清理 artifacts/scripts 下的 `__pycache__`。传入 `--product-map` 和 `--page-discovery` 时会调用 `sync-product-map` 同步产品版图。不要手工维护多份 Excel 副本，以免 deliverables、imports、modules 与批次账本不一致。
+批次交付收口优先使用 `scripts/test_design_excel_tools.py finalize-deliverables`。该命令负责复制正式测试设计到客户交付目录和 `docs/test-assets/modules/`，复制导入文件到客户交付目录和 `docs/test-assets/imports/`，回写 `batch-status.csv` 的归档路径与导入文件路径，并清理 artifacts/scripts 下的 `__pycache__`。传入 `--page-discovery` 时必须同时传入 `--batch-status`；传入 `--product-map` 和 `--page-discovery` 时会调用 `sync-product-map` 同步产品版图。不要手工维护多份 Excel 副本，以免 deliverables、imports、modules 与批次账本不一致。
 
 ## 跨模块用例管理
 

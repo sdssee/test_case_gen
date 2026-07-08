@@ -332,7 +332,7 @@
 
 正式测试设计、导入文件和产品版图中的 Excel 表格对象、自动筛选范围和实际数据区域必须一致；不得出现打开文件时 Microsoft Excel 提示修复、表格对象仍停留在模板前三行、自动筛选范围未覆盖新增行等问题。使用 `scripts/test_design_excel_tools.py generate-import` 或 `fix-formal-styles` 时，工具必须同步调整表格对象范围。
 
-批次交付收口必须优先使用 `scripts/test_design_excel_tools.py finalize-deliverables`，一次性复制正式测试设计到 `docs/test-design/current/`、`docs/test-design/deliverables/` 和 `docs/test-assets/modules/`，复制导入文件到 `docs/test-design/deliverables/` 和 `docs/test-assets/imports/`，并回写 `batch-status.csv` 的 `归档路径`、`导入文件路径`、`导入文件已生成`，同时清理 artifacts/scripts 下的 `__pycache__`。传入 `--product-map` 和 `--page-discovery` 时，工具会同步执行 `sync-product-map`，减少手写同步脚本。
+批次交付收口必须优先使用 `scripts/test_design_excel_tools.py finalize-deliverables`，一次性复制正式测试设计到 `docs/test-design/current/`、`docs/test-design/deliverables/` 和 `docs/test-assets/modules/`，复制导入文件到 `docs/test-design/deliverables/` 和 `docs/test-assets/imports/`，并回写 `batch-status.csv` 的 `归档路径`、`导入文件路径`、`导入文件已生成`，同时清理 artifacts/scripts 下的 `__pycache__`。传入 `--page-discovery` 时必须同时传入 `--batch-status`；传入 `--product-map` 和 `--page-discovery` 时，工具会同步执行 `sync-product-map`，减少手写同步脚本。
 
 交付件不得残留 `{NAV}`、`{NL}`、`{Q}`、`{E}`、`${...}`、`{{...}}`、`TODO`、`TBD` 等模板占位符或未完成标记。当前批次各 Sheet 的内容必须与最小标题路径一致，不得残留其他模块的模板内容、示例内容或无效用例 ID 引用。
 
@@ -343,7 +343,7 @@
 
 如确需生成当前批次 Python 临时脚本，写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取，禁止手工拼接包含中文弯引号、智能引号或未转义双引号的字符串字面量。执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过语法编译和高风险引号扫描后才能执行。
 
-当范围超过一个最小标题时，必须在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本，包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`。该账本是内部执行状态，不作为默认客户交付件；生成正式 Excel 和导入文件时，应以 `batch-status.csv` 的最小标题路径、覆盖数量、用例数量和覆盖质量自检结果判断能否进入下一批或最终汇总。`batch-status.csv` 必须记录最小标题路径、页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数和数据一致性用例数、导入文件路径和导入文件已生成。
+当范围超过一个最小标题时，必须在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本，包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`。只要发生页面实探或生成 `page-discovery.csv`，即使当前任务只有一个最小标题路径，也必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录。该账本是内部执行状态，不作为默认客户交付件；生成正式 Excel 和导入文件时，应以 `batch-status.csv` 的最小标题路径、覆盖数量、用例数量和覆盖质量自检结果判断能否进入下一批或最终汇总。`batch-status.csv` 必须记录最小标题路径、页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数和数据一致性用例数、导入文件路径和导入文件已生成。
 
 截图、临时脚本、页面证据和过程材料只能写入当前任务的 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享的 `docs/test-assets/batch-runs/artifacts/` 根目录 artifacts。
 

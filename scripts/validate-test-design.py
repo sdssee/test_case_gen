@@ -908,6 +908,7 @@ def main() -> int:
         "batch-review.md",
         "page-discovery.csv",
         "artifacts/",
+        "init-batch-run",
         "导入文件路径",
         "导入文件已生成",
         "最小标题路径",
@@ -1069,6 +1070,7 @@ def main() -> int:
             "assert_transient_flow_closed",
             "validate_table_ranges",
             "validate_batch_artifacts_location",
+            "validate_batch_run_directory_from_page_discovery",
             "validate_batch_file_consistency",
             "validate_batch_plan",
             "MULTI_LEAF_SEPARATORS",
@@ -1084,8 +1086,10 @@ def main() -> int:
             "default_product_map_path",
             "--product-map",
             "--page-discovery",
+            "--batch-status",
             "page-discovery.csv",
             "product-map",
+            "generated workbook copies",
         ],
     )
     assert_contains(
@@ -1097,6 +1101,7 @@ def main() -> int:
         [
             "generate-import",
             "fix-formal-styles",
+            "init-batch-run",
             "finalize-deliverables",
             "sync-product-map",
             "header_map",
@@ -1108,6 +1113,7 @@ def main() -> int:
             "update_batch_status_paths",
             "sync_batch_markdown_paths",
             "cleanup_batch_artifacts",
+            "--batch-status is required when --page-discovery is provided",
             "sync_product_map",
         ],
     )

@@ -1104,6 +1104,36 @@ def validate_batch_artifacts_location(batch_status: Path) -> None:
         fail(f"Batch artifacts must not keep Python __pycache__ directories. Remove before delivery: {pycache_dir}")
 
 
+def validate_batch_run_directory_from_page_discovery(page_discovery: Path) -> Path:
+    run_dir = page_discovery.resolve().parent
+    required_entries = ["batch-plan.md", "batch-status.csv", "batch-review.md", "page-discovery.csv", "artifacts"]
+    missing = [name for name in required_entries if not (run_dir / name).exists()]
+    if missing:
+        fail(
+            "A batch run with page-discovery.csv must keep the full standard ledger "
+            f"beside it. Missing {missing} in {run_dir}. "
+            "Run scripts/test_design_excel_tools.py init-batch-run before page discovery."
+        )
+    batch_runs_dir = run_dir.parent
+    root_artifacts = batch_runs_dir / "artifacts"
+    if root_artifacts.exists() and any(root_artifacts.iterdir()):
+        fail(
+            "Batch artifacts must be stored under docs/test-assets/batch-runs/<task>/artifacts/, "
+            f"not the shared batch-runs/artifacts directory: {root_artifacts}"
+        )
+    scripts_dir = run_dir / "artifacts" / "scripts"
+    pycache_dir = scripts_dir / "__pycache__"
+    if pycache_dir.exists():
+        fail(f"Batch artifacts must not keep Python __pycache__ directories. Remove before delivery: {pycache_dir}")
+    stale_workbooks = sorted((run_dir / "artifacts").rglob("*.xlsx"))
+    if stale_workbooks:
+        fail(
+            "Batch artifacts must not keep generated workbook copies after finalize-deliverables. "
+            f"Use current/deliverables/modules/imports as the workbook destinations: {stale_workbooks[0]}"
+        )
+    return run_dir / "batch-status.csv"
+
+
 def is_relative_to_path(path: Path, parent: Path) -> bool:
     try:
         path.resolve().relative_to(parent.resolve())
@@ -1414,6 +1444,10 @@ def main() -> int:
         args.page_discovery = default_page_discovery_path(args.batch_status)
     if args.page_discovery and not args.product_map:
         args.product_map = default_product_map_path()
+    if args.page_discovery:
+        discovered_batch_status = validate_batch_run_directory_from_page_discovery(args.page_discovery)
+        if not args.batch_status:
+            args.batch_status = discovered_batch_status
 
     workbook_data = validate_workbook(args.workbook)
     batch_rows = None

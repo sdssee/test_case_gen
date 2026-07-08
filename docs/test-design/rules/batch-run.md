@@ -19,6 +19,7 @@
 - `artifacts/`
 
 必须优先复制 `docs/test-assets/batch-runs/templates/` 中的模板。
+只要发生页面实探或生成 `page-discovery.csv`，即使当前任务只有一个最小标题路径，也必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录，禁止临时手写旧版 `page-discovery.csv` 表头或跳过 `batch-status.csv`。
 所有截图、临时脚本、页面证据和过程材料必须保存到当前任务目录的 `docs/test-assets/batch-runs/<task>/artifacts/` 下，禁止写入共享的 `docs/test-assets/batch-runs/artifacts/` 根目录 artifacts，避免不同任务证据混淆。
 
 ## 每批质量门禁
@@ -35,7 +36,7 @@
 
 当前批次覆盖质量自检通过后，才能进入下一批。所有批次完成后只做最终汇总、跨模块汇总、回归范围、风险清单和客户总览，不得重新生成各批完整用例。
 
-批次交付收口必须使用统一工具 `scripts/test_design_excel_tools.py finalize-deliverables` 或等价自动化流程完成，禁止手工在 `current/`、`deliverables/`、`docs/test-assets/modules/`、`docs/test-assets/imports/` 之间反复复制。`batch-status.csv` 中已通过批次的 `归档路径` 必须指向 `docs/test-assets/modules/` 下的内部模块归档，`导入文件路径` 必须指向 `docs/test-assets/imports/` 下的导入归档。需要同步产品版图时传入 `--product-map` 和 `--page-discovery`，由工具调用 `sync-product-map`。
+批次交付收口必须使用统一工具 `scripts/test_design_excel_tools.py finalize-deliverables` 或等价自动化流程完成，禁止手工在 `current/`、`deliverables/`、`docs/test-assets/modules/`、`docs/test-assets/imports/` 之间反复复制。`batch-status.csv` 中已通过批次的 `归档路径` 必须指向 `docs/test-assets/modules/` 下的内部模块归档，`导入文件路径` 必须指向 `docs/test-assets/imports/` 下的导入归档。需要同步产品版图时传入 `--product-map`、`--page-discovery` 和 `--batch-status`，由工具调用 `sync-product-map`。
 
 ## 文件格式门禁
 

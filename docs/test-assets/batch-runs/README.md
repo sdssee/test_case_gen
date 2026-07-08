@@ -15,6 +15,8 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/
   artifacts/
 ```
 
+只要发生页面实探或生成 `page-discovery.csv`，即使当前任务只有一个最小标题路径，也必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录，禁止临时手写旧版 `page-discovery.csv` 表头或跳过 `batch-status.csv`。
+
 ## 文件职责
 
 - `batch-plan.md`：记录菜单轮廓、页面清单、功能地图、拆分维度、依赖批次和预计交付物。

@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import shutil
-from copy import copy
+from copy import copy, deepcopy
 from datetime import date
 from pathlib import Path
 
@@ -72,6 +72,63 @@ def copy_row_style(ws, source_row: int, target_row: int) -> None:
         if source_cell.alignment:
             target_cell.alignment = copy(source_cell.alignment)
     ws.row_dimensions[target_row].height = ws.row_dimensions[source_row].height
+
+
+def copy_cell_format(source_cell, target_cell) -> None:
+    if source_cell.has_style:
+        target_cell._style = copy(source_cell._style)
+    if source_cell.number_format:
+        target_cell.number_format = source_cell.number_format
+    if source_cell.alignment:
+        target_cell.alignment = copy(source_cell.alignment)
+    if source_cell.protection:
+        target_cell.protection = copy(source_cell.protection)
+
+
+def copy_template_row_format(template_ws, target_ws, template_row: int, target_row: int) -> None:
+    max_col = min(target_ws.max_column, template_ws.max_column)
+    for column in range(1, max_col + 1):
+        copy_cell_format(template_ws.cell(row=template_row, column=column), target_ws.cell(row=target_row, column=column))
+    target_ws.row_dimensions[target_row].height = template_ws.row_dimensions[template_row].height
+
+
+def copy_column_dimensions(template_ws, target_ws) -> None:
+    for key, dimension in template_ws.column_dimensions.items():
+        target_dimension = target_ws.column_dimensions[key]
+        target_dimension.width = dimension.width
+        target_dimension.hidden = dimension.hidden
+        target_dimension.bestFit = dimension.bestFit
+
+
+def extend_validation_ranges(ws, max_row: int) -> None:
+    if max_row < 2:
+        return
+    for validation in ws.data_validations.dataValidation:
+        ranges: list[str] = []
+        for cell_range in validation.sqref.ranges:
+            min_col, min_row, max_col, old_max_row = range_boundaries(str(cell_range))
+            if min_row <= 2 <= old_max_row:
+                old_max_row = max(old_max_row, max_row)
+            ranges.append(
+                f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{old_max_row}"
+            )
+        validation.sqref = " ".join(ranges)
+
+
+def apply_template_sheet_format(template_ws, target_ws) -> None:
+    copy_column_dimensions(template_ws, target_ws)
+    if target_ws.max_row >= 2 and template_ws.max_row >= 2:
+        for row_index in range(2, target_ws.max_row + 1):
+            copy_template_row_format(template_ws, target_ws, 2, row_index)
+    target_ws.data_validations = deepcopy(template_ws.data_validations)
+    extend_validation_ranges(target_ws, max(target_ws.max_row, 200))
+
+
+def apply_template_workbook_format(target_wb, template_wb) -> None:
+    for sheet_name in target_wb.sheetnames:
+        if sheet_name not in template_wb.sheetnames:
+            continue
+        apply_template_sheet_format(template_wb[sheet_name], target_wb[sheet_name])
 
 
 def set_wrap(ws, headers: dict[str, int], row_index: int, field_names: list[str]) -> None:
@@ -704,16 +761,25 @@ def generate_import_workbook(formal_workbook: Path, import_template: Path, outpu
         import_ws.row_dimensions[write_row].height = max(import_ws.row_dimensions[write_row].height or 18, 60)
         write_row += 1
 
+    template_wb = load_workbook(import_template)
+    apply_template_workbook_format(import_wb, template_wb)
+    for row_index in range(2, import_ws.max_row + 1):
+        set_wrap(import_ws, import_headers, row_index, IMPORT_MULTILINE_FIELDS)
+        import_ws.row_dimensions[row_index].height = max(import_ws.row_dimensions[row_index].height or 18, 60)
     resize_workbook_tables(import_wb)
     import_wb.save(output)
 
 
-def apply_formal_workbook_styles(workbook: Path, output: Path | None = None) -> None:
+def apply_formal_workbook_styles(workbook: Path, output: Path | None = None, template: Path | None = None) -> None:
     target = output or workbook
     if output:
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(workbook, output)
     wb = load_workbook(target)
+    template_path = template or (Path(__file__).resolve().parents[1] / "docs" / "test-design" / "codebuddy-test-design-template.xlsx")
+    if template_path.exists():
+        template_wb = load_workbook(template_path)
+        apply_template_workbook_format(wb, template_wb)
     for sheet_name, fields in FORMAL_MULTILINE_FIELDS.items():
         if sheet_name not in wb.sheetnames:
             continue
@@ -739,6 +805,7 @@ def main() -> int:
     style = sub.add_parser("fix-formal-styles", help="Apply required multiline wrapping styles to a formal workbook.")
     style.add_argument("--workbook", required=True, type=Path)
     style.add_argument("--output", type=Path)
+    style.add_argument("--template", type=Path)
 
     init = sub.add_parser("init-batch-run", help="Create a standard batch-run ledger from templates before page discovery.")
     init.add_argument("--project-root", required=True, type=Path)
@@ -770,7 +837,7 @@ def main() -> int:
     if args.command == "generate-import":
         generate_import_workbook(args.formal_workbook, args.import_template, args.output, args.module_path)
     elif args.command == "fix-formal-styles":
-        apply_formal_workbook_styles(args.workbook, args.output)
+        apply_formal_workbook_styles(args.workbook, args.output, args.template)
     elif args.command == "init-batch-run":
         init_batch_run(args.project_root, args.run_id, args.module_path, args.batch_id, args.product_name)
     elif args.command == "finalize-deliverables":

@@ -377,6 +377,29 @@ def column_index(cell_ref: str) -> int:
     return value - 1
 
 
+def column_number(cell_ref: str) -> int:
+    return column_index(cell_ref) + 1
+
+
+def parse_a1_cell(cell_ref: str) -> tuple[int, int]:
+    cleaned = cell_ref.replace("$", "")
+    match = re.match(r"([A-Z]+)(\d+)$", cleaned)
+    if not match:
+        return 0, 0
+    return column_number(match.group(1)), int(match.group(2))
+
+
+def parse_a1_range(range_text: str) -> tuple[int, int, int, int]:
+    cleaned = range_text.replace("$", "")
+    if ":" in cleaned:
+        start, end = cleaned.split(":", 1)
+    else:
+        start = end = cleaned
+    min_col, min_row = parse_a1_cell(start)
+    max_col, max_row = parse_a1_cell(end)
+    return min_col, min_row, max_col, max_row
+
+
 def workbook_sheet_paths(zf: zipfile.ZipFile) -> dict[str, str]:
     workbook = ET.fromstring(zf.read("xl/workbook.xml"))
     rels = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
@@ -579,6 +602,61 @@ def assert_multiline_cells_wrapped(path: Path, sheet_name: str, field_names: lis
                 fail(f"{sheet_name} {cell_ref} contains multiline text but wrapText is not enabled for field {field}")
 
 
+def assert_data_rows_follow_sample_styles(path: Path, sheet_names: list[str] | None = None) -> None:
+    with zipfile.ZipFile(path) as zf:
+        available_sheets = workbook_sheet_paths(zf)
+    target_sheets = sheet_names or list(available_sheets)
+    for sheet_name in target_sheets:
+        rows = sheet_cell_rows(path, sheet_name)
+        if len(rows) <= 2:
+            continue
+        sample_styles = {index: cell[2] for index, cell in enumerate(rows[1])}
+        for row_number, row in enumerate(rows[2:], start=3):
+            if not any(value for _, value, _ in row):
+                continue
+            for index, (_, _, style_id) in enumerate(row):
+                expected = sample_styles.get(index)
+                if expected is None:
+                    continue
+                if style_id != expected:
+                    fail(
+                        f"{sheet_name} row {row_number} column {index + 1} style must match template sample row 2. "
+                        "Only cell content should change; borders, fills, fonts, number formats, and alignment must be preserved."
+                    )
+
+
+def range_covers_column_row(range_text: str, column: int, row: int) -> bool:
+    for part in range_text.split():
+        min_col, min_row, max_col, max_row = parse_a1_range(part)
+        if min_col <= column <= max_col and min_row <= row <= max_row:
+            return True
+    return False
+
+
+def assert_dropdown_validations_cover_rows(path: Path, sheet_name: str, field_names: list[str], last_row: int) -> None:
+    if last_row < 2:
+        return
+    rows = sheet_cell_rows(path, sheet_name)
+    if not rows:
+        return
+    headers = [cell[1] for cell in rows[0]]
+    header_index = {header: index + 1 for index, header in enumerate(headers) if header}
+    target_columns = {field: header_index[field] for field in field_names if field in header_index}
+    if not target_columns:
+        return
+    with zipfile.ZipFile(path) as zf:
+        sheet_paths = workbook_sheet_paths(zf)
+        root = ET.fromstring(zf.read(sheet_paths[sheet_name]))
+    validations = root.findall(".//x:dataValidations/x:dataValidation", NS)
+    for field, column in target_columns.items():
+        if not any(
+            validation.attrib.get("type") == "list"
+            and range_covers_column_row(validation.attrib.get("sqref", ""), column, last_row)
+            for validation in validations
+        ):
+            fail(f"{sheet_name} field {field} dropdown validation must cover row {last_row}")
+
+
 def assert_no_residual_markers(path: Path, sheet_names: list[str] | None = None) -> None:
     with zipfile.ZipFile(path) as zf:
         available_sheets = workbook_sheet_paths(zf)
@@ -608,6 +686,7 @@ def assert_no_sensitive_values(path: Path, sheet_names: list[str] | None = None)
 
 
 def validate_formal_workbook_styles(workbook: Path) -> None:
+    assert_data_rows_follow_sample_styles(workbook, EXPECTED_SHEETS)
     for sheet_name, fields in FORMAL_MULTILINE_FIELDS.items():
         assert_multiline_cells_wrapped(workbook, sheet_name, fields)
 
@@ -865,6 +944,7 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
     assert_no_residual_markers(import_workbook)
     assert_no_sensitive_values(import_workbook)
     validate_table_ranges(import_workbook)
+    assert_data_rows_follow_sample_styles(import_workbook)
     first_sheet_name = ""
     with zipfile.ZipFile(import_workbook) as zf:
         sheet_paths = workbook_sheet_paths(zf)
@@ -874,6 +954,12 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
     rows = row_dicts(rows_raw, "测试系统导入文件")
     if not rows:
         fail("Import workbook must contain mapped test cases")
+    assert_dropdown_validations_cover_rows(
+        import_workbook,
+        first_sheet_name,
+        list(IMPORT_ALLOWED_VALUES),
+        len(rows) + 1,
+    )
 
     case_titles = workbook_data["case_titles"]
     assert isinstance(case_titles, dict)

@@ -54,6 +54,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 批次截图、临时脚本和证据必须放在当前任务 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享根目录 artifacts。
 - 批次交付收口优先使用 `scripts/test_design_excel_tools.py finalize-deliverables`，同步 current、deliverables、modules、imports 和 `batch-status.csv` 路径；传入 `--page-discovery` 时必须同时传入 `--batch-status`。
 - 导入文件 `执行方式` 默认 `手动`；只有已有可运行、可维护并覆盖主要校验点的自动化资产且本次明确关联时，才允许 `自动化`。
+- 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。
 - 正式交付件、导入文件、批次账本、页面实探记录和产品版图不得保留真实环境 URL/IP、真实账号、真实密钥、Token、密码或敏感数据，必须使用 `<product_login_url>` 等占位符。
 
 ## 生成后校验

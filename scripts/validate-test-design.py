@@ -1073,6 +1073,8 @@ def main() -> int:
             "validate_batch_run_directory_from_page_discovery",
             "validate_batch_file_consistency",
             "validate_batch_plan",
+            "assert_data_rows_follow_sample_styles",
+            "assert_dropdown_validations_cover_rows",
             "MULTI_LEAF_SEPARATORS",
             "BATCH_EXPECTED_HEADERS",
             "PAGE_DISCOVERY_EXPECTED_HEADERS",
@@ -1114,6 +1116,8 @@ def main() -> int:
             "sync_batch_markdown_paths",
             "cleanup_batch_artifacts",
             "--batch-status is required when --page-discovery is provided",
+            "apply_template_workbook_format",
+            "extend_validation_ranges",
             "sync_product_map",
         ],
     )

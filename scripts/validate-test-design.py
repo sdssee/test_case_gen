@@ -322,6 +322,7 @@ def main() -> int:
         rules_dir / "import-template.md",
         rules_dir / "product-map-sync.md",
         rules_dir / "data-safety.md",
+        rules_dir / "dfx-test-strategy.md",
     ]
     lightweight_entries = [
         repo_root / "AGENTS.md",
@@ -1049,7 +1050,11 @@ def main() -> int:
         assert_contains(path, operation_navigation_markers)
 
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "data-safety.md", ["<product_login_url>", "环境地址"])
-    assert_contains(repo_root / "docs" / "test-design" / "rules" / "case-design.md", ["闭环", "取消或关闭"])
+    assert_contains(repo_root / "docs" / "test-design" / "rules" / "case-design.md", ["闭环", "取消或关闭", "DFX 测试策略落地"])
+    assert_contains(
+        repo_root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
+        ["DFX 12", "DFT", "DFP", "DFI", "DFC", "DFS", "DFR", "DFM", "DFU", "DFD", "DFO", "DFB", "压力极限"],
+    )
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "excel-deliverable.md", ["表格对象", "修复提示"])
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "batch-run.md", ["batch-runs/<task>/artifacts", "根目录 artifacts"])
     assert_contains(

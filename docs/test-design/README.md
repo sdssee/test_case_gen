@@ -6,6 +6,7 @@
 - `测试用例模板.xlsx`：测试系统导出的导入模板参考文件。
 - `excel-template-spec.md`：模板字段说明。
 - `test-system-field-reference.md`：测试系统字段解释、必填/自动生成/下拉字段说明，已替代原 1.jpg、2.jpg、3.jpg 截图。
+- `rules/dfx-test-strategy.md`：DFX 12 维度 × 4 场景测试策略矩阵，用于规范异常、边界、性能、安全、可靠性等用例设计。
 - `archive-and-index-guidelines.md`：测试资产归档、模块能力索引和跨模块依赖维护规范。
 - `current/`：当前任务客户交付件目录。
 - `deliverables/`：已交付给客户或测试系统的文件副本目录。

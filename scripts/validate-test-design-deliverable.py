@@ -253,6 +253,49 @@ PAGE_DISCOVERY_EXPECTED_HEADERS = [
     "备注",
 ]
 
+ELEMENT_CASE_PLAN_EXPECTED_HEADERS = [
+    "批次ID",
+    "最小标题路径",
+    "页面/入口",
+    "功能点",
+    "元素名称/文案",
+    "元素类型",
+    "交互方式",
+    "业务路径",
+    "数据状态",
+    "适用DFX维度",
+    "适用DFX场景",
+    "测试设计方向",
+    "应生成用例数",
+    "计划用例ID",
+    "实际用例ID",
+    "是否必须真实执行",
+    "是否涉及配置生效",
+    "是否涉及CRUD闭环",
+    "未生成原因",
+    "备注",
+]
+
+TEST_DATA_LIFECYCLE_EXPECTED_HEADERS = [
+    "批次ID",
+    "最小标题路径",
+    "测试数据ID/名称",
+    "数据类型",
+    "创建入口",
+    "创建步骤关联用例",
+    "创建结果",
+    "查看结果",
+    "编辑前值",
+    "编辑后值",
+    "编辑结果",
+    "配置生效验证点",
+    "删除取消结果",
+    "删除确认结果",
+    "清理状态",
+    "保留原因",
+    "备注",
+]
+
 PRODUCT_MAP_PAGE_ELEMENT_HEADERS = [
     "产品/系统",
     "模块",
@@ -1039,6 +1082,7 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
         assert_complete_operation_steps(row.get("操作步骤", ""), f"功能测试用例 row {index} 操作步骤")
         assert_numbered(row.get("预期结果", ""), f"功能测试用例 row {index} 预期结果")
         assert_mutation_case_evidence(row, f"功能测试用例 row {index}")
+        assert_pagination_jump_has_data(row, f"功能测试用例 row {index}")
         assert_transient_flow_closed(
             row.get("操作步骤", ""),
             row.get("预期结果", ""),
@@ -1107,6 +1151,7 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
         "case_titles": case_titles,
         "case_function_points": case_function_points,
         "function_case_count": len(function_rows),
+        "function_rows": function_rows,
         "coverage_rows": coverage_rows,
     }
 
@@ -1313,6 +1358,36 @@ def assert_mutating_discovery_evidence(row: dict[str, str], index: int, page: st
         fail(f"page-discovery.csv row {index} mutating operation must record current test data marker/source: {page} / {element}")
 
 
+def is_template_or_empty_row(row: dict[str, str]) -> bool:
+    combined = "".join(row.values())
+    if not combined:
+        return True
+    return any(marker in combined for marker in ["补充页面元素", "补充本次创建", "待确认"])
+
+
+def has_configuration_effective_evidence(row: dict[str, str]) -> bool:
+    combined = "\n".join(
+        [
+            row.get("测试数据", ""),
+            row.get("操作步骤", ""),
+            row.get("预期结果", ""),
+            row.get("备注", ""),
+        ]
+    )
+    return any(
+        marker in combined
+        for marker in ["回显", "生效", "重新打开", "详情", "测试Agent", "测试连接", "预览", "调用", "关联", "下游", "工作流"]
+    )
+
+
+def assert_pagination_jump_has_data(row: dict[str, str], label: str) -> None:
+    combined = "\n".join([row.get("测试数据", ""), row.get("操作步骤", ""), row.get("预期结果", "")])
+    if not any(marker in combined for marker in ["第2页", "第 2 页", "输入2", "输入 2", "跳至页码", "页码输入"]):
+        return
+    if not any(marker in combined for marker in ["超过一页", "多页", "大于1页", "大于 1 页", "超过10条", "超过 10 条", "造数", "准备超过"]):
+        fail(f"{label} jumps to page 2 but does not declare multi-page test data preparation")
+
+
 def validate_batch_granularity(row: dict[str, str], numbers: dict[str, int]) -> None:
     batch_id = row.get("批次ID", "")
     leaf_path = row.get("最小标题路径", "").strip()
@@ -1432,7 +1507,15 @@ def validate_batch_artifacts_location(batch_status: Path) -> None:
 
 def validate_batch_run_directory_from_page_discovery(page_discovery: Path) -> Path:
     run_dir = page_discovery.resolve().parent
-    required_entries = ["batch-plan.md", "batch-status.csv", "batch-review.md", "page-discovery.csv", "artifacts"]
+    required_entries = [
+        "batch-plan.md",
+        "batch-status.csv",
+        "batch-review.md",
+        "page-discovery.csv",
+        "element-case-plan.csv",
+        "test-data-lifecycle.csv",
+        "artifacts",
+    ]
     missing = [name for name in required_entries if not (run_dir / name).exists()]
     if missing:
         fail(
@@ -1553,6 +1636,156 @@ def validate_batch_plan(batch_status: Path, batch_rows: list[dict[str, str]]) ->
             )
 
 
+def validate_sheet_split_artifacts(run_dir: Path) -> None:
+    data_dir = run_dir / "artifacts" / "data"
+    scripts_dir = run_dir / "artifacts" / "scripts"
+    if not data_dir.exists():
+        fail(f"artifacts/data directory is required for sheet-split generation: {data_dir}")
+    required_data_files = [
+        "overview.json",
+        "requirements.json",
+        "scenarios.json",
+        "performance.json",
+        "risks.json",
+        "automation.json",
+        "page_elements.json",
+    ]
+    missing_data = [name for name in required_data_files if not (data_dir / name).exists()]
+    if missing_data:
+        fail(f"artifacts/data is missing sheet-split data files: {missing_data}")
+    function_parts = sorted(data_dir.glob("function_cases_part_*.json"))
+    if not function_parts:
+        fail("artifacts/data must contain function_cases_part_*.json files")
+    for part in function_parts:
+        try:
+            import json
+
+            data = json.loads(part.read_text(encoding="utf-8-sig"))
+        except Exception as exc:
+            fail(f"{part} must be valid JSON: {exc}")
+        cases = data.get("cases") if isinstance(data, dict) else data
+        if not isinstance(cases, list):
+            fail(f"{part} must contain a list or an object with cases list")
+        if len(cases) > 10:
+            fail(f"{part} contains more than 10 function cases: {len(cases)}")
+    if scripts_dir.exists():
+        if not any((scripts_dir / name).exists() for name in ["assemble_workbook.py", "build_function_cases.py"]):
+            fail("artifacts/scripts must include assemble_workbook.py or build_function_cases.py for sheet-split generation")
+
+
+def validate_element_case_plan_and_lifecycle(
+    run_dir: Path,
+    discovery_rows: list[dict[str, str]],
+    case_ids: set[str],
+    case_rows: list[dict[str, str]],
+) -> None:
+    plan_path = run_dir / "element-case-plan.csv"
+    lifecycle_path = run_dir / "test-data-lifecycle.csv"
+    plan_rows_all = csv_rows_with_exact_header(plan_path, ELEMENT_CASE_PLAN_EXPECTED_HEADERS, "element-case-plan.csv")
+    lifecycle_rows_all = csv_rows_with_exact_header(
+        lifecycle_path,
+        TEST_DATA_LIFECYCLE_EXPECTED_HEADERS,
+        "test-data-lifecycle.csv",
+    )
+    assert_no_sensitive_csv_values(plan_rows_all, "element-case-plan.csv")
+    assert_no_sensitive_csv_values(lifecycle_rows_all, "test-data-lifecycle.csv")
+    plan_rows = [row for row in plan_rows_all if not is_template_or_empty_row(row)]
+    lifecycle_rows = [row for row in lifecycle_rows_all if not is_template_or_empty_row(row)]
+    if not plan_rows:
+        fail("element-case-plan.csv must contain real element-to-case planning rows")
+
+    plan_keys = {
+        normalized_key(row.get("页面/入口", ""), row.get("元素名称/文案", ""))
+        for row in plan_rows
+        if row.get("页面/入口") and row.get("元素名称/文案")
+    }
+    generated_discovery_keys = {
+        normalized_key(row.get("页面/入口", ""), row.get("元素名称/文案", ""))
+        for row in discovery_rows
+        if row.get("是否已生成用例") == "是" and row.get("页面/入口") and row.get("元素名称/文案")
+    }
+    missing_plan = sorted(generated_discovery_keys - plan_keys)
+    if missing_plan:
+        fail(f"element-case-plan.csv is missing generated page elements: {missing_plan[:10]}")
+
+    all_actual_ids: set[str] = set()
+    configuration_case_ids: set[str] = set()
+    lifecycle_required_ids: set[str] = set()
+    for index, row in enumerate(plan_rows, start=2):
+        batch_id = row.get("批次ID", "")
+        if not row.get("最小标题路径"):
+            fail(f"element-case-plan.csv row {index} must include 最小标题路径")
+        if not row.get("功能点") or not row.get("元素名称/文案"):
+            fail(f"element-case-plan.csv row {index} must include 功能点 and 元素名称/文案")
+        assert_dfx_mapping(row.get("适用DFX维度", ""), row.get("适用DFX场景", ""), f"element-case-plan.csv row {index}")
+        expected_raw = row.get("应生成用例数", "")
+        if not re.fullmatch(r"\d+", expected_raw or ""):
+            fail(f"element-case-plan.csv row {index} 应生成用例数 must be a non-negative integer")
+        expected_count = int(expected_raw)
+        actual_ids = parse_ids(row.get("实际用例ID", ""))
+        planned_ids = parse_ids(row.get("计划用例ID", ""))
+        if expected_count > 0 and not (actual_ids or row.get("未生成原因")):
+            fail(f"element-case-plan.csv row {index} expects cases but has neither 实际用例ID nor 未生成原因")
+        if actual_ids:
+            unknown = sorted(actual_ids - case_ids)
+            if unknown:
+                fail(f"element-case-plan.csv row {index} references unknown 实际用例ID: {unknown}")
+            if planned_ids and not actual_ids <= planned_ids:
+                fail(f"element-case-plan.csv row {index} 实际用例ID must be included in 计划用例ID when planned IDs are filled")
+            all_actual_ids.update(actual_ids)
+        if row.get("是否涉及配置生效") == "是":
+            configuration_case_ids.update(actual_ids)
+        if row.get("是否涉及CRUD闭环") == "是":
+            lifecycle_required_ids.update(actual_ids)
+        if expected_count > 0 and len(actual_ids) < expected_count and not row.get("未生成原因"):
+            fail(
+                f"element-case-plan.csv row {index} generated fewer cases than 应生成用例数 without 未生成原因: "
+                f"{len(actual_ids)} < {expected_count}"
+            )
+
+    missing_from_plan = sorted(case_ids - all_actual_ids)
+    if missing_from_plan:
+        fail(f"功能测试用例 contains case IDs missing from element-case-plan.csv 实际用例ID: {missing_from_plan[:10]}")
+
+    case_by_id = {row.get("用例 ID", ""): row for row in case_rows if row.get("用例 ID")}
+    for case_id in sorted(configuration_case_ids):
+        row = case_by_id.get(case_id)
+        if row and not has_configuration_effective_evidence(row):
+            fail(f"Configuration-related case {case_id} must verify saved echo/effective behavior")
+
+    lifecycle_case_ids: set[str] = set()
+    lifecycle_names: list[str] = []
+    for index, row in enumerate(lifecycle_rows, start=2):
+        name = row.get("测试数据ID/名称", "")
+        if not name:
+            fail(f"test-data-lifecycle.csv row {index} must include 测试数据ID/名称")
+        lifecycle_names.append(name)
+        if not contains_any_marker(" ".join(row.values()), MUTATING_TEST_DATA_MARKERS):
+            fail(f"test-data-lifecycle.csv row {index} must use AI_TEST/CODEX_TEST or user-provided test data marker")
+        lifecycle_case_ids.update(parse_ids(row.get("创建步骤关联用例", "")))
+        if row.get("配置生效验证点") and not any(marker in row.get("配置生效验证点", "") for marker in ["回显", "生效", "测试", "调用", "预览", "关联"]):
+            fail(f"test-data-lifecycle.csv row {index} 配置生效验证点 must describe echo/effective verification")
+
+    mutation_case_ids = {
+        row.get("用例 ID", "")
+        for row in case_rows
+        if row.get("用例 ID")
+        and contains_any_marker(
+            "\n".join([row.get("测试数据", ""), row.get("操作步骤", ""), row.get("预期结果", ""), row.get("备注", "")]),
+            MUTATION_COMMIT_MARKERS,
+        )
+        and contains_any_marker(
+            "\n".join([row.get("测试数据", ""), row.get("操作步骤", ""), row.get("预期结果", ""), row.get("备注", "")]),
+            MUTATING_TEST_DATA_MARKERS,
+        )
+    }
+    if mutation_case_ids and not lifecycle_rows:
+        fail("test-data-lifecycle.csv must contain rows when function cases create/edit/delete test data")
+    missing_lifecycle = sorted((mutation_case_ids | lifecycle_required_ids) - lifecycle_case_ids)
+    if missing_lifecycle:
+        fail(f"test-data-lifecycle.csv is missing lifecycle linkage for mutation/config cases: {missing_lifecycle[:10]}")
+
+
 def validate_product_map_sync(
     workbook_data: dict[str, object],
     product_map: Path,
@@ -1613,11 +1846,16 @@ def validate_product_map_sync(
     case_titles = workbook_data["case_titles"]
     case_function_points = workbook_data["case_function_points"]
     function_case_count = workbook_data["function_case_count"]
+    function_rows = workbook_data["function_rows"]
     assert isinstance(coverage_rows, list)
     assert isinstance(case_ids, set)
     assert isinstance(case_titles, dict)
     assert isinstance(case_function_points, dict)
     assert isinstance(function_case_count, int)
+    assert isinstance(function_rows, list)
+    run_dir = page_discovery.resolve().parent
+    validate_sheet_split_artifacts(run_dir)
+    validate_element_case_plan_and_lifecycle(run_dir, discovery_rows, case_ids, function_rows)
 
     workbook_elements = {
         normalized_key(row.get("页面/入口", ""), row.get("元素名称/文案", ""))

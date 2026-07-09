@@ -579,12 +579,16 @@ def main() -> int:
     batch_status_template = batch_templates_dir / "batch-status-template.csv"
     batch_review_template = batch_templates_dir / "batch-review-template.md"
     page_discovery_template = batch_templates_dir / "page-discovery-template.csv"
+    element_case_plan_template = batch_templates_dir / "element-case-plan-template.csv"
+    test_data_lifecycle_template = batch_templates_dir / "test-data-lifecycle-template.csv"
     for path in [
         batch_runs_dir / "README.md",
         batch_plan_template,
         batch_status_template,
         batch_review_template,
         page_discovery_template,
+        element_case_plan_template,
+        test_data_lifecycle_template,
     ]:
         if not path.exists():
             fail(f"Missing batch run asset: {path}")
@@ -1018,6 +1022,27 @@ def main() -> int:
         page_discovery_rows = list(csv.reader(fp))
     if len(page_discovery_rows) < 2 or len(page_discovery_rows[1]) != len(page_discovery_rows[0]):
         fail("page-discovery-template.csv sample row must have the same column count as its header")
+    expected_element_case_plan_header = (
+        "批次ID,最小标题路径,页面/入口,功能点,元素名称/文案,元素类型,交互方式,业务路径,数据状态,"
+        "适用DFX维度,适用DFX场景,测试设计方向,应生成用例数,计划用例ID,实际用例ID,"
+        "是否必须真实执行,是否涉及配置生效,是否涉及CRUD闭环,未生成原因,备注"
+    )
+    if read_text(element_case_plan_template).splitlines()[0] != expected_element_case_plan_header:
+        fail("element-case-plan-template.csv header changed unexpectedly")
+    with element_case_plan_template.open("r", encoding="utf-8-sig", newline="") as fp:
+        element_case_plan_rows = list(csv.reader(fp))
+    if len(element_case_plan_rows) < 2 or len(element_case_plan_rows[1]) != len(element_case_plan_rows[0]):
+        fail("element-case-plan-template.csv sample row must have the same column count as its header")
+    expected_test_data_lifecycle_header = (
+        "批次ID,最小标题路径,测试数据ID/名称,数据类型,创建入口,创建步骤关联用例,创建结果,查看结果,"
+        "编辑前值,编辑后值,编辑结果,配置生效验证点,删除取消结果,删除确认结果,清理状态,保留原因,备注"
+    )
+    if read_text(test_data_lifecycle_template).splitlines()[0] != expected_test_data_lifecycle_header:
+        fail("test-data-lifecycle-template.csv header changed unexpectedly")
+    with test_data_lifecycle_template.open("r", encoding="utf-8-sig", newline="") as fp:
+        test_data_lifecycle_rows = list(csv.reader(fp))
+    if len(test_data_lifecycle_rows) < 2 or len(test_data_lifecycle_rows[1]) != len(test_data_lifecycle_rows[0]):
+        fail("test-data-lifecycle-template.csv sample row must have the same column count as its header")
 
     no_global_intermediate_markers = [
         "承载全量测试用例正文",
@@ -1118,12 +1143,12 @@ def main() -> int:
         assert_contains(path, operation_navigation_markers)
 
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "data-safety.md", ["<product_login_url>", "环境地址"])
-    assert_contains(repo_root / "docs" / "test-design" / "rules" / "case-design.md", ["闭环", "取消或关闭", "DFX 测试策略落地", "元素覆盖骨架", "最低覆盖密度"])
+    assert_contains(repo_root / "docs" / "test-design" / "rules" / "case-design.md", ["闭环", "取消或关闭", "DFX 测试策略落地", "元素覆盖骨架", "最低覆盖密度", "功能用例分片生成", "test-data-lifecycle.csv"])
     assert_contains(
         repo_root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
         ["DFX 12", "DFT", "DFP", "DFI", "DFC", "DFS", "DFR", "DFM", "DFU", "DFD", "DFO", "DFB", "压力极限", "DFX 覆盖评估", "适用", "不适用", "需补充证据", "扩展检查矩阵", "落地 Sheet 归属", "用例密度预算"],
     )
-    assert_contains(repo_root / "README.md", ["dfx-test-strategy.md", "DFX维度", "DFX场景", "扩展检查矩阵"])
+    assert_contains(repo_root / "README.md", ["dfx-test-strategy.md", "DFX维度", "DFX场景", "扩展检查矩阵", "element-case-plan.csv", "function_cases_part_"])
     assert_contains(repo_root / "docs" / "RULE_OWNERSHIP.md", ["DFX 测试策略矩阵", "dfx-test-strategy.md"])
     assert_contains(repo_root / ".codebuddy" / "rules" / "test-design-rule.md", ["docs/test-design/rules/dfx-test-strategy.md"])
     assert_contains(repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc", ["docs/test-design/rules/dfx-test-strategy.md"])
@@ -1176,6 +1201,10 @@ def main() -> int:
             "MULTI_LEAF_SEPARATORS",
             "BATCH_EXPECTED_HEADERS",
             "PAGE_DISCOVERY_EXPECTED_HEADERS",
+            "ELEMENT_CASE_PLAN_EXPECTED_HEADERS",
+            "TEST_DATA_LIFECYCLE_EXPECTED_HEADERS",
+            "validate_element_case_plan_and_lifecycle",
+            "validate_sheet_split_artifacts",
             "csv_rows_with_exact_header",
             "assert_no_sensitive_values",
             "PRODUCT_MAP_REQUIRED_REAL_SHEETS",
@@ -1188,6 +1217,8 @@ def main() -> int:
             "--page-discovery",
             "--batch-status",
             "page-discovery.csv",
+            "element-case-plan.csv",
+            "test-data-lifecycle.csv",
             "product-map",
             "generated workbook copies",
         ],
@@ -1203,6 +1234,8 @@ def main() -> int:
             "complete-deliverables",
             "fix-formal-styles",
             "init-batch-run",
+            "element-case-plan-template.csv",
+            "test-data-lifecycle-template.csv",
             "finalize-deliverables",
             "sync-product-map",
             "header_map",
@@ -1263,9 +1296,33 @@ def main() -> int:
     ]:
         assert_contains(path, dfx_expansion_markers)
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "page-discovery.md", ["分页类控件", "变更类证据", "查看选项", "AI_TEST"])
+    element_plan_markers = ["element-case-plan.csv", "test-data-lifecycle.csv", "配置项"]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "README.md",
+        repo_root / "docs" / "test-design" / "rules" / "case-design.md",
+        repo_root / "docs" / "test-design" / "rules" / "page-discovery.md",
+    ]:
+        assert_contains(path, element_plan_markers)
+    split_generation_markers = ["function_cases_part_", "按 Sheet 分文件", "10 条"]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "README.md",
+        repo_root / "docs" / "test-design" / "rules" / "case-design.md",
+        repo_root / "docs" / "test-design" / "rules" / "batch-run.md",
+    ]:
+        assert_contains(path, split_generation_markers)
     assert_contains(
         generated_python_validator,
-        ["FORBIDDEN_QUOTE_CHARS", "py_compile", "MAX_PYTHON_BYTES", "MAX_JSON_BYTES", "json.load"],
+        ["FORBIDDEN_QUOTE_CHARS", "py_compile", "MAX_PYTHON_BYTES", "MAX_JSON_BYTES", "json.load", "MAX_FUNCTION_CASES_PER_PART", "function_cases_part_"],
     )
     assert_contains(
         generated_python_validator_ps1,

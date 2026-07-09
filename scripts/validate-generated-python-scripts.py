@@ -11,6 +11,7 @@ from pathlib import Path
 MAX_FILE_BYTES = 256 * 1024
 MAX_PYTHON_BYTES = 200 * 1024
 MAX_JSON_BYTES = 256 * 1024
+MAX_FUNCTION_CASES_PER_PART = 10
 SCAN_EXTS = {".py", ".json", ".csv", ".md", ".txt"}
 
 FORBIDDEN_QUOTE_CHARS = {
@@ -78,9 +79,15 @@ def validate_compile(path: Path) -> None:
 def validate_json(path: Path) -> None:
     try:
         with path.open("r", encoding="utf-8-sig") as fp:
-            json.load(fp)
+            data = json.load(fp)
     except json.JSONDecodeError as exc:
         fail(f"{path} failed JSON syntax validation: line {exc.lineno}, column {exc.colno}: {exc.msg}")
+    if path.name.startswith("function_cases_part_"):
+        cases = data.get("cases") if isinstance(data, dict) else data
+        if not isinstance(cases, list):
+            fail(f"{path} must contain a list or an object with a cases list")
+        if len(cases) > MAX_FUNCTION_CASES_PER_PART:
+            fail(f"{path} contains {len(cases)} function cases; each function_cases_part_*.json must contain at most {MAX_FUNCTION_CASES_PER_PART}")
 
 
 def main() -> int:

@@ -399,6 +399,8 @@ def init_batch_run(project_root: Path, run_id: str, module_path: str, batch_id: 
         "batch-status.csv": templates_dir / "batch-status-template.csv",
         "batch-review.md": templates_dir / "batch-review-template.md",
         "page-discovery.csv": templates_dir / "page-discovery-template.csv",
+        "element-case-plan.csv": templates_dir / "element-case-plan-template.csv",
+        "test-data-lifecycle.csv": templates_dir / "test-data-lifecycle-template.csv",
     }
     missing = [str(path) for path in required_templates.values() if not path.exists()]
     if missing:

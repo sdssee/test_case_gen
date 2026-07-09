@@ -26,6 +26,7 @@
 | `docs/test-design/测试用例模板.xlsx` | 测试系统导入模板。需要导入时复制该模板生成独立导入文件，不修改原模板。 |
 | `docs/test-design/excel-template-spec.md` | Excel 字段和模板规则说明。 |
 | `docs/test-design/rules/` | 按任务类型拆分的详细规则，避免 Skill/Rule 入口超过 1 万字。 |
+| `docs/test-design/rules/dfx-test-strategy.md` | DFX 12 维度 × 4 场景测试策略矩阵，用于把异常、边界、性能、安全、可靠性等要求落到具体用例。 |
 | `docs/test-design/archive-and-index-guidelines.md` | 测试资产归档、模块能力索引和跨模块依赖维护规范。 |
 | `docs/test-assets/product-map.xlsx` | 内部产品测试知识图谱主入口，不作为默认客户交付件。 |
 | `docs/test-assets/` | 内部产品级测试资产库，保存模块归档、导入副本和产品版图。 |
@@ -86,6 +87,7 @@ python scripts/test_design_excel_tools.py generate-import `
 - 硬性测试质量规则以 `.codebuddy/.rules/test-design-rule.mdc` 和 `.codebuddy/rules/test-design-rule.md` 为准。
 - 执行流程以 `.codebuddy/skills/test-design/SKILL.md` 为准。
 - 详细规则按任务类型读取 `docs/test-design/rules/`，入口文件保持低于 10000 字符，避免 CodeBuddy 加载 Skill 时截断或遗漏。
+- 异常、边界、权限、状态、性能、安全、可靠性等测试策略以 `docs/test-design/rules/dfx-test-strategy.md` 为细化口径；DFX 不替代原测试维度，而是把原要求落到测试数据、操作步骤、预期结果和恢复路径。
 - Excel 字段、下拉框和导入模板以 `docs/test-design/excel-template-spec.md` 为准。
 - 产品版图、归档和跨模块依赖以 `docs/test-design/archive-and-index-guidelines.md` 为准。
 - 规则归属和精简边界以 `docs/RULE_OWNERSHIP.md` 为准。
@@ -129,6 +131,7 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 - 产品版图文件存在且包含标准 Sheet
 - 批次运行状态目录和模板存在
 - 规则归属矩阵存在，Rule 双入口保持一致，入口文档引用权威源而不是复制完整规则
+- DFX 测试策略矩阵存在，并被基础用例设计规则引用
 
 生成正式测试设计 Excel 后运行：
 

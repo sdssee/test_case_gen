@@ -4,7 +4,7 @@
 
 ## 必须读取
 
-- 所有任务：`docs/test-design/rules/case-design.md`、`excel-deliverable.md`、`data-safety.md`、`docs/test-design/excel-template-spec.md`。
+- 所有任务：`docs/test-design/rules/case-design.md`、`excel-deliverable.md`、`data-safety.md`、`docs/test-design/rules/dfx-test-strategy.md`、`docs/test-design/excel-template-spec.md`。
 - 页面/截图/原型/浏览器/computer use：追加 `docs/test-design/rules/page-discovery.md`。
 - 全产品/大模块/多菜单/超过一个最小标题：追加 `docs/test-design/rules/batch-run.md`。
 - 测试系统导入：追加 `docs/test-design/rules/import-template.md`。

@@ -14,6 +14,7 @@
 | 规则类型 | 权威源 | 可摘要引用 | 不应承载完整规则 |
 | --- | --- | --- | --- |
 | 硬性测试质量规则 | `.codebuddy/.rules/test-design-rule.mdc`、`.codebuddy/rules/test-design-rule.md`、`docs/test-design/rules/case-design.md` | `AGENTS.md`、`CODEBUDDY.md`、`.codebuddy/skills/test-design/SKILL.md` | `README.md`、`docs/test-design/README.md` |
+| DFX 测试策略矩阵 | `docs/test-design/rules/dfx-test-strategy.md`、`docs/test-design/rules/case-design.md` | Rule、Skill、`AGENTS.md`、`CODEBUDDY.md`、`README.md`、`docs/test-design/README.md` | 入口文件中的完整 12 维度矩阵正文 |
 | 执行流程与自检步骤 | `.codebuddy/skills/test-design/SKILL.md`、`docs/test-design/rules/README.md` | `AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | `README.md` |
 | 页面实探与数据安全 | `docs/test-design/rules/page-discovery.md`、`docs/test-design/rules/data-safety.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md` | `README.md` |
 | Excel Sheet、字段、枚举、导入模板 | `docs/test-design/excel-template-spec.md`、`docs/test-design/rules/excel-deliverable.md`、`docs/test-design/rules/import-template.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md` | `README.md` |

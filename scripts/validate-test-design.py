@@ -1055,6 +1055,11 @@ def main() -> int:
         repo_root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
         ["DFX 12", "DFT", "DFP", "DFI", "DFC", "DFS", "DFR", "DFM", "DFU", "DFD", "DFO", "DFB", "压力极限"],
     )
+    assert_contains(repo_root / "README.md", ["dfx-test-strategy.md", "DFX 不替代原测试维度"])
+    assert_contains(repo_root / "docs" / "RULE_OWNERSHIP.md", ["DFX 测试策略矩阵", "dfx-test-strategy.md"])
+    assert_contains(repo_root / ".codebuddy" / "rules" / "test-design-rule.md", ["docs/test-design/rules/dfx-test-strategy.md"])
+    assert_contains(repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc", ["docs/test-design/rules/dfx-test-strategy.md"])
+    assert_contains(repo_root / "docs" / "test-design" / "excel-template-spec.md", ["DFX 12 维度", "dfx-test-strategy.md"])
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "excel-deliverable.md", ["表格对象", "修复提示"])
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "batch-run.md", ["batch-runs/<task>/artifacts", "根目录 artifacts"])
     assert_contains(

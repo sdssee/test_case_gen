@@ -56,7 +56,8 @@ Codex 应优先读取并遵守：
 - 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
 - 导入文件优先使用 `scripts/test_design_excel_tools.py generate-import`，保留模板下拉框、必填样式、标红字段和自动生成字段空值。
 - 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。
-- 批次交付收口优先使用 `scripts/test_design_excel_tools.py finalize-deliverables`，同步 current、deliverables、modules、imports 和 `batch-status.csv` 路径；传入 `--page-discovery` 时必须同时传入 `--batch-status`。
+- 批次交付收口优先使用 `scripts/test_design_excel_tools.py complete-deliverables` 一站式完成中间文件预检、格式修复、导入生成、交付复制、产品版图同步和交付件校验；已有导入文件时可使用 `finalize-deliverables`。
+- 交付文件名只使用菜单/模块路径，不拼运行文件夹名、批次目录名或产品名；如 `module-path` 包含产品名前缀，传入 `--product-name` 自动去除，避免重复交付文件。
 - 导入文件 `执行方式` 默认 `手动`，也就是默认填写 `手动`；自动化建议或 AI 页面实探不能作为填写 `自动化` 的依据。
 - 正式交付件、导入文件、批次账本、页面实探记录、临时脚本和产品版图不得保留真实环境 URL/IP、真实账号、真实密钥、Token、密码或内部敏感凭据，使用 `<product_login_url>` 等占位符。
 

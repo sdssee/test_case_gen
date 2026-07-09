@@ -61,15 +61,23 @@
 3. 保留原模板中的字段顺序、下拉框、必填样式、标红字段和自动生成字段空值。
 4. 不修改原始 `测试用例模板.xlsx`。
 
-推荐使用统一工具生成导入文件，避免字段错位：
+推荐使用统一工具一站式收口，避免多轮脚本校验和修改：
 
 ```powershell
-python scripts/test_design_excel_tools.py generate-import `
+python scripts/test_design_excel_tools.py complete-deliverables `
+  --project-root . `
   --formal-workbook docs/test-design/current/<测试设计.xlsx> `
   --import-template docs/test-design/测试用例模板.xlsx `
-  --output docs/test-assets/imports/<导入文件.xlsx> `
-  --module-path "一级模块>二级菜单>三级菜单"
+  --module-path "一级模块>二级菜单>三级菜单" `
+  --batch-status docs/test-assets/batch-runs/<任务>/batch-status.csv `
+  --page-discovery docs/test-assets/batch-runs/<任务>/page-discovery.csv `
+  --product-map docs/test-assets/product-map.xlsx `
+  --scripts-path docs/test-assets/batch-runs/<任务>/artifacts/scripts
 ```
+
+交付文件名只使用菜单/模块路径，例如 `一级模块_二级菜单_三级菜单_测试设计.xlsx` 和 `一级模块_二级菜单_三级菜单_导入用例.xlsx`；不要把运行文件夹名、批次目录名或产品名拼入文件名。
+
+只需要单独生成导入文件时，仍可使用 `python scripts/test_design_excel_tools.py generate-import ...`。
 
 ## 客户交付与内部资产
 

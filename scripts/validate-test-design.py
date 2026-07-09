@@ -1179,6 +1179,7 @@ def main() -> int:
         excel_tools,
         [
             "generate-import",
+            "complete-deliverables",
             "fix-formal-styles",
             "init-batch-run",
             "finalize-deliverables",
@@ -1196,8 +1197,28 @@ def main() -> int:
             "apply_template_workbook_format",
             "extend_validation_ranges",
             "sync_product_map",
+            "complete_deliverables",
+            "deliverable_names",
+            "canonical_module_parts",
         ],
     )
+    complete_deliverable_markers = [
+        "complete-deliverables",
+        "一站式",
+        "交付文件名",
+        "产品名",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "README.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / "docs" / "test-design" / "rules" / "batch-run.md",
+    ]:
+        assert_contains(path, complete_deliverable_markers)
     assert_contains(
         generated_python_validator,
         ["FORBIDDEN_QUOTE_CHARS", "py_compile", "MAX_PYTHON_BYTES", "MAX_JSON_BYTES", "json.load"],

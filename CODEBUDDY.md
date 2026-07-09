@@ -49,7 +49,8 @@
 - `batch-status.csv` 和 `page-discovery.csv` 必须使用标准模板表头，禁止自定义精简表头和字段错位。
 - 批次截图、临时脚本和证据必须放在当前任务 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享根目录 artifacts。
 - 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
-- 批次交付收口优先使用 `scripts/test_design_excel_tools.py finalize-deliverables`，同步 current、deliverables、modules、imports 和 `batch-status.csv` 路径；传入 `--page-discovery` 时必须同时传入 `--batch-status`。
+- 批次交付收口优先使用 `scripts/test_design_excel_tools.py complete-deliverables` 一站式完成中间文件预检、格式修复、导入生成、交付复制、产品版图同步和交付件校验；已有导入文件时可使用 `finalize-deliverables`。
+- 交付文件名只使用菜单/模块路径，不拼运行文件夹名、批次目录名或产品名；如 `module-path` 包含产品名前缀，传入 `--product-name` 自动去除，避免重复交付文件。
 - 导入文件 `执行方式` 默认 `手动`，也就是默认填写 `手动`；只有已有可运行、可维护且覆盖主要校验点的自动化资产，并且本次明确按自动化导入或关联资产时，才允许 `自动化`。
 - 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。
 - 正式交付件、导入文件、批次账本、页面实探记录、临时脚本和产品版图不得保留真实环境 URL/IP、真实账号、真实密钥、Token、密码或内部敏感凭据，必须使用 `<product_login_url>` 等占位符。

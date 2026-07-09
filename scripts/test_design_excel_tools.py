@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import csv
 import shutil
+import subprocess
+import sys
 from copy import copy, deepcopy
 from datetime import date
 from pathlib import Path
@@ -191,6 +193,19 @@ def module_names(module_path: str) -> list[str]:
     return (parts + [""] * 5)[:5]
 
 
+def canonical_module_parts(module_path: str, product_name: str | None = None) -> list[str]:
+    parts = [part.strip() for part in module_path.replace("\\", ">").replace("/", ">").split(">") if part.strip()]
+    if product_name and parts and parts[0] == product_name.strip():
+        parts = parts[1:]
+    return parts
+
+
+def deliverable_names(module_path: str, product_name: str | None = None) -> tuple[str, str, str]:
+    parts = canonical_module_parts(module_path, product_name)
+    stem = safe_filename(">".join(parts) if parts else module_path)
+    return stem, f"{stem}_测试设计.xlsx", f"{stem}_导入用例.xlsx"
+
+
 def module_leaf_name(module_path: str) -> str:
     parts = [part.strip() for part in module_path.replace("/", ">").split(">") if part.strip()]
     return parts[-1] if parts else module_path
@@ -236,6 +251,8 @@ def safe_filename(value: str) -> str:
 
 def copy_workbook(source: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
+    if source.resolve() == target.resolve():
+        return
     shutil.copy2(source, target)
 
 
@@ -445,9 +462,9 @@ def init_batch_run(project_root: Path, run_id: str, module_path: str, batch_id: 
 
 
 def split_module_parts(module_path: str, product_name: str | None = None) -> tuple[str, list[str]]:
-    parts = [part.strip() for part in module_path.replace("/", ">").split(">") if part.strip()]
     if product_name:
-        return product_name, parts
+        return product_name, canonical_module_parts(module_path, product_name)
+    parts = canonical_module_parts(module_path)
     if len(parts) >= 4:
         return parts[0], parts[1:]
     return (parts[0] if parts else "产品"), parts
@@ -665,9 +682,7 @@ def finalize_deliverables(
     product_name: str | None = None,
 ) -> None:
     project_root = project_root.resolve()
-    module_name = safe_filename(module_path)
-    formal_name = f"{module_name}_测试设计.xlsx"
-    import_name = f"{module_name}_导入用例.xlsx"
+    _, formal_name, import_name = deliverable_names(module_path, product_name)
 
     apply_formal_workbook_styles(formal_workbook)
     import_wb = load_workbook(import_workbook)
@@ -705,7 +720,64 @@ def finalize_deliverables(
         )
 
 
-def generate_import_workbook(formal_workbook: Path, import_template: Path, output: Path, module_path: str) -> None:
+def run_python_script(script: Path, args: list[str]) -> None:
+    completed = subprocess.run([sys.executable, str(script), *args], check=False)
+    if completed.returncode:
+        raise SystemExit(completed.returncode)
+
+
+def complete_deliverables(
+    project_root: Path,
+    formal_workbook: Path,
+    import_template: Path,
+    module_path: str,
+    import_workbook: Path | None = None,
+    batch_status: Path | None = None,
+    batch_id: str | None = None,
+    product_map: Path | None = None,
+    page_discovery: Path | None = None,
+    product_name: str | None = None,
+    scripts_path: Path | None = None,
+) -> None:
+    project_root = project_root.resolve()
+    script_dir = Path(__file__).resolve().parent
+    _, _, import_name = deliverable_names(module_path, product_name)
+    target_import = import_workbook or (project_root / "docs" / "test-assets" / "imports" / import_name)
+
+    if scripts_path and scripts_path.exists():
+        run_python_script(script_dir / "validate-generated-python-scripts.py", ["--path", str(scripts_path)])
+
+    apply_formal_workbook_styles(formal_workbook)
+    generate_import_workbook(formal_workbook, import_template, target_import, module_path, product_name)
+    finalize_deliverables(
+        project_root,
+        formal_workbook,
+        target_import,
+        module_path,
+        batch_status,
+        batch_id,
+        product_map,
+        page_discovery,
+        product_name,
+    )
+
+    validator_args = ["--workbook", str(formal_workbook), "--import-workbook", str(target_import)]
+    if batch_status:
+        validator_args.extend(["--batch-status", str(batch_status)])
+    if product_map:
+        validator_args.extend(["--product-map", str(product_map)])
+    if page_discovery:
+        validator_args.extend(["--page-discovery", str(page_discovery)])
+    run_python_script(script_dir / "validate-test-design-deliverable.py", validator_args)
+
+
+def generate_import_workbook(
+    formal_workbook: Path,
+    import_template: Path,
+    output: Path,
+    module_path: str,
+    product_name: str | None = None,
+) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(import_template, output)
 
@@ -720,7 +792,8 @@ def generate_import_workbook(formal_workbook: Path, import_template: Path, outpu
     import_headers = header_map(import_ws)
     clear_data_rows(import_ws)
 
-    modules = module_names(module_path)
+    canonical_path = ">".join(canonical_module_parts(module_path, product_name)) or module_path
+    modules = module_names(canonical_path)
     write_row = 2
     for row_index in range(2, function_ws.max_row + 1):
         case = row_dict(function_ws, function_headers, row_index)
@@ -795,6 +868,7 @@ def main() -> int:
     gen.add_argument("--import-template", required=True, type=Path)
     gen.add_argument("--output", required=True, type=Path)
     gen.add_argument("--module-path", required=True)
+    gen.add_argument("--product-name")
 
     style = sub.add_parser("fix-formal-styles", help="Apply required multiline wrapping styles to a formal workbook.")
     style.add_argument("--workbook", required=True, type=Path)
@@ -819,6 +893,19 @@ def main() -> int:
     finalize.add_argument("--page-discovery", type=Path)
     finalize.add_argument("--product-name")
 
+    complete = sub.add_parser("complete-deliverables", help="One-shot precheck, style, import generation, finalize, and delivery validation.")
+    complete.add_argument("--project-root", required=True, type=Path)
+    complete.add_argument("--formal-workbook", required=True, type=Path)
+    complete.add_argument("--import-template", required=True, type=Path)
+    complete.add_argument("--module-path", required=True)
+    complete.add_argument("--import-workbook", type=Path)
+    complete.add_argument("--batch-status", type=Path)
+    complete.add_argument("--batch-id")
+    complete.add_argument("--product-map", type=Path)
+    complete.add_argument("--page-discovery", type=Path)
+    complete.add_argument("--product-name")
+    complete.add_argument("--scripts-path", type=Path)
+
     sync = sub.add_parser("sync-product-map", help="Sync product-map.xlsx from a formal workbook and page-discovery.csv.")
     sync.add_argument("--product-map", required=True, type=Path)
     sync.add_argument("--formal-workbook", required=True, type=Path)
@@ -829,7 +916,7 @@ def main() -> int:
 
     args = parser.parse_args()
     if args.command == "generate-import":
-        generate_import_workbook(args.formal_workbook, args.import_template, args.output, args.module_path)
+        generate_import_workbook(args.formal_workbook, args.import_template, args.output, args.module_path, args.product_name)
     elif args.command == "fix-formal-styles":
         apply_formal_workbook_styles(args.workbook, args.output, args.template)
     elif args.command == "init-batch-run":
@@ -850,6 +937,25 @@ def main() -> int:
             args.product_map,
             args.page_discovery,
             args.product_name,
+        )
+    elif args.command == "complete-deliverables":
+        if args.page_discovery and not args.batch_status:
+            raise SystemExit(
+                "ERROR: --batch-status is required when --page-discovery is provided. "
+                "Run init-batch-run first and keep batch-plan.md, batch-status.csv, batch-review.md, and page-discovery.csv together."
+            )
+        complete_deliverables(
+            args.project_root,
+            args.formal_workbook,
+            args.import_template,
+            args.module_path,
+            args.import_workbook,
+            args.batch_status,
+            args.batch_id,
+            args.product_map,
+            args.page_discovery,
+            args.product_name,
+            args.scripts_path,
         )
     elif args.command == "sync-product-map":
         sync_product_map(

@@ -326,13 +326,15 @@
 
 生成正式测试设计 Excel 后，应运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务追加 `-BatchStatusPath <batch-status.csv>`，并强制读取同级 `page-discovery.csv` 与 `docs/test-assets/product-map.xlsx` 做产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的最小标题路径、页面元素、关联用例、用例资产索引和变更记录是否同步。
 
-测试系统导入文件必须优先使用 `scripts/test_design_excel_tools.py generate-import` 或等价的统一表头映射逻辑生成。禁止在批次临时脚本中按固定列序号数组直接写入导入模板；如确需临时脚本，只能调用统一工具或复用同一套表头映射函数。导入文件生成后必须通过 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx>` 校验，确认字段未错位、自动生成字段为空、下拉字段合法、模板数据验证保留、多行字段开启自动换行。
+测试系统导入文件必须优先使用 `scripts/test_design_excel_tools.py complete-deliverables` 一站式收口；如只需单独生成导入文件，可使用 `generate-import` 或等价的统一表头映射逻辑。禁止在批次临时脚本中按固定列序号数组直接写入导入模板；如确需临时脚本，只能调用统一工具或复用同一套表头映射函数。导入文件生成后必须通过交付件校验确认字段未错位、自动生成字段为空、下拉字段合法、模板数据验证保留、多行字段开启自动换行。
 
 正式测试设计和导入文件中的多行字段必须设置自动换行和顶部对齐，不得只依赖模板前几行样式继承。正式测试设计至少包括 `前置条件`、`测试数据`、`操作步骤`、`预期结果`、`备注`；导入文件至少包括 `测试步骤描述`、`测试步骤预期结果`、`前置条件`、`测试用例说明`、`备注`。新增数据行必须复制模板第 2 行示例数据格式，只填充内容，不得改变边框、字体、填充、对齐、数字格式、下拉验证和必填/标红样式。
 
 正式测试设计、导入文件和产品版图不得保留 Excel Table 对象或 `/xl/tables/table*.xml` 部件；页面元素覆盖清单等 Sheet 使用普通单元格区域、样式和自动筛选。不得出现打开文件时 Microsoft Excel 提示修复、表格对象仍停留在模板前三行、自动筛选范围未覆盖新增行等问题。使用 `scripts/test_design_excel_tools.py generate-import` 或 `fix-formal-styles` 时，工具必须移除 Excel Table 对象并刷新自动筛选范围。
 
-批次交付收口必须优先使用 `scripts/test_design_excel_tools.py finalize-deliverables`，一次性复制正式测试设计到 `docs/test-design/current/`、`docs/test-design/deliverables/` 和 `docs/test-assets/modules/`，复制导入文件到 `docs/test-design/deliverables/` 和 `docs/test-assets/imports/`，并回写 `batch-status.csv` 的 `归档路径`、`导入文件路径`、`导入文件已生成`，同时清理 artifacts/scripts 下的 `__pycache__`。传入 `--page-discovery` 时必须同时传入 `--batch-status`；传入 `--product-map` 和 `--page-discovery` 时，工具会同步执行 `sync-product-map`，减少手写同步脚本。
+批次交付收口必须优先使用 `scripts/test_design_excel_tools.py complete-deliverables` 一站式完成中间文件预检、正式 Excel 格式修复、导入文件生成、交付复制、产品版图同步和交付件校验；已有导入文件时可使用 `finalize-deliverables`，一次性复制正式测试设计到 `docs/test-design/current/`、`docs/test-design/deliverables/` 和 `docs/test-assets/modules/`，复制导入文件到 `docs/test-design/deliverables/` 和 `docs/test-assets/imports/`，并回写 `batch-status.csv` 的 `归档路径`、`导入文件路径`、`导入文件已生成`，同时清理 artifacts/scripts 下的 `__pycache__`。传入 `--page-discovery` 时必须同时传入 `--batch-status`；传入 `--product-map` 和 `--page-discovery` 时，工具会同步执行 `sync-product-map`，减少手写同步脚本。
+
+交付文件命名必须以菜单/模块路径为准，使用 `一级模块_二级菜单_三级菜单[_四级]_测试设计.xlsx` 和 `一级模块_二级菜单_三级菜单[_四级]_导入用例.xlsx`；不得把运行文件夹名、批次目录名或产品名拼入交付文件名。产品名应写入产品版图和工作簿字段，不作为 `current/`、`deliverables/`、`docs/test-assets/modules/`、`docs/test-assets/imports/` 中文件名的一部分；如 `module-path` 中包含产品名前缀，应同时传入 `--product-name` 让统一工具自动去除。
 
 交付件不得残留 `{NAV}`、`{NL}`、`{Q}`、`{E}`、`${...}`、`{{...}}`、`TODO`、`TBD` 等模板占位符或未完成标记。当前批次各 Sheet 的内容必须与最小标题路径一致，不得残留其他模块的模板内容、示例内容或无效用例 ID 引用。
 

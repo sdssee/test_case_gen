@@ -36,7 +36,7 @@
 22. 禁止创建承载全量测试用例正文的单一 Python/JSON/CSV/Markdown/临时脚本；脚本只能处理当前批次并放在 `artifacts/scripts/`。
 23. 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
 24. 批次截图、临时脚本和证据必须放在当前任务 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享根目录 artifacts。
-25. 批次交付收口优先使用 `scripts/test_design_excel_tools.py finalize-deliverables`，同步 current、deliverables、modules、imports 和 `batch-status.csv` 路径；传入 `--page-discovery` 时必须同时传入 `--batch-status`。
+25. 批次交付收口优先使用 `scripts/test_design_excel_tools.py complete-deliverables` 一站式完成中间文件预检、格式修复、导入生成、交付复制、产品版图同步和交付件校验；已有导入文件时可使用 `finalize-deliverables`。交付文件名只使用菜单/模块路径，不拼运行文件夹名、批次目录名或产品名。
 26. 当前批次 Python 临时脚本必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件写入中文文本，执行前运行生成脚本预检，检查单文件大小、JSON 语法、Python 语法和中文弯引号风险。
 27. 测试系统导入文件必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，优先使用 `scripts/test_design_excel_tools.py generate-import`，保留下拉框、必填样式、标红字段和自动生成字段空值。
 28. 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。

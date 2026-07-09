@@ -91,9 +91,9 @@ docs/test-assets/product-map.xlsx
 已完成批次在 `batch-plan.md` 中不得仍标记为执行中或待开始；`batch-plan.md` 的页面清单数量必须与 `batch-status.csv` 的页面数一致。`batch-review.md` 必须引用已完成批次的批次 ID、归档路径和导入文件路径。
 
 
-大范围任务禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件。脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 artifacts/scripts/，不得把多个最小标题路径、多个批次或全产品测试用例先集中写入一个文件后再统一生成 Excel。每批的测试用例正文必须以当前批次正式测试设计 Excel、`page-discovery.csv` 和 `batch-status.csv` 为边界进行维护。
+大范围任务禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件。脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 artifacts/scripts/，不得把多个最小标题路径、多个批次或全产品测试用例先集中写入一个文件后再统一生成 Excel。每批的测试用例正文必须以当前批次正式测试设计 Excel、`page-discovery.csv` 和 `batch-status.csv` 为边界进行维护。当前批次 Python 临时脚本或 JSON/CSV/Markdown/TXT 数据分片也必须控制单文件体积，单个 Python 建议小于 200KB，单个 JSON/CSV/Markdown/TXT 中间文件建议小于 256KB；超过时继续按最小标题路径、页面域或功能块分片，不得用一个大 Python 文件或大 JSON 文件承载大量用例正文。
 
-如确需生成当前批次 Python 临时脚本，写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取，禁止手工拼接包含中文弯引号、智能引号或未转义双引号的字符串字面量。执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过语法编译和高风险引号扫描后才能执行。
+如确需生成当前批次 Python 临时脚本，写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取，禁止手工拼接包含中文弯引号、智能引号或未转义双引号的字符串字面量。执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过单文件大小、JSON 语法、Python 语法编译和高风险引号扫描后才能执行。
 
 正式测试设计、测试系统导入文件、`batch-plan.md`、`batch-status.csv`、`page-discovery.csv`、`batch-review.md`、临时脚本和 `product-map.xlsx` 都不得保留疑似真实密钥、Token、密码或内部敏感凭据；必须改写为 `<valid_api_key>`、`<test_token>`、`<test_service_url>` 等占位符。
 

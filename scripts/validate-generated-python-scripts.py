@@ -2,10 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 import py_compile
 import sys
 from pathlib import Path
 
+
+MAX_FILE_BYTES = 256 * 1024
+MAX_PYTHON_BYTES = 200 * 1024
+MAX_JSON_BYTES = 256 * 1024
+SCAN_EXTS = {".py", ".json", ".csv", ".md", ".txt"}
 
 FORBIDDEN_QUOTE_CHARS = {
     "\u201c": "left double smart quote",
@@ -23,12 +29,12 @@ def fail(message: str) -> None:
     raise AssertionError(message)
 
 
-def iter_python_files(root: Path) -> list[Path]:
+def iter_generated_files(root: Path) -> list[Path]:
     if root.is_file():
-        return [root] if root.suffix.lower() == ".py" else []
+        return [root] if root.suffix.lower() in SCAN_EXTS else []
     if not root.exists():
         fail(f"Path not found: {root}")
-    return sorted(path for path in root.rglob("*.py") if path.is_file())
+    return sorted(path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in SCAN_EXTS)
 
 
 def validate_forbidden_quotes(path: Path) -> None:
@@ -44,6 +50,24 @@ def validate_forbidden_quotes(path: Path) -> None:
                 )
 
 
+def validate_file_size(path: Path) -> None:
+    suffix = path.suffix.lower()
+    max_bytes = MAX_FILE_BYTES
+    if suffix == ".py":
+        max_bytes = MAX_PYTHON_BYTES
+    elif suffix == ".json":
+        max_bytes = MAX_JSON_BYTES
+
+    size = path.stat().st_size
+    if size > max_bytes:
+        fail(
+            f"{path} is {size} bytes, exceeding the generated intermediate file limit of {max_bytes} bytes. "
+            "Do not write a whole module, multiple leaf titles, or all test cases into one Python/JSON/text file. "
+            "Split by the current leaf-title batch, keep case bodies in the formal Excel workbook, "
+            "page-discovery.csv, and batch-status.csv, and make helper scripts load only small shard files."
+        )
+
+
 def validate_compile(path: Path) -> None:
     try:
         py_compile.compile(str(path), doraise=True)
@@ -51,20 +75,32 @@ def validate_compile(path: Path) -> None:
         fail(f"{path} failed Python syntax validation:\n{exc.msg}")
 
 
+def validate_json(path: Path) -> None:
+    try:
+        with path.open("r", encoding="utf-8-sig") as fp:
+            json.load(fp)
+    except json.JSONDecodeError as exc:
+        fail(f"{path} failed JSON syntax validation: line {exc.lineno}, column {exc.colno}: {exc.msg}")
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate generated Python helper scripts before execution.")
-    parser.add_argument("--path", required=True, type=Path, help="Python file or directory to scan recursively.")
+    parser = argparse.ArgumentParser(description="Validate generated helper scripts and small data shards before execution.")
+    parser.add_argument("--path", required=True, type=Path, help="Generated file or directory to scan recursively.")
     args = parser.parse_args()
 
-    files = iter_python_files(args.path)
+    files = iter_generated_files(args.path)
     if not files:
-        print(f"OK: no generated Python scripts found under {args.path}")
+        print(f"OK: no generated Python/JSON/text intermediate files found under {args.path}")
         return 0
 
     for path in files:
-        validate_forbidden_quotes(path)
-        validate_compile(path)
-    print(f"OK: validated {len(files)} generated Python script(s).")
+        validate_file_size(path)
+        if path.suffix.lower() == ".py":
+            validate_forbidden_quotes(path)
+            validate_compile(path)
+        elif path.suffix.lower() == ".json":
+            validate_json(path)
+    print(f"OK: validated {len(files)} generated intermediate file(s).")
     return 0
 
 

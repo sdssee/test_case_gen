@@ -963,6 +963,10 @@ def main() -> int:
         "Python",
         "JSON",
         "Markdown",
+        "200KB",
+        "256KB",
+        "大 Python",
+        "大 JSON",
         "当前批次的模板填充、格式转换或校验",
         "artifacts/scripts",
         "统一生成 Excel",
@@ -983,6 +987,8 @@ def main() -> int:
         "repr()",
         "json.dumps(..., ensure_ascii=False)",
         "validate-generated-python-scripts.ps1",
+        "单文件大小",
+        "JSON 语法",
         "中文弯引号",
         "未转义双引号",
     ]
@@ -1133,7 +1139,7 @@ def main() -> int:
     )
     assert_contains(
         generated_python_validator,
-        ["FORBIDDEN_QUOTE_CHARS", "py_compile", "repr/json.dumps", "left double smart quote"],
+        ["FORBIDDEN_QUOTE_CHARS", "py_compile", "MAX_PYTHON_BYTES", "MAX_JSON_BYTES", "json.load"],
     )
     assert_contains(
         generated_python_validator_ps1,

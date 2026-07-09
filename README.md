@@ -35,7 +35,7 @@
 | `scripts/validate-test-design.ps1` | 模板稳定性自检入口。 |
 | `scripts/validate-test-design-deliverable.ps1` | 已生成测试设计 Excel 的交付件质量校验入口。 |
 | `scripts/test_design_excel_tools.py` | 统一 Excel 工具，用于从正式测试设计按表头生成测试系统导入文件，并修复多行字段样式。 |
-| `scripts/validate-generated-python-scripts.ps1` | 当前批次 Python 临时脚本预检入口，执行前检查语法和中文弯引号/智能引号风险。 |
+| `scripts/validate-generated-python-scripts.ps1` | 当前批次 Python/JSON/文本中间文件预检入口，执行前检查单文件大小、JSON/Python 语法和中文弯引号/智能引号风险。 |
 
 ## 正式测试设计 Sheet
 
@@ -147,7 +147,7 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 
 交付件校验会拦截 `batch-status.csv`/`page-discovery.csv` 自定义精简表头、CSV 字段错位、`batch-plan.md` 状态与页面数不一致、`product-map.xlsx` 未沉淀真实资产或仍保留 `示例产品`/`示例模块`/`示例页面`、用例资产索引和页面元素地图未覆盖正式 Excel、以及疑似真实密钥/Token/密码未替换为 `<valid_api_key>`、`<test_token>`、`<test_service_url>` 等占位符的问题。
 
-如果当前批次生成了 Python 临时脚本，执行前先预检：
+如果当前批次生成了 Python 临时脚本或 JSON/CSV/Markdown/TXT 中间分片，执行前先预检。单个 Python 建议小于 200KB，单个 JSON/CSV/Markdown/TXT 建议小于 256KB；超过时继续按最小标题路径、页面域或功能块分片：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scripts.ps1 -Path docs/test-assets/batch-runs/<任务>/artifacts/scripts

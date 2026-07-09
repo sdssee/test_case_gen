@@ -51,4 +51,5 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/
 ## 运行期门禁
 
 `scripts/validate-test-design.ps1` 会扫描 `docs/test-assets/batch-runs/`、`docs/test-design/current/` 和 `docs/test-design/deliverables/`，拦截疑似承载全量测试用例正文的单一中间文件，例如 `all_cases.py`、`full_product_cases.json`、`merged_cases.csv`、`case_pool.md` 或包含“全量测试用例”“多个最小标题”“统一生成 Excel”等聚合痕迹的文件。标准批次账本文件 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 以及 `templates/` 模板目录不会被误判。
+`scripts/validate-generated-python-scripts.ps1` 会扫描当前批次 `artifacts/scripts/` 下的 Python、JSON、CSV、Markdown 和 TXT 中间文件，拦截单文件大小超限、JSON 语法错误、Python 语法错误和高风险中文弯引号。单个 Python 建议小于 200KB，单个 JSON/CSV/Markdown/TXT 中间文件建议小于 256KB；超过时必须继续按最小标题路径、页面域或功能块分片，禁止用一个大 Python 或大 JSON 承载大量用例正文。
 `scripts/validate-test-design-deliverable.ps1` 会在传入 `-BatchStatusPath` 后校验批次账本、页面实探、归档测试设计、导入文件、产品版图和 artifacts 归属；任一已通过批次缺少归档文件、导入文件、标准表头、页面证据或质量自检数据时都应失败。

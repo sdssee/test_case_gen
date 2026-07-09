@@ -49,6 +49,8 @@
 
 - 禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件。
 - 脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 `artifacts/scripts/`。
+- 当前批次 Python 临时脚本或 JSON 数据分片也不得过大；单个 Python 建议小于 200KB，单个 JSON/CSV/Markdown/TXT 中间文件建议小于 256KB，超过时必须继续按最小标题路径或页面域分片。
+- 不得把大量用例正文、步骤、预期结果或页面元素清单内联到一个 Python 列表/字典或一个 JSON 文件中；Python 只保留模板填充逻辑，数据优先来自当前批次正式 Excel、`page-discovery.csv`、`batch-status.csv` 或小型分片。
 - 当前批次 Python 临时脚本写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取。
-- 执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过语法编译和中文弯引号、智能引号、未转义双引号风险扫描后才能执行。
+- 执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过单文件大小、JSON 语法、Python 语法编译和中文弯引号、智能引号、未转义双引号风险扫描后才能执行。
 - 交付前必须清理 `artifacts/scripts/__pycache__/`，不得把 Python 缓存目录作为运行结果保留。

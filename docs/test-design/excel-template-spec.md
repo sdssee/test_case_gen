@@ -353,7 +353,7 @@
 
 正式测试设计、导入文件和产品版图不得保留 Excel Table 对象或 `/xl/tables/table*.xml` 部件；页面元素覆盖清单等 Sheet 使用普通单元格区域、样式和自动筛选。不得出现打开文件时 Microsoft Excel 提示修复、表格对象仍停留在模板前三行、自动筛选范围未覆盖新增行等问题。使用 `scripts/test_design_excel_tools.py generate-import` 或 `fix-formal-styles` 时，工具必须移除 Excel Table 对象并刷新自动筛选范围。
 
-批次交付收口必须优先使用 `scripts/test_design_excel_tools.py complete-deliverables` 一站式完成中间文件预检、正式 Excel 格式修复、导入文件生成、交付复制、产品版图同步和交付件校验；已有导入文件时可使用 `finalize-deliverables`，一次性复制正式测试设计到 `docs/test-design/current/`、`docs/test-design/deliverables/` 和 `docs/test-assets/modules/`，复制导入文件到 `docs/test-design/deliverables/` 和 `docs/test-assets/imports/`，并回写 `batch-status.csv` 的 `归档路径`、`导入文件路径`、`导入文件已生成`，同时清理 artifacts/scripts 下的 `__pycache__`。传入 `--page-discovery` 时必须同时传入 `--batch-status`；传入 `--product-map` 和 `--page-discovery` 时，工具会同步执行 `sync-product-map`，减少手写同步脚本。
+批次交付收口必须使用 `scripts/test_design_excel_tools.py complete-deliverables` 一站式完成中间文件预检、正式 Excel 格式修复、导入文件生成、交付复制、产品版图同步和交付件校验，一次性复制正式测试设计到 `docs/test-design/current/`、`docs/test-design/deliverables/` 和 `docs/test-assets/modules/`，复制导入文件到 `docs/test-design/deliverables/` 和 `docs/test-assets/imports/`，并回写 `batch-status.csv` 的 `归档路径`、`导入文件路径`、`导入文件已生成`，同时清理 artifacts/scripts 下的 `__pycache__`。传入 `--page-discovery` 时必须同时传入 `--batch-status`；传入 `--product-map` 和 `--page-discovery` 时，工具会同步执行 `sync-product-map`，减少手写同步脚本。
 
 交付文件命名必须以菜单/模块路径为准，使用 `一级模块_二级菜单_三级菜单[_四级]_测试设计.xlsx` 和 `一级模块_二级菜单_三级菜单[_四级]_导入用例.xlsx`；不得把运行文件夹名、批次目录名或产品名拼入交付文件名。产品名应写入产品版图和工作簿字段，不作为 `current/`、`deliverables/`、`docs/test-assets/modules/`、`docs/test-assets/imports/` 中文件名的一部分；如 `module-path` 中包含产品名前缀，应同时传入 `--product-name` 让统一工具自动去除。
 

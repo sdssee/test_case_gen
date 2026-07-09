@@ -370,6 +370,7 @@ def main() -> int:
             fail(f"Missing upgrade mechanism file: {path}")
     for path in lightweight_entries:
         assert_max_chars(path, ENTRY_FILE_CHAR_LIMIT)
+    assert_max_chars(repo_root / "README.md", ENTRY_FILE_CHAR_LIMIT)
 
     versions = parse_key_value_file(version_file)
     for key in ["framework_version", "asset_schema_version"]:

@@ -1085,13 +1085,33 @@ def main() -> int:
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "case-design.md", ["闭环", "取消或关闭", "DFX 测试策略落地"])
     assert_contains(
         repo_root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
-        ["DFX 12", "DFT", "DFP", "DFI", "DFC", "DFS", "DFR", "DFM", "DFU", "DFD", "DFO", "DFB", "压力极限"],
+        ["DFX 12", "DFT", "DFP", "DFI", "DFC", "DFS", "DFR", "DFM", "DFU", "DFD", "DFO", "DFB", "压力极限", "DFX 覆盖评估", "适用", "不适用", "需补充证据"],
     )
     assert_contains(repo_root / "README.md", ["dfx-test-strategy.md", "DFX 不替代原测试维度"])
     assert_contains(repo_root / "docs" / "RULE_OWNERSHIP.md", ["DFX 测试策略矩阵", "dfx-test-strategy.md"])
     assert_contains(repo_root / ".codebuddy" / "rules" / "test-design-rule.md", ["docs/test-design/rules/dfx-test-strategy.md"])
     assert_contains(repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc", ["docs/test-design/rules/dfx-test-strategy.md"])
     assert_contains(repo_root / "docs" / "test-design" / "excel-template-spec.md", ["DFX 12 维度", "dfx-test-strategy.md"])
+    dfx_pre_eval_markers = [
+        "正式写测试用例前",
+        "DFX 覆盖评估",
+        "适用",
+        "不适用",
+        "待确认",
+        "需补充证据",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
+        repo_root / "docs" / "test-design" / "rules" / "case-design.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+    ]:
+        assert_contains(path, dfx_pre_eval_markers)
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "excel-deliverable.md", ["表格对象", "修复提示"])
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "batch-run.md", ["batch-runs/<task>/artifacts", "根目录 artifacts"])
     assert_contains(

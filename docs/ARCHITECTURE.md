@@ -41,7 +41,7 @@
 16. 正式测试设计 Excel 生成后，必须使用 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>` 做交付件质量校验；大范围任务还应追加 `-BatchStatusPath <batch-status.csv>` 校验批次状态与交付件一致，并强制读取同级 `page-discovery.csv` 与 `docs/test-assets/product-map.xlsx` 做产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的最小标题路径、页面元素、关联用例、用例资产索引和变更记录是否同步。
 17. 测试系统导入文件由统一表头映射链路生成，优先使用 `scripts/test_design_excel_tools.py generate-import`。批次临时脚本只能调用统一工具或复用同等映射函数，禁止按固定列序号数组写入模板；生成后必须通过 `-ImportWorkbookPath` 校验字段错位、下拉框、自动字段空值、模板数据验证和多行换行样式。
 18. 测试用例必须尽可能详细，这是架构约束。每个测试点、每个页面元素都必须按 Skill 从主流程、异常、边界、权限、状态、数据一致性、组合条件、禁用态/空状态/错误态、兼容性/稳定性、性能影响、审计/日志/通知、副作用和可恢复路径等不同测试方向展开；禁止用一个笼统用例替代多个可验证方向。
-19. 异常值、边界值和测试策略必须使用 DFX 12 维度 × 4 场景矩阵展开，权威规则为 `docs/test-design/rules/dfx-test-strategy.md`；不得只写一句笼统策略。每批至少考虑 DFT、DFB、DFS、DFR、DFU、DFP 的适用场景，涉及接口、兼容、维护、部署、运维、极端压测时追加 DFI、DFC、DFM、DFD、DFO、DFX。
+19. 模块或批次正式写测试用例前，必须先完成 DFX 覆盖评估，综合评估 DFX 12 维度 × 4 场景覆盖，权威规则为 `docs/test-design/rules/dfx-test-strategy.md`；评估结论必须明确适用、不适用、待确认和需补充证据的维度，并据此展开异常值、边界值和测试策略，不得只写一句笼统策略。每批至少考虑 DFT、DFB、DFS、DFR、DFU、DFP 的适用场景，涉及接口、兼容、维护、部署、运维、极端压测时追加 DFI、DFC、DFM、DFD、DFO、DFX。
 19. 模块级粗遍历、菜单轮廓、页面清单和功能地图不是临时分析结果，必须沉淀到 `product-map.xlsx` 的产品模块地图、页面元素地图、业务对象地图、业务链路地图、模块能力索引、跨模块依赖关系和变更记录，形成对整个项目或模块的长期理解。
     `product-map.xlsx` 的十个 Sheet 都必须沉淀真实产品资产，禁止保留 `示例产品`、`示例模块`、`示例页面` 等模板样例行；`用例资产索引` 必须覆盖正式测试设计中的全部功能用例 ID，`页面元素地图` 必须覆盖正式测试设计中的全部页面元素。
 20. 外网到内网升级以脚本升级为主、手动确认兜底；普通框架升级不得覆盖 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。标识：PROTECTED_ASSET_DIRS。

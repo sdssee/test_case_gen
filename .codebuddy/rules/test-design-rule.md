@@ -30,7 +30,7 @@
 16. 正式生成前必须展示产品理解摘要或模块理解摘要，包含风险项与待确认问题；正式写测试用例前必须先让用户确认，并根据确认结果动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级。
 17. 范围超过一个最小标题时，必须按最深标题级别建立批次队列，逐个最小标题路径执行；禁止合并多个最小标题，禁止再拆分一个最小标题。
 18. 每一批都必须完整覆盖功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险、自动化建议和页面元素覆盖清单，不得因为分批而降级。
-19. 异常值、边界值和测试策略必须按 `docs/test-design/rules/dfx-test-strategy.md` 的 DFX 12 维度 × 4 场景矩阵落地，不得只写一句笼统策略。
+19. 模块或批次正式写测试用例前，必须先综合评估 DFX 12 维度 × 4 场景覆盖，明确适用、不适用、待确认和需补充证据的维度；异常值、边界值和测试策略必须按 `docs/test-design/rules/dfx-test-strategy.md` 落地，不得只写一句笼统策略。
 20. 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/` 五件套。
 21. `batch-status.csv` 和 `page-discovery.csv` 必须使用标准模板表头，禁止自定义精简表头；`page-discovery.csv` 必须结构化写入，防止字段错位。
 22. 禁止创建承载全量测试用例正文的单一 Python/JSON/CSV/Markdown/临时脚本；脚本只能处理当前批次并放在 `artifacts/scripts/`。

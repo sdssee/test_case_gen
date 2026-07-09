@@ -33,13 +33,14 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 2. 读取产品资产：生成或补充前读取 `docs/test-assets/product-map.xlsx`；涉及依赖模块时读取对应归档测试设计。
 3. 粗遍历和摘要：模块或大范围任务先做菜单轮廓、页面清单、核心功能点、业务对象、状态流转、跨模块依赖识别，并向用户展示产品理解摘要或模块理解摘要，包含风险项与待确认问题。
 4. 风险确认：正式写测试用例前，先把风险项与待确认问题发给用户确认；根据用户确认、补充、排除或调整，动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级。
-5. 分批执行：范围超过一个最小标题时，按最深标题级别建立批次队列，逐个最小标题路径执行，不能一次性生成完整测试用例。
-6. 页面深探：有页面、原型或窗口时，使用浏览器或 computer use 深遍历当前批次所有可点击、可输入、可选择、可测试元素，记录到 `page-discovery.csv` 和页面元素覆盖清单。
-7. 用例设计：按小功能块连续编排，基于 DFX 12 维度矩阵覆盖功能、性能、异常、边界、接口、安全、可靠、维护、可用、部署、运维、业务和极端场景。
-8. Excel 生成：正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
-9. 导入文件：需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件副本，优先使用 `scripts/test_design_excel_tools.py generate-import`。
-10. 资产同步：客户交付件放 `docs/test-design/current/` 或 `docs/test-design/deliverables/`；最终版回存 `docs/test-assets/modules/`，导入副本回存 `docs/test-assets/imports/`，并同步 `product-map.xlsx`。
-11. 校验与交付：生成后运行交付件校验；大范围任务传入批次账本、页面实探、产品版图和导入文件参数。
+5. DFX 覆盖评估：模块或批次正式写测试用例前，综合产品理解、页面实探、文档、历史资产、测试数据和风险项，评估 DFX 12 维度 × 4 场景的适用、不适用、待确认和需补充证据结论。
+6. 分批执行：范围超过一个最小标题时，按最深标题级别建立批次队列，逐个最小标题路径执行，不能一次性生成完整测试用例。
+7. 页面深探：有页面、原型或窗口时，使用浏览器或 computer use 深遍历当前批次所有可点击、可输入、可选择、可测试元素，记录到 `page-discovery.csv` 和页面元素覆盖清单。
+8. 用例设计：按小功能块连续编排，基于 DFX 覆盖评估结果覆盖功能、性能、异常、边界、接口、安全、可靠、维护、可用、部署、运维、业务和极端场景。
+9. Excel 生成：正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
+10. 导入文件：需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件副本，优先使用 `scripts/test_design_excel_tools.py generate-import`。
+11. 资产同步：客户交付件放 `docs/test-design/current/` 或 `docs/test-design/deliverables/`；最终版回存 `docs/test-assets/modules/`，导入副本回存 `docs/test-assets/imports/`，并同步 `product-map.xlsx`。
+12. 校验与交付：生成后运行交付件校验；大范围任务传入批次账本、页面实探、产品版图和导入文件参数。
 
 ## 不可违反的门禁
 
@@ -51,6 +52,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 选择类控件必须选择代表性选项并记录联动/依赖变化；输入类控件必须实际输入并记录真实提示和结果分支；新增类流程必须实填实走到成功后续页或失败停留态。
 - 弹窗、下拉、输入、编辑、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环。
 - 正式写测试用例前，必须先展示风险项与待确认问题并让用户确认；确认结果必须动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级。
+- 模块或批次正式写测试用例前，必须先完成 DFX 覆盖评估，明确适用、不适用、待确认和需补充证据的维度，再进入用例设计。
 - 每一批都必须执行完整规则，不得因为分批而减少功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险和页面覆盖。
 - 异常值、边界值和测试策略必须按 DFX 12 维度 × 4 场景矩阵落地，不得只写一句笼统策略；无法验证的 DFX 场景写入风险、性能设计或自动化建议。
 - 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/` 五件套。

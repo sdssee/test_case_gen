@@ -99,6 +99,19 @@ def workbook_sheets(path: Path) -> list[str]:
     return [node.attrib["name"] for node in root.findall("x:sheets/x:sheet", NS)]
 
 
+def validate_no_excel_table_parts(path: Path) -> None:
+    with zipfile.ZipFile(path) as zf:
+        table_files = [name for name in zf.namelist() if name.startswith("xl/tables/")]
+        if table_files:
+            fail(f"{path} must not contain Excel Table parts: {', '.join(table_files)}")
+        for name in zf.namelist():
+            if not (name.endswith(".xml") or name.endswith(".rels")):
+                continue
+            text = zf.read(name).decode("utf-8", errors="ignore")
+            if "<tableParts" in text or "relationships/table" in text or "/tables/" in text:
+                fail(f"{path} contains stale Excel Table relationship or tableParts in {name}")
+
+
 def shared_strings(zf: zipfile.ZipFile) -> list[str]:
     try:
         root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
@@ -338,6 +351,8 @@ def main() -> int:
         fail(f"Missing system import template: {system_template}")
     if not product_map.exists():
         fail(f"Missing product map: {product_map}")
+    for workbook in [design_template, system_template, product_map]:
+        validate_no_excel_table_parts(workbook)
     for path in [
         version_file,
         upgrade_manifest,
@@ -1112,7 +1127,7 @@ def main() -> int:
         repo_root / "docs" / "ARCHITECTURE.md",
     ]:
         assert_contains(path, dfx_pre_eval_markers)
-    assert_contains(repo_root / "docs" / "test-design" / "rules" / "excel-deliverable.md", ["表格对象", "修复提示"])
+    assert_contains(repo_root / "docs" / "test-design" / "rules" / "excel-deliverable.md", ["Excel Table", "/xl/tables/table*.xml", "修复提示"])
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "batch-run.md", ["batch-runs/<task>/artifacts", "根目录 artifacts"])
     assert_contains(
         deliverable_validator,
@@ -1171,8 +1186,8 @@ def main() -> int:
             "header_map",
             "IMPORT_AUTO_FIELDS",
             "wrap_text=True",
-            "resize_worksheet_tables",
-            "table.ref",
+            "remove_workbook_tables_and_refresh_filters",
+            "auto_filter.ref",
             "性能测试设计",
             "update_batch_status_paths",
             "sync_batch_markdown_paths",

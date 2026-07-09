@@ -330,7 +330,7 @@
 
 正式测试设计和导入文件中的多行字段必须设置自动换行和顶部对齐，不得只依赖模板前几行样式继承。正式测试设计至少包括 `前置条件`、`测试数据`、`操作步骤`、`预期结果`、`备注`；导入文件至少包括 `测试步骤描述`、`测试步骤预期结果`、`前置条件`、`测试用例说明`、`备注`。新增数据行必须复制模板第 2 行示例数据格式，只填充内容，不得改变边框、字体、填充、对齐、数字格式、下拉验证和必填/标红样式。
 
-正式测试设计、导入文件和产品版图中的 Excel 表格对象、自动筛选范围和实际数据区域必须一致；不得出现打开文件时 Microsoft Excel 提示修复、表格对象仍停留在模板前三行、自动筛选范围未覆盖新增行等问题。使用 `scripts/test_design_excel_tools.py generate-import` 或 `fix-formal-styles` 时，工具必须同步调整表格对象范围。
+正式测试设计、导入文件和产品版图不得保留 Excel Table 对象或 `/xl/tables/table*.xml` 部件；页面元素覆盖清单等 Sheet 使用普通单元格区域、样式和自动筛选。不得出现打开文件时 Microsoft Excel 提示修复、表格对象仍停留在模板前三行、自动筛选范围未覆盖新增行等问题。使用 `scripts/test_design_excel_tools.py generate-import` 或 `fix-formal-styles` 时，工具必须移除 Excel Table 对象并刷新自动筛选范围。
 
 批次交付收口必须优先使用 `scripts/test_design_excel_tools.py finalize-deliverables`，一次性复制正式测试设计到 `docs/test-design/current/`、`docs/test-design/deliverables/` 和 `docs/test-assets/modules/`，复制导入文件到 `docs/test-design/deliverables/` 和 `docs/test-assets/imports/`，并回写 `batch-status.csv` 的 `归档路径`、`导入文件路径`、`导入文件已生成`，同时清理 artifacts/scripts 下的 `__pycache__`。传入 `--page-discovery` 时必须同时传入 `--batch-status`；传入 `--product-map` 和 `--page-discovery` 时，工具会同步执行 `sync-product-map`，减少手写同步脚本。
 

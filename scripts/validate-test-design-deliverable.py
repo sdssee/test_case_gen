@@ -477,6 +477,13 @@ def assert_no_sensitive_text_values(path: Path, label: str) -> None:
 
 def validate_table_ranges(path: Path, sheet_names: list[str] | None = None) -> None:
     with zipfile.ZipFile(path) as zf:
+        table_files = [name for name in zf.namelist() if name.startswith("xl/tables/")]
+        if table_files:
+            fail(
+                f"{path} must not contain Excel Table parts: {', '.join(table_files)}. "
+                "Use normal cell ranges, styles, and auto filters instead; otherwise Excel may repair "
+                "or delete /xl/tables/table*.xml when opening the workbook."
+            )
         available_sheets = workbook_sheet_paths(zf)
         target_sheets = sheet_names or list(available_sheets)
         for sheet_name in target_sheets:
@@ -484,42 +491,12 @@ def validate_table_ranges(path: Path, sheet_names: list[str] | None = None) -> N
             if not sheet_path:
                 continue
             root = ET.fromstring(zf.read(sheet_path))
-            dimension = root.find("x:dimension", NS)
-            auto_filter = root.find("x:autoFilter", NS)
-            dimension_ref = dimension.attrib.get("ref", "") if dimension is not None else ""
-            auto_filter_ref = auto_filter.attrib.get("ref", "") if auto_filter is not None else ""
-            expected_ref = auto_filter_ref or dimension_ref
             table_parts = root.findall("x:tableParts/x:tablePart", NS)
-            if not expected_ref or not table_parts:
-                continue
-
-            rels_path = posixpath.join(posixpath.dirname(sheet_path), "_rels", f"{posixpath.basename(sheet_path)}.rels")
-            try:
-                rels = ET.fromstring(zf.read(rels_path))
-            except KeyError:
-                fail(f"{sheet_name} has tableParts but no worksheet relationship file")
-            rel_targets = {rel.attrib["Id"]: rel.attrib["Target"] for rel in rels.findall("rel:Relationship", NS)}
-            for table_part in table_parts:
-                rel_id = table_part.attrib.get(f"{{{NS['r']}}}id", "")
-                table_target = rel_targets.get(rel_id)
-                if not table_target:
-                    fail(f"{sheet_name} has tablePart without a valid relationship: {rel_id}")
-                table_path = relationship_target(sheet_path, table_target)
-                table_root = ET.fromstring(zf.read(table_path))
-                table_ref = table_root.attrib.get("ref", "")
-                table_filter = table_root.find("x:autoFilter", NS)
-                table_auto_filter = table_filter.attrib.get("ref", "") if table_filter is not None else ""
-                if not table_ref:
-                    fail(f"{sheet_name} table {table_path} has no ref range")
-                if not range_covers(table_ref, expected_ref):
-                    fail(
-                        f"{sheet_name} table range is stale: table {table_path} ref {table_ref} "
-                        f"does not cover worksheet range {expected_ref}. Regenerate or resize the Excel table before delivery."
-                    )
-                if table_auto_filter and table_auto_filter != table_ref:
-                    fail(
-                        f"{sheet_name} table {table_path} autoFilter ref {table_auto_filter} must match table ref {table_ref}"
-                    )
+            if table_parts:
+                fail(
+                    f"{sheet_name} must not contain worksheet tableParts. "
+                    "Remove Excel Table objects and keep only normal ranges/styles/auto filters."
+                )
 
 
 def sheet_rows(path: Path, sheet_name: str) -> list[list[str]]:

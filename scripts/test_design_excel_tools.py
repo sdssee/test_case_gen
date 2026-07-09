@@ -208,23 +208,17 @@ def worksheet_used_range(ws) -> str:
     return f"A1:{get_column_letter(ws.max_column)}{max(ws.max_row, 1)}"
 
 
-def resize_worksheet_tables(ws) -> None:
-    if not ws.tables:
-        return
+def remove_worksheet_tables_and_refresh_filter(ws) -> None:
+    for table_name in list(ws.tables.keys()):
+        del ws.tables[table_name]
     sheet_ref = worksheet_used_range(ws)
-    for table in ws.tables.values():
-        min_col, min_row, _, _ = range_boundaries(table.ref)
-        new_ref = f"{get_column_letter(min_col)}{min_row}:{get_column_letter(ws.max_column)}{max(ws.max_row, min_row)}"
-        table.ref = new_ref
-        if table.autoFilter is not None:
-            table.autoFilter.ref = new_ref
-    if ws.auto_filter and ws.auto_filter.ref:
+    if ws.max_row > 1 and ws.max_column > 1:
         ws.auto_filter.ref = sheet_ref
 
 
-def resize_workbook_tables(wb) -> None:
+def remove_workbook_tables_and_refresh_filters(wb) -> None:
     for ws in wb.worksheets:
-        resize_worksheet_tables(ws)
+        remove_worksheet_tables_and_refresh_filter(ws)
 
 
 def relative_project_path(project_root: Path, path: Path) -> str:
@@ -655,7 +649,7 @@ def sync_product_map(
             "备注": "由 sync-product-map/finalize-deliverables 统一维护",
         },
     )
-    resize_workbook_tables(wb)
+    remove_workbook_tables_and_refresh_filters(wb)
     wb.save(product_map)
 
 
@@ -677,7 +671,7 @@ def finalize_deliverables(
 
     apply_formal_workbook_styles(formal_workbook)
     import_wb = load_workbook(import_workbook)
-    resize_workbook_tables(import_wb)
+    remove_workbook_tables_and_refresh_filters(import_wb)
     import_wb.save(import_workbook)
 
     module_archive = project_root / "docs" / "test-assets" / "modules" / formal_name
@@ -766,7 +760,7 @@ def generate_import_workbook(formal_workbook: Path, import_template: Path, outpu
     for row_index in range(2, import_ws.max_row + 1):
         set_wrap(import_ws, import_headers, row_index, IMPORT_MULTILINE_FIELDS)
         import_ws.row_dimensions[row_index].height = max(import_ws.row_dimensions[row_index].height or 18, 60)
-    resize_workbook_tables(import_wb)
+    remove_workbook_tables_and_refresh_filters(import_wb)
     import_wb.save(output)
 
 
@@ -788,7 +782,7 @@ def apply_formal_workbook_styles(workbook: Path, output: Path | None = None, tem
         for row_index in range(2, ws.max_row + 1):
             set_wrap(ws, headers, row_index, fields)
             ws.row_dimensions[row_index].height = max(ws.row_dimensions[row_index].height or 18, 60)
-    resize_workbook_tables(wb)
+    remove_workbook_tables_and_refresh_filters(wb)
     wb.save(target)
 
 

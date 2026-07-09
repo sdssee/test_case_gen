@@ -138,7 +138,7 @@ docs/test-assets/product-map.xlsx
 5. 如果用户人工修改了测试设计，最终版必须回存内部资产库，并更新产品版图中的变更记录。
 6. 生成正式测试设计 Excel 后，必须运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务追加 `-BatchStatusPath <batch-status.csv>`，并强制读取同级 `page-discovery.csv` 与 `docs/test-assets/product-map.xlsx` 做产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的最小标题路径、页面元素、关联用例、用例资产索引和变更记录是否同步。
 
-批次交付收口优先使用 `scripts/test_design_excel_tools.py finalize-deliverables`。该命令负责复制正式测试设计到客户交付目录和 `docs/test-assets/modules/`，复制导入文件到客户交付目录和 `docs/test-assets/imports/`，回写 `batch-status.csv` 的归档路径与导入文件路径，并清理 artifacts/scripts 下的 `__pycache__`。传入 `--page-discovery` 时必须同时传入 `--batch-status`；传入 `--product-map` 和 `--page-discovery` 时会调用 `sync-product-map` 同步产品版图。不要手工维护多份 Excel 副本，以免 deliverables、imports、modules 与批次账本不一致。
+批次交付收口优先使用 `scripts/test_design_excel_tools.py complete-deliverables`。该命令负责中间脚本预检、正式测试设计格式修复、导入文件生成、复制正式测试设计到客户交付目录和 `docs/test-assets/modules/`、复制导入文件到客户交付目录和 `docs/test-assets/imports/`、回写 `batch-status.csv` 的归档路径与导入文件路径，并清理 artifacts/scripts 下的 `__pycache__`。传入 `--page-discovery` 时必须同时传入 `--batch-status`；传入 `--product-map` 和 `--page-discovery` 时会调用 `sync-product-map` 同步产品版图。不要手工维护多份 Excel 副本，以免 deliverables、imports、modules 与批次账本不一致。
 
 ## 跨模块用例管理
 

@@ -61,22 +61,24 @@ your-project/
 如果涉及页面、截图、原型或可访问系统，请按 docs/test-design/rules/page-discovery.md 做页面实探。
 如果范围超过一个最小标题，请按 docs/test-design/rules/batch-run.md 分批执行。
 如果需要导入测试系统，请复制 docs/test-design/测试用例模板.xlsx 生成独立导入文件，不要修改原模板。
-生成后请运行 scripts/validate-test-design-deliverable.ps1 校验交付件。
+生成后请优先运行 scripts/test_design_excel_tools.py complete-deliverables 一站式生成导入文件、同步交付件并校验。
 ```
 
 ## 测试系统导入
 
 正式测试设计 Excel 不新增 `测试系统导入用例` Sheet。需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，并保留模板下拉框、必填样式、标红字段和自动生成字段空值。
 
-推荐使用统一工具：
+推荐随批次交付使用统一收口工具：
 
 ```powershell
-python scripts/test_design_excel_tools.py generate-import `
+python scripts/test_design_excel_tools.py complete-deliverables `
+  --project-root . `
   --formal-workbook docs/test-design/current/<测试设计.xlsx> `
   --import-template docs/test-design/测试用例模板.xlsx `
-  --output docs/test-assets/imports/<导入文件.xlsx> `
   --module-path "一级模块>二级菜单>三级菜单"
 ```
+
+只需要单独生成导入文件时，可使用 `generate-import` 兼容命令。
 
 导入文件生成后，用 `-ImportWorkbookPath <导入文件.xlsx>` 追加校验。
 

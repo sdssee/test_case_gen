@@ -95,7 +95,7 @@ python scripts/test_design_excel_tools.py complete-deliverables `
 - 硬性测试质量规则以 `.codebuddy/.rules/test-design-rule.mdc` 和 `.codebuddy/rules/test-design-rule.md` 为准。
 - 执行流程以 `.codebuddy/skills/test-design/SKILL.md` 为准。
 - 详细规则按任务类型读取 `docs/test-design/rules/`，入口文件保持低于 10000 字符，避免 CodeBuddy 加载 Skill 时截断或遗漏。
-- 异常、边界、权限、状态、性能、安全、可靠性等测试策略以 `docs/test-design/rules/dfx-test-strategy.md` 为细化口径；模块测试例生成前先做 DFX 覆盖评估，DFX 不替代原测试维度，而是把原要求落到测试数据、操作步骤、预期结果和恢复路径。
+- 异常、边界、权限、状态、性能、安全、可靠性等测试策略以 `docs/test-design/rules/dfx-test-strategy.md` 为主口径；模块测试例生成前先做 DFX 覆盖评估，正式 Excel 使用 `DFX维度` 和 `DFX场景` 驱动测试数据、操作步骤、预期结果和恢复路径。
 - Excel 字段、下拉框和导入模板以 `docs/test-design/excel-template-spec.md` 为准。
 - 产品版图、归档和跨模块依赖以 `docs/test-design/archive-and-index-guidelines.md` 为准。
 - 规则归属和精简边界以 `docs/RULE_OWNERSHIP.md` 为准。

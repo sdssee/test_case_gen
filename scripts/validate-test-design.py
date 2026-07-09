@@ -412,6 +412,26 @@ def main() -> int:
     if "测试系统导入用例" in design_sheets:
         fail("Design template must not contain 测试系统导入用例 sheet")
 
+    scenario_headers = first_row_values(design_template, 3)
+    for stale_header in ["场景类型", "正向/反向"]:
+        if stale_header in scenario_headers:
+            fail(f"测试场景矩阵 must not contain stale strategy header: {stale_header}")
+    for required_header in ["测试维度", "DFX维度", "DFX场景", "测试对象/页面元素", "输入数据/状态条件", "观察点"]:
+        if required_header not in scenario_headers:
+            fail(f"测试场景矩阵 is missing DFX-driven header: {required_header}")
+
+    template_required_headers = {
+        4: ["测试类型", "DFX维度", "DFX场景", "操作步骤", "预期结果"],
+        5: ["性能测试类型", "DFX维度", "DFX场景", "监控指标", "通过标准"],
+        6: ["关联DFX维度", "关联DFX场景", "描述", "建议处理方式"],
+        8: ["适用DFX维度", "适用DFX场景", "覆盖用例 ID", "覆盖状态"],
+    }
+    for sheet_index, required_headers in template_required_headers.items():
+        headers = first_row_values(design_template, sheet_index)
+        for required_header in required_headers:
+            if required_header not in headers:
+                fail(f"Design template sheet {sheet_index} is missing required DFX header: {required_header}")
+
     for row in range(2, 5):
         function_point = cell_value(design_template, 4, f"D{row}")
         case_title = cell_value(design_template, 4, f"E{row}")
@@ -987,7 +1007,7 @@ def main() -> int:
     assert_contains(batch_review_template, ["批次执行复盘", "页面数", "元素总数", "导入文件路径", "最终交付约束", "不得重新生成各批完整用例"])
     expected_page_discovery_header = (
         "批次ID,一级模块,二级菜单,三级菜单/页面域,最小标题路径,页面/入口,菜单路径/URL,发现方式,角色/权限,数据状态,"
-        "元素名称/文案,元素类型,交互方式,选项取值/输入值,联动/依赖变化,结果分支/后续状态,完整点击路径,预期/观察行为,业务依据/规则来源,测试数据来源,"
+        "元素名称/文案,元素类型,交互方式,适用DFX维度,适用DFX场景,选项取值/输入值,联动/依赖变化,结果分支/后续状态,完整点击路径,预期/观察行为,业务依据/规则来源,测试数据来源,"
         "是否已生成用例,关联用例ID,覆盖状态,未覆盖/待确认原因,证据路径,备注"
     )
     actual_page_discovery_header = read_text(page_discovery_template).splitlines()[0]
@@ -1102,7 +1122,7 @@ def main() -> int:
         repo_root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
         ["DFX 12", "DFT", "DFP", "DFI", "DFC", "DFS", "DFR", "DFM", "DFU", "DFD", "DFO", "DFB", "压力极限", "DFX 覆盖评估", "适用", "不适用", "需补充证据"],
     )
-    assert_contains(repo_root / "README.md", ["dfx-test-strategy.md", "DFX 不替代原测试维度"])
+    assert_contains(repo_root / "README.md", ["dfx-test-strategy.md", "DFX维度", "DFX场景"])
     assert_contains(repo_root / "docs" / "RULE_OWNERSHIP.md", ["DFX 测试策略矩阵", "dfx-test-strategy.md"])
     assert_contains(repo_root / ".codebuddy" / "rules" / "test-design-rule.md", ["docs/test-design/rules/dfx-test-strategy.md"])
     assert_contains(repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc", ["docs/test-design/rules/dfx-test-strategy.md"])
@@ -1219,6 +1239,17 @@ def main() -> int:
         repo_root / "docs" / "test-design" / "rules" / "batch-run.md",
     ]:
         assert_contains(path, complete_deliverable_markers)
+    dfx_field_markers = ["DFX维度", "DFX场景", "场景类型", "正向/反向"]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
+    ]:
+        assert_contains(path, dfx_field_markers)
     assert_contains(
         generated_python_validator,
         ["FORBIDDEN_QUOTE_CHARS", "py_compile", "MAX_PYTHON_BYTES", "MAX_JSON_BYTES", "json.load"],
@@ -1234,7 +1265,7 @@ def main() -> int:
         repo_root / "docs" / "ARCHITECTURE.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
     ]:
-        assert_contains(path, ["scripts/test_design_excel_tools.py", "generate-import"])
+        assert_contains(path, ["scripts/test_design_excel_tools.py", "complete-deliverables", "generate-import"])
     assert_contains(
         repo_root / "docs" / "RULE_OWNERSHIP.md",
         ["scripts/test_design_excel_tools.py", "scripts/validate-generated-python-scripts.py", "交付件质量校验"],

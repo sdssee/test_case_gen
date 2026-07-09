@@ -38,7 +38,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 7. 页面深探：有页面、原型或窗口时，使用浏览器或 computer use 深遍历当前批次所有可点击、可输入、可选择、可测试元素，记录到 `page-discovery.csv` 和页面元素覆盖清单。
 8. 用例设计：按小功能块连续编排，基于 DFX 覆盖评估结果覆盖功能、性能、异常、边界、接口、安全、可靠、维护、可用、部署、运维、业务和极端场景。
 9. Excel 生成：正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
-10. 导入文件：需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件副本，优先使用 `scripts/test_design_excel_tools.py generate-import`。
+10. 导入文件：需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件副本；随批次交付优先使用 `scripts/test_design_excel_tools.py complete-deliverables`，只需单独生成导入文件时才使用 `generate-import`。
 11. 资产同步：客户交付件放 `docs/test-design/current/` 或 `docs/test-design/deliverables/`；最终版回存 `docs/test-assets/modules/`，导入副本回存 `docs/test-assets/imports/`，并同步 `product-map.xlsx`。
 12. 校验与交付：生成后运行交付件校验；大范围任务传入批次账本、页面实探、产品版图和导入文件参数。
 
@@ -54,7 +54,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 正式写测试用例前，必须先展示风险项与待确认问题并让用户确认；确认结果必须动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级。
 - 模块或批次正式写测试用例前，必须先完成 DFX 覆盖评估，明确适用、不适用、待确认和需补充证据的维度，再进入用例设计。
 - 每一批都必须执行完整规则，不得因为分批而减少功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险和页面覆盖。
-- 异常值、边界值和测试策略必须按 DFX 12 维度 × 4 场景矩阵落地，不得只写一句笼统策略；无法验证的 DFX 场景写入风险、性能设计或自动化建议。
+- 异常值、边界值和测试策略必须按 DFX 12 维度 × 4 场景矩阵落地，不得只写一句笼统策略；正式 Excel 必须填写 `DFX维度` 和 `DFX场景`，`场景类型`、`正向/反向` 不再作为测试策略字段；无法验证的 DFX 场景写入风险、性能设计或自动化建议。
 - 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/` 五件套。
 - `batch-status.csv`、`page-discovery.csv` 必须使用标准模板表头，禁止自定义精简表头和字段错位。
 - 批次截图、临时脚本和证据必须放在当前任务 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享根目录 artifacts。

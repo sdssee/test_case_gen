@@ -30,7 +30,7 @@
 16. 正式生成前必须展示产品理解摘要或模块理解摘要，包含风险项与待确认问题；正式写测试用例前必须先让用户确认，并根据确认结果动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级。
 17. 范围超过一个最小标题时，必须按最深标题级别建立批次队列，逐个最小标题路径执行；禁止合并多个最小标题，禁止再拆分一个最小标题。
 18. 每一批都必须完整覆盖功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险、自动化建议和页面元素覆盖清单，不得因为分批而降级。
-19. 模块或批次正式写测试用例前，必须先综合评估 DFX 12 维度 × 4 场景覆盖，明确适用、不适用、待确认和需补充证据的维度；异常值、边界值和测试策略必须按 `docs/test-design/rules/dfx-test-strategy.md` 落地，不得只写一句笼统策略。
+19. 模块或批次正式写测试用例前，必须先综合评估 DFX 12 维度 × 4 场景覆盖，明确适用、不适用、待确认和需补充证据的维度；异常值、边界值和测试策略必须按 `docs/test-design/rules/dfx-test-strategy.md` 落地，不得只写一句笼统策略。正式 Excel 必须填写 `DFX维度` 和 `DFX场景`，`场景类型`、`正向/反向` 不再作为测试策略字段。
 20. 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/` 五件套。
 21. `batch-status.csv` 和 `page-discovery.csv` 必须使用标准模板表头，禁止自定义精简表头；`page-discovery.csv` 必须结构化写入，防止字段错位。
 22. 禁止创建承载全量测试用例正文的单一 Python/JSON/CSV/Markdown/临时脚本；脚本只能处理当前批次并放在 `artifacts/scripts/`。
@@ -38,7 +38,7 @@
 24. 批次截图、临时脚本和证据必须放在当前任务 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享根目录 artifacts。
 25. 批次交付收口优先使用 `scripts/test_design_excel_tools.py complete-deliverables` 一站式完成中间文件预检、格式修复、导入生成、交付复制、产品版图同步和交付件校验；已有导入文件时可使用 `finalize-deliverables`。交付文件名只使用菜单/模块路径，不拼运行文件夹名、批次目录名或产品名。
 26. 当前批次 Python 临时脚本必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件写入中文文本，执行前运行生成脚本预检，检查单文件大小、JSON 语法、Python 语法和中文弯引号风险。
-27. 测试系统导入文件必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，优先使用 `scripts/test_design_excel_tools.py generate-import`，保留下拉框、必填样式、标红字段和自动生成字段空值。
+27. 测试系统导入文件必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，随批次交付优先使用 `scripts/test_design_excel_tools.py complete-deliverables`，只需单独生成导入文件时才使用 `generate-import`，保留下拉框、必填样式、标红字段和自动生成字段空值。
 28. 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。
 29. 导入文件 `执行方式` 默认 `手动`；只有已有可运行、可维护且覆盖主要校验点的自动化资产，并且本次明确按自动化导入或关联资产时，才允许填写 `自动化`。
 30. 正式交付件、导入文件、批次账本、页面实探记录、临时脚本和产品版图不得写入真实环境 URL/IP、真实账号、真实密钥、Token、密码或内部敏感凭据；使用 `<product_login_url>` 等占位符。

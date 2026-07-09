@@ -77,13 +77,13 @@ powershell -ExecutionPolicy Bypass -File scripts\upgrade-framework.ps1 -PackageP
 powershell -ExecutionPolicy Bypass -File scripts\validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
 ```
 
-如果本次交付包含测试系统导入文件，升级后还应使用统一工具重新抽样生成或校验导入副本，避免内外网 Python 临时脚本按列序号写入导致字段错位：
+如果本次交付包含测试系统导入文件，升级后还应使用一站式收口工具重新抽样生成或校验导入副本，避免内外网 Python 临时脚本按列序号写入导致字段错位：
 
 ```powershell
-python scripts/test_design_excel_tools.py generate-import `
+python scripts/test_design_excel_tools.py complete-deliverables `
+  --project-root . `
   --formal-workbook docs/test-design/current/<测试设计.xlsx> `
   --import-template docs/test-design/测试用例模板.xlsx `
-  --output docs/test-assets/imports/<导入文件.xlsx> `
   --module-path "一级模块>二级菜单>三级菜单"
 
 powershell -ExecutionPolicy Bypass -File scripts\validate-test-design-deliverable.ps1 `
@@ -92,6 +92,7 @@ powershell -ExecutionPolicy Bypass -File scripts\validate-test-design-deliverabl
 ```
 
 大范围任务可追加 `-BatchStatusPath <batch-status.csv>` 校验批次状态中的覆盖数量和质量门禁。
+只需要单独生成导入文件且不做批次收口时，可使用 `generate-import` 兼容命令。
 
 ## 资产结构升级
 

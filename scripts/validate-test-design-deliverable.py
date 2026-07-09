@@ -161,6 +161,33 @@ DFX_SCENARIOS = {
 }
 
 DEPRECATED_SCENARIO_HEADERS = {"场景类型", "正向/反向"}
+FUNCTION_SHEET_FORBIDDEN_TEST_TYPES = {"性能规格测试"}
+FUNCTION_SHEET_FORBIDDEN_DFX_DIMENSIONS = {"DFP性能"}
+FUNCTION_SHEET_FORBIDDEN_DFX_PAIRS = {
+    ("DFX极端", "压力极限"),
+    ("DFX极端", "资源耗尽"),
+    ("DFX极端", "并发极限"),
+}
+MUTATING_TEST_DATA_MARKERS = ["AI_TEST", "CODEX_TEST", "本次创建", "本次新增", "用户提供测试数据", "测试标识"]
+SAFE_EXISTING_DATA_MARKERS = ["不保存", "不提交", "不确认", "取消", "关闭", "数据不变", "状态不变"]
+MUTATION_COMMIT_MARKERS = [
+    "保存成功",
+    "提交成功",
+    "新增成功",
+    "创建成功",
+    "添加成功",
+    "确认删除",
+    "删除成功",
+    "编辑成功",
+    "修改成功",
+    "列表刷新",
+    "落库",
+    "状态变更",
+    "状态流转",
+    "生效",
+]
+NON_MUTATING_BLOCK_MARKERS = ["禁用", "不可点击", "置灰", "校验失败", "校验提示", "未保存", "未提交", "不触发保存", "阻止保存"]
+MIN_FUNCTION_CASES_PER_GENERATED_ELEMENT = 0.7
 
 IMPORT_REQUIRED_FIELDS = ["一级模块名称", "二级模块名称", "三级模块名称", "测试用例名称", "测试类型", "测试用例级别", "执行方式"]
 IMPORT_AUTO_FIELDS = ["测试用例系统编号", "作者"]
@@ -784,6 +811,61 @@ def dfx_pairs(dimensions_text: str, scenarios_text: str) -> set[tuple[str, str]]
     }
 
 
+def assert_function_sheet_dfx_scope(
+    test_type: str,
+    dimensions: set[str],
+    pairs: set[tuple[str, str]],
+    label: str,
+) -> None:
+    if test_type in FUNCTION_SHEET_FORBIDDEN_TEST_TYPES:
+        fail(f"{label} must not use 测试类型={test_type}; move performance scenarios to 性能测试设计")
+    forbidden_dimensions = sorted(dimensions & FUNCTION_SHEET_FORBIDDEN_DFX_DIMENSIONS)
+    if forbidden_dimensions:
+        fail(f"{label} must not use {forbidden_dimensions} in 功能测试用例; move them to 性能测试设计")
+    forbidden_pairs = sorted(pairs & FUNCTION_SHEET_FORBIDDEN_DFX_PAIRS)
+    if forbidden_pairs:
+        fail(f"{label} contains extreme performance-style DFX pairs in 功能测试用例: {forbidden_pairs}")
+
+
+def contains_any_marker(text: str, markers: list[str]) -> bool:
+    return any(marker in (text or "") for marker in markers)
+
+
+def assert_mutation_case_evidence(row: dict[str, str], label: str) -> None:
+    combined = "\n".join(
+        [
+            row.get("功能点", ""),
+            row.get("用例标题", ""),
+            row.get("测试数据", ""),
+            row.get("操作步骤", ""),
+            row.get("预期结果", ""),
+            row.get("备注", ""),
+        ]
+    )
+    if not any(marker in combined for marker in ["新增", "创建", "添加", "新建", "保存", "提交", "编辑", "修改", "删除"]):
+        return
+    commits_change = contains_any_marker(combined, MUTATION_COMMIT_MARKERS)
+    if not commits_change and contains_any_marker(combined, NON_MUTATING_BLOCK_MARKERS + SAFE_EXISTING_DATA_MARKERS):
+        return
+    if any(marker in combined for marker in ["已有数据", "既有数据"]):
+        if not contains_any_marker(combined, SAFE_EXISTING_DATA_MARKERS):
+            fail(f"{label} touches existing data but does not clearly close with cancel/close/no-save/no-change")
+        if any(marker in combined for marker in ["确认删除", "保存修改", "提交修改", "最终确认"]):
+            fail(f"{label} must not finally modify or delete existing data")
+        return
+    if commits_change and not contains_any_marker(combined, MUTATING_TEST_DATA_MARKERS):
+        fail(f"{label} mutating case must bind to current test data such as AI_TEST/CODEX_TEST or 用户提供测试数据")
+    if any(marker in combined for marker in ["新增", "创建", "添加", "新建", "保存", "提交"]):
+        if not any(marker in combined for marker in ["列表", "详情", "下一级", "刷新", "成功", "失败", "校验"]):
+            fail(f"{label} create/save flow must verify list/detail/next-page/success/failure state")
+    if any(marker in combined for marker in ["编辑", "修改"]):
+        if not any(marker in combined for marker in ["编辑前", "编辑后", "变更", "回显", "列表", "详情", "数据不变"]):
+            fail(f"{label} edit flow must verify before/after value, echo, list/detail, or unchanged state")
+    if "删除" in combined:
+        if not any(marker in combined for marker in ["删除取消", "取消删除", "确认删除", "列表不再展示", "搜索不到", "数据不变"]):
+            fail(f"{label} delete flow must include cancel/confirm and post-delete or unchanged verification")
+
+
 def assert_no_deprecated_scenario_headers(rows: list[list[str]], sheet_name: str) -> None:
     if not rows:
         return
@@ -950,10 +1032,13 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
             row.get("DFX场景", ""),
             f"功能测试用例 row {index}",
         )
-        function_dfx.update(dfx_pairs(row.get("DFX维度", ""), row.get("DFX场景", "")))
+        pairs = dfx_pairs(row.get("DFX维度", ""), row.get("DFX场景", ""))
+        assert_function_sheet_dfx_scope(row.get("测试类型", ""), dimensions, pairs, f"功能测试用例 row {index}")
+        function_dfx.update(pairs)
         assert_numbered(row.get("操作步骤", ""), f"功能测试用例 row {index} 操作步骤")
         assert_complete_operation_steps(row.get("操作步骤", ""), f"功能测试用例 row {index} 操作步骤")
         assert_numbered(row.get("预期结果", ""), f"功能测试用例 row {index} 预期结果")
+        assert_mutation_case_evidence(row, f"功能测试用例 row {index}")
         assert_transient_flow_closed(
             row.get("操作步骤", ""),
             row.get("预期结果", ""),
@@ -1021,6 +1106,7 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
         "case_ids": case_ids,
         "case_titles": case_titles,
         "case_function_points": case_function_points,
+        "function_case_count": len(function_rows),
         "coverage_rows": coverage_rows,
     }
 
@@ -1135,6 +1221,18 @@ def is_selection_element(row: dict[str, str]) -> bool:
     return any(marker in text for marker in selection_markers)
 
 
+def is_pagination_element(row: dict[str, str]) -> bool:
+    text = " ".join(
+        [
+            row.get("元素名称/文案", ""),
+            row.get("元素类型", ""),
+            row.get("交互方式", ""),
+            row.get("选项取值/输入值", ""),
+        ]
+    )
+    return any(marker in text for marker in ["分页", "每页", "页码", "上一页", "下一页", "跳转", "条/页", "条每页"])
+
+
 def is_input_element(row: dict[str, str]) -> bool:
     non_input_types = ["按钮", "图标", "表格列", "分页", "链接", "开关"]
     element_type = row.get("元素类型", "")
@@ -1166,9 +1264,53 @@ def is_create_flow_element(row: dict[str, str]) -> bool:
     return any(marker in text for marker in create_markers)
 
 
+def is_mutating_discovery_element(row: dict[str, str]) -> bool:
+    text = " ".join(
+        [
+            row.get("元素名称/文案", ""),
+            row.get("元素类型", ""),
+            row.get("交互方式", ""),
+            row.get("结果分支/后续状态", ""),
+        ]
+    )
+    return any(marker in text for marker in ["新增", "创建", "添加", "新建", "保存", "提交", "编辑", "修改", "删除"])
+
+
 def has_create_result_branch(value: str) -> bool:
     result_markers = ["成功", "失败", "校验", "错误", "重复", "为空", "无权限", "停留", "进入", "跳转", "详情", "下一级", "下一步"]
     return any(marker in (value or "") for marker in result_markers)
+
+
+def assert_selection_has_real_choice(row: dict[str, str], index: int, page: str, element: str) -> None:
+    values = row.get("选项取值/输入值", "")
+    weak_values = {"查看选项", "展开查看", "查看下拉内容", "全部选项", "下拉选项", "无"}
+    if values.strip() in weak_values:
+        fail(f"page-discovery.csv row {index} selection element must record actual selected options, not only viewing options: {page} / {element}")
+    combined = f"{values} {row.get('联动/依赖变化', '')} {row.get('结果分支/后续状态', '')}"
+    if not any(marker in combined for marker in ["选择", "切换", "分别", "代表", "联动", "无联动", "刷新", "禁用", "启用", "校验"]):
+        fail(f"page-discovery.csv row {index} selection element must record selection action and dependency/result change: {page} / {element}")
+
+
+def assert_mutating_discovery_evidence(row: dict[str, str], index: int, page: str, element: str) -> None:
+    combined = "\n".join(
+        [
+            row.get("选项取值/输入值", ""),
+            row.get("联动/依赖变化", ""),
+            row.get("结果分支/后续状态", ""),
+            row.get("预期/观察行为", ""),
+            row.get("测试数据来源", ""),
+            row.get("备注", ""),
+        ]
+    )
+    commits_change = contains_any_marker(combined, MUTATION_COMMIT_MARKERS)
+    if not commits_change and contains_any_marker(combined, NON_MUTATING_BLOCK_MARKERS + SAFE_EXISTING_DATA_MARKERS):
+        return
+    if any(marker in combined for marker in ["已有数据", "既有数据"]):
+        if not contains_any_marker(combined, SAFE_EXISTING_DATA_MARKERS):
+            fail(f"page-discovery.csv row {index} existing-data operation must close with cancel/close/no-save/no-change: {page} / {element}")
+        return
+    if commits_change and not contains_any_marker(combined, MUTATING_TEST_DATA_MARKERS):
+        fail(f"page-discovery.csv row {index} mutating operation must record current test data marker/source: {page} / {element}")
 
 
 def validate_batch_granularity(row: dict[str, str], numbers: dict[str, int]) -> None:
@@ -1470,10 +1612,12 @@ def validate_product_map_sync(
     case_ids = workbook_data["case_ids"]
     case_titles = workbook_data["case_titles"]
     case_function_points = workbook_data["case_function_points"]
+    function_case_count = workbook_data["function_case_count"]
     assert isinstance(coverage_rows, list)
     assert isinstance(case_ids, set)
     assert isinstance(case_titles, dict)
     assert isinstance(case_function_points, dict)
+    assert isinstance(function_case_count, int)
 
     workbook_elements = {
         normalized_key(row.get("页面/入口", ""), row.get("元素名称/文案", ""))
@@ -1506,6 +1650,7 @@ def validate_product_map_sync(
     }
     discovery_count_by_batch: dict[str, int] = {}
     generated_count_by_batch: dict[str, int] = {}
+    pagination_rows_by_page: dict[tuple[str, str], list[dict[str, str]]] = {}
 
     for index, row in enumerate(discovery_rows, start=2):
         batch_id = row.get("批次ID", "")
@@ -1535,6 +1680,7 @@ def validate_product_map_sync(
         if is_selection_element(row):
             if not row.get("选项取值/输入值"):
                 fail(f"page-discovery.csv row {index} selection element must record selected option values: {page} / {element}")
+            assert_selection_has_real_choice(row, index, page, element)
             if row.get("是否已生成用例", "") == "是" and not row.get("联动/依赖变化"):
                 fail(f"page-discovery.csv row {index} generated selection case must record 联动/依赖变化: {page} / {element}")
             if row.get("是否已生成用例", "") == "是" and not row.get("结果分支/后续状态"):
@@ -1557,6 +1703,10 @@ def validate_product_map_sync(
                 fail(f"page-discovery.csv row {index} generated create flow must record next page or failure state: {page} / {element}")
             if not has_create_result_branch(result_branch):
                 fail(f"page-discovery.csv row {index} generated create flow result must mention success/failure/next state: {page} / {element}")
+        if is_mutating_discovery_element(row) and row.get("是否已生成用例", "") == "是":
+            assert_mutating_discovery_evidence(row, index, page, element)
+        if is_pagination_element(row):
+            pagination_rows_by_page.setdefault((batch_id, page), []).append(row)
         if normalized_key(page, element) not in workbook_elements:
             fail(f"page-discovery.csv row {index} element is missing from workbook 页面元素覆盖清单: {page} / {element}")
         if normalized_key(page, element) not in product_elements:
@@ -1608,6 +1758,28 @@ def validate_product_map_sync(
             fail(
                 f"page-discovery.csv has fewer generated coverage rows for {batch_id} than batch-status.csv 已覆盖元素数: {generated} < {numbers['已覆盖元素数']}"
             )
+        minimum_cases = max(1, int(numbers["已覆盖元素数"] * MIN_FUNCTION_CASES_PER_GENERATED_ELEMENT + 0.999))
+        if function_case_count < minimum_cases:
+            fail(
+                f"Workbook 功能测试用例 count is too low for generated page elements in {batch_id}: "
+                f"{function_case_count} < {minimum_cases}. DFX must expand element/interaction paths instead of compressing cases."
+            )
+
+    for (batch_id, page), rows in pagination_rows_by_page.items():
+        generated_rows = [row for row in rows if row.get("是否已生成用例", "") == "是"]
+        if not generated_rows:
+            continue
+        if len(rows) < 3:
+            fail(f"page-discovery.csv pagination control must be split into at least 3 rows for {batch_id} / {page}")
+        combined = " ".join(" ".join(row.values()) for row in rows)
+        required_groups = {
+            "page size dropdown": ["每页", "条数", "条/页", "条每页"],
+            "page navigation": ["上一页", "下一页", "页码", "跳转"],
+            "pagination boundary": ["首页", "末页", "第一页", "最后一页", "边界", "禁用", "空数据"],
+        }
+        for label, markers in required_groups.items():
+            if not any(marker in combined for marker in markers):
+                fail(f"page-discovery.csv pagination control for {batch_id} / {page} is missing {label} coverage")
 
 
 def default_product_map_path() -> Path:

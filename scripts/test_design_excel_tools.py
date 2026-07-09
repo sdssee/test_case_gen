@@ -37,6 +37,9 @@ IMPORT_ALLOWED_VALUES = {
     "测试用例级别": {"L1", "L2", "L3", "L4"},
     "执行方式": {"自动化", "手动"},
 }
+IMPORT_EXCLUDED_TEST_TYPES = {"性能规格测试"}
+IMPORT_EXCLUDED_DFX_DIMENSIONS = {"DFP性能"}
+IMPORT_EXCLUDED_DFX_EXTREME_SCENARIOS = {"压力极限", "资源耗尽", "并发极限"}
 
 
 def header_map(ws, header_row: int = 1) -> dict[str, int]:
@@ -178,6 +181,24 @@ def normalize_test_type(value: str) -> str:
     if "维护" in value:
         return "可维护性测试"
     return "功能测试"
+
+
+def split_dfx_values(text: str) -> set[str]:
+    normalized = (text or "").replace("，", ",").replace("；", ",").replace("、", ",").replace("/", ",")
+    return {item.strip() for item in normalized.split(",") if item.strip()}
+
+
+def is_importable_function_case(case: dict[str, str]) -> bool:
+    test_type = normalize_test_type(case.get("测试类型", ""))
+    dfx_dimensions = split_dfx_values(case.get("DFX维度", ""))
+    dfx_scenarios = split_dfx_values(case.get("DFX场景", ""))
+    if test_type in IMPORT_EXCLUDED_TEST_TYPES:
+        return False
+    if dfx_dimensions & IMPORT_EXCLUDED_DFX_DIMENSIONS:
+        return False
+    if "DFX极端" in dfx_dimensions and dfx_scenarios & IMPORT_EXCLUDED_DFX_EXTREME_SCENARIOS:
+        return False
+    return True
 
 
 def execution_mode(row: dict[str, str]) -> str:
@@ -795,9 +816,13 @@ def generate_import_workbook(
     canonical_path = ">".join(canonical_module_parts(module_path, product_name)) or module_path
     modules = module_names(canonical_path)
     write_row = 2
+    skipped_cases: list[str] = []
     for row_index in range(2, function_ws.max_row + 1):
         case = row_dict(function_ws, function_headers, row_index)
         if not case.get("用例 ID") and not case.get("用例标题"):
+            continue
+        if not is_importable_function_case(case):
+            skipped_cases.append(case.get("用例 ID") or case.get("用例标题") or f"row {row_index}")
             continue
         copy_row_style(import_ws, 2 if import_ws.max_row >= 2 else 1, write_row)
         dfx_dimension = case.get("DFX维度", "")
@@ -832,6 +857,12 @@ def generate_import_workbook(
         set_wrap(import_ws, import_headers, write_row, IMPORT_MULTILINE_FIELDS)
         import_ws.row_dimensions[write_row].height = max(import_ws.row_dimensions[write_row].height or 18, 60)
         write_row += 1
+    if skipped_cases:
+        print(
+            "WARN: skipped non-functional/performance-style cases when generating import workbook: "
+            + ", ".join(skipped_cases[:20]),
+            file=sys.stderr,
+        )
 
     template_wb = load_workbook(import_template)
     apply_template_workbook_format(import_wb, template_wb)

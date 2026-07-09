@@ -1118,12 +1118,12 @@ def main() -> int:
         assert_contains(path, operation_navigation_markers)
 
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "data-safety.md", ["<product_login_url>", "环境地址"])
-    assert_contains(repo_root / "docs" / "test-design" / "rules" / "case-design.md", ["闭环", "取消或关闭", "DFX 测试策略落地"])
+    assert_contains(repo_root / "docs" / "test-design" / "rules" / "case-design.md", ["闭环", "取消或关闭", "DFX 测试策略落地", "元素覆盖骨架", "最低覆盖密度"])
     assert_contains(
         repo_root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
-        ["DFX 12", "DFT", "DFP", "DFI", "DFC", "DFS", "DFR", "DFM", "DFU", "DFD", "DFO", "DFB", "压力极限", "DFX 覆盖评估", "适用", "不适用", "需补充证据"],
+        ["DFX 12", "DFT", "DFP", "DFI", "DFC", "DFS", "DFR", "DFM", "DFU", "DFD", "DFO", "DFB", "压力极限", "DFX 覆盖评估", "适用", "不适用", "需补充证据", "扩展检查矩阵", "落地 Sheet 归属", "用例密度预算"],
     )
-    assert_contains(repo_root / "README.md", ["dfx-test-strategy.md", "DFX维度", "DFX场景"])
+    assert_contains(repo_root / "README.md", ["dfx-test-strategy.md", "DFX维度", "DFX场景", "扩展检查矩阵"])
     assert_contains(repo_root / "docs" / "RULE_OWNERSHIP.md", ["DFX 测试策略矩阵", "dfx-test-strategy.md"])
     assert_contains(repo_root / ".codebuddy" / "rules" / "test-design-rule.md", ["docs/test-design/rules/dfx-test-strategy.md"])
     assert_contains(repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc", ["docs/test-design/rules/dfx-test-strategy.md"])
@@ -1251,6 +1251,18 @@ def main() -> int:
         repo_root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
     ]:
         assert_contains(path, dfx_field_markers)
+    dfx_expansion_markers = ["扩展检查矩阵", "性能规格测试", "DFP性能"]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "README.md",
+        repo_root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
+    ]:
+        assert_contains(path, dfx_expansion_markers)
+    assert_contains(repo_root / "docs" / "test-design" / "rules" / "page-discovery.md", ["分页类控件", "变更类证据", "查看选项", "AI_TEST"])
     assert_contains(
         generated_python_validator,
         ["FORBIDDEN_QUOTE_CHARS", "py_compile", "MAX_PYTHON_BYTES", "MAX_JSON_BYTES", "json.load"],

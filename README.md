@@ -79,7 +79,7 @@ python scripts/test_design_excel_tools.py generate-import `
 - 正式测试设计最终版归档到 `docs/test-assets/modules/`
 - 测试系统导入文件副本归档到 `docs/test-assets/imports/`
 - 大范围任务的批次计划、状态和复盘归档到 `docs/test-assets/batch-runs/`
-- 每次生成前读取产品版图和依赖模块归档；正式生成前展示产品理解摘要；每次生成后回存最终版并更新产品版图
+- 每次生成前读取产品版图和依赖模块归档；正式写测试用例前展示产品理解摘要、风险项和待确认问题并让用户确认；每次生成后回存最终版并更新产品版图
 - 不依赖 AI 对话记忆保存具体业务事实
 
 ## 规则入口

@@ -697,6 +697,8 @@ def main() -> int:
         "当前模块",
         "依赖模块",
         "业务链路",
+        "风险项",
+        "待确认问题",
     ]
     for path in [
         repo_root / "AGENTS.md",
@@ -707,6 +709,30 @@ def main() -> int:
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
     ]:
         assert_contains(path, understanding_markers)
+
+    risk_confirmation_markers = [
+        "正式写测试用例前",
+        "风险项与待确认问题",
+        "用户确认",
+        "动态调整",
+        "测试范围",
+        "测试数据",
+        "预期结果",
+        "风险等级",
+    ]
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "rules" / "product-map-sync.md",
+        repo_root / "docs" / "test-design" / "rules" / "case-design.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+    ]:
+        assert_contains(path, risk_confirmation_markers)
 
     upgrade_protection_markers = [
         "PROTECTED_ASSET_DIRS",

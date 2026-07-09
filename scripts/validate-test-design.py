@@ -1146,9 +1146,9 @@ def main() -> int:
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "case-design.md", ["闭环", "取消或关闭", "DFX 测试策略落地", "元素覆盖骨架", "最低覆盖密度", "功能用例分片生成", "test-data-lifecycle.csv"])
     assert_contains(
         repo_root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
-        ["DFX 12", "DFT", "DFP", "DFI", "DFC", "DFS", "DFR", "DFM", "DFU", "DFD", "DFO", "DFB", "压力极限", "DFX 覆盖评估", "适用", "不适用", "需补充证据", "扩展检查矩阵", "落地 Sheet 归属", "用例密度预算"],
+        ["DFX 12", "DFT", "DFP", "DFI", "DFC", "DFS", "DFR", "DFM", "DFU", "DFD", "DFO", "DFB", "压力极限", "DFX 覆盖评估", "适用", "不适用", "需补充证据", "扩展检查矩阵", "落地 Sheet 归属", "用例密度预算", "元素类型", "最低预算", "validate-batch-artifacts"],
     )
-    assert_contains(repo_root / "README.md", ["dfx-test-strategy.md", "DFX维度", "DFX场景", "扩展检查矩阵", "element-case-plan.csv", "function_cases_part_"])
+    assert_contains(repo_root / "README.md", ["dfx-test-strategy.md", "DFX维度", "DFX场景", "扩展检查矩阵", "element-case-plan.csv", "function_cases_part_", "validate-batch-artifacts"])
     assert_contains(repo_root / "docs" / "RULE_OWNERSHIP.md", ["DFX 测试策略矩阵", "dfx-test-strategy.md"])
     assert_contains(repo_root / "docs" / "ARCHITECTURE.md", ["element-case-plan.csv", "test-data-lifecycle.csv", "功能测试用例必须从"])
     assert_contains(repo_root / "docs" / "RULE_OWNERSHIP.md", ["元素用例计划", "测试数据生命周期", "function_cases_part_"])
@@ -1312,7 +1312,7 @@ def main() -> int:
         repo_root / "docs" / "test-design" / "rules" / "page-discovery.md",
     ]:
         assert_contains(path, element_plan_markers)
-    split_generation_markers = ["function_cases_part_", "按 Sheet 分文件", "10 条"]
+    split_generation_markers = ["function_cases_part_", "按 Sheet 分文件", "10 条", "artifacts/data"]
     for path in [
         repo_root / "AGENTS.md",
         repo_root / "CODEBUDDY.md",
@@ -1327,6 +1327,10 @@ def main() -> int:
     assert_contains(
         generated_python_validator,
         ["FORBIDDEN_QUOTE_CHARS", "py_compile", "MAX_PYTHON_BYTES", "MAX_JSON_BYTES", "json.load", "MAX_FUNCTION_CASES_PER_PART", "function_cases_part_"],
+    )
+    assert_contains(
+        repo_root / "scripts" / "test_design_excel_tools.py",
+        ["validate-batch-artifacts", "minimum_cases_for_plan_row", "元素类型", "适用DFX维度", "应生成用例数", "artifacts/data", "function_cases_part_001.json"],
     )
     assert_contains(
         generated_python_validator_ps1,

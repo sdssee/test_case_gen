@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
+import re
 import shutil
 import subprocess
 import sys
@@ -391,6 +393,344 @@ def write_single_csv_row(path: Path, values: dict[str, str]) -> None:
         writer.writerow(row)
 
 
+CSV_REQUIRED_FILES = {
+    "batch-status.csv": "batch-status-template.csv",
+    "page-discovery.csv": "page-discovery-template.csv",
+    "element-case-plan.csv": "element-case-plan-template.csv",
+    "test-data-lifecycle.csv": "test-data-lifecycle-template.csv",
+}
+
+FUNCTION_CASE_PART_RE = re.compile(r"^function_cases_part_\d{3}\.json$")
+MAX_FUNCTION_CASES_PER_PART = 10
+
+INTERACTIVE_ELEMENT_MARKERS = [
+    "按钮",
+    "输入",
+    "下拉",
+    "选择",
+    "单选",
+    "复选",
+    "开关",
+    "分页",
+    "页码",
+    "弹窗",
+    "表格",
+    "链接",
+    "上传",
+    "编辑",
+    "删除",
+    "保存",
+    "创建",
+    "新增",
+    "添加",
+    "提交",
+    "测试",
+    "搜索",
+    "筛选",
+]
+
+
+def read_csv_exact(path: Path, expected_headers: list[str], label: str) -> list[dict[str, str]]:
+    if not path.exists():
+        raise ValueError(f"{label} not found: {path}")
+    with path.open("r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.reader(fp)
+        try:
+            headers = next(reader)
+        except StopIteration as exc:
+            raise ValueError(f"{label} has no header row: {path}") from exc
+        if headers != expected_headers:
+            raise ValueError(f"{label} header must match the standard template exactly. Expected {expected_headers}, got {headers}")
+        rows: list[dict[str, str]] = []
+        for index, row in enumerate(reader, start=2):
+            if not any(cell.strip() for cell in row):
+                continue
+            if len(row) != len(headers):
+                raise ValueError(f"{label} row {index} column count mismatch: expected {len(headers)}, got {len(row)}")
+            rows.append({header: row[col].strip() for col, header in enumerate(headers)})
+    return rows
+
+
+def template_headers(templates_dir: Path, template_name: str) -> list[str]:
+    template_path = templates_dir / template_name
+    if not template_path.exists():
+        raise ValueError(f"Batch template not found: {template_path}")
+    with template_path.open("r", encoding="utf-8-sig", newline="") as fp:
+        return next(csv.reader(fp))
+
+
+def split_plan_values(text: str) -> list[str]:
+    return [item.strip() for item in re.split(r"[,，、;；/\s]+", text or "") if item.strip()]
+
+
+def parse_positive_int(value: str, label: str) -> int:
+    try:
+        number = int(str(value or "").strip())
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a positive integer, got: {value}") from exc
+    if number <= 0:
+        raise ValueError(f"{label} must be greater than 0, got: {value}")
+    return number
+
+
+def is_yes(value: str) -> bool:
+    return (value or "").strip() in {"是", "Y", "Yes", "yes", "true", "True", "1"}
+
+
+def contains_any(text: str, markers: list[str]) -> bool:
+    return any(marker in (text or "") for marker in markers)
+
+
+def normalized_text(value: str) -> str:
+    return re.sub(r"\s+", "", value or "").lower()
+
+
+def is_template_or_empty_row(row: dict[str, str], meaningful_fields: list[str]) -> bool:
+    return not any((row.get(field) or "").strip() for field in meaningful_fields)
+
+
+def is_interactive_discovery_row(row: dict[str, str]) -> bool:
+    combined = "\n".join(
+        [
+            row.get("元素名称/文案", ""),
+            row.get("元素类型", ""),
+            row.get("交互方式", ""),
+            row.get("完整点击路径", ""),
+        ]
+    )
+    return contains_any(combined, INTERACTIVE_ELEMENT_MARKERS)
+
+
+def dfx_pair_count(dimensions_text: str, scenarios_text: str) -> int:
+    dimensions = split_plan_values(dimensions_text)
+    scenarios = split_plan_values(scenarios_text)
+    if not dimensions or not scenarios:
+        return 0
+    if len(dimensions) == len(scenarios):
+        return len(list(zip(dimensions, scenarios)))
+    return max(len(dimensions), len(scenarios))
+
+
+def element_is_planned(discovery_name: str, plan_rows: list[dict[str, str]]) -> bool:
+    name = normalized_text(discovery_name)
+    if not name:
+        return True
+    for row in plan_rows:
+        planned = normalized_text(
+            "\n".join(
+                [
+                    row.get("元素名称/文案", ""),
+                    row.get("功能点", ""),
+                    row.get("交互方式", ""),
+                    row.get("业务路径", ""),
+                ]
+            )
+        )
+        if name in planned or planned in name:
+            return True
+    return False
+
+
+def minimum_cases_for_plan_row(row: dict[str, str]) -> int:
+    element_type = row.get("元素类型", "")
+    interaction = row.get("交互方式", "")
+    function_point = row.get("功能点", "")
+    direction = row.get("测试设计方向", "")
+    element_name = row.get("元素名称/文案", "")
+    dimensions = set(split_plan_values(row.get("适用DFX维度", "")))
+    scenarios = set(split_plan_values(row.get("适用DFX场景", "")))
+    combined = "\n".join([element_type, interaction, function_point, direction, element_name])
+
+    minimum = 1
+    if contains_any(combined, ["搜索", "筛选"]):
+        minimum = max(minimum, 4)
+    if contains_any(combined, ["输入", "文本框", "数字", "邮箱", "手机号", "URL", "地址"]):
+        minimum = max(minimum, 3)
+    if contains_any(combined, ["下拉", "选择", "单选", "复选", "级联"]):
+        minimum = max(minimum, 4)
+    if contains_any(combined, ["分页", "翻页", "页码", "每页", "跳页"]):
+        minimum = max(minimum, 5)
+    if contains_any(combined, ["弹窗", "抽屉", "对话框"]):
+        minimum = max(minimum, 3)
+    if contains_any(combined, ["新增", "创建", "添加", "接入", "保存", "提交"]):
+        minimum = max(minimum, 5)
+    if contains_any(combined, ["编辑", "修改"]):
+        minimum = max(minimum, 4)
+    if "删除" in combined:
+        minimum = max(minimum, 3)
+    if contains_any(combined, ["表格", "行操作", "批量"]):
+        minimum = max(minimum, 3)
+    if contains_any(combined, ["密钥", "Token", "密码", "鉴权", "权限"]):
+        minimum = max(minimum, 4)
+    if is_yes(row.get("是否涉及CRUD闭环", "")):
+        minimum = max(minimum, 5)
+    if is_yes(row.get("是否涉及配置生效", "")):
+        minimum = max(minimum, 4)
+
+    if {"边界值", "异常输入", "逆向操作"} & scenarios:
+        minimum = max(minimum, 3)
+    if dimensions & {"DFS安全", "DFR可靠", "DFU可用", "DFB业务"}:
+        minimum += 1
+    if scenarios & {"数据一致", "幂等性", "权限控制", "数据脱敏", "错误提示", "业务流程", "数据准确"}:
+        minimum += 1
+    if dimensions & {"DFP性能", "DFX极端"}:
+        # 性能和极端场景不进入功能用例，但必须进入性能设计/风险/自动化建议。
+        minimum = max(minimum, 1)
+
+    return max(minimum, dfx_pair_count(row.get("适用DFX维度", ""), row.get("适用DFX场景", "")) or 1)
+
+
+def planned_case_id_count(value: str) -> int:
+    ids = split_plan_values(value)
+    return len(ids)
+
+
+def validate_function_case_part(path: Path) -> int:
+    if not FUNCTION_CASE_PART_RE.match(path.name):
+        raise ValueError(f"{path} must use function_cases_part_001.json naming")
+    with path.open("r", encoding="utf-8-sig") as fp:
+        data = json.load(fp)
+    cases = data.get("cases") if isinstance(data, dict) else data
+    if not isinstance(cases, list):
+        raise ValueError(f"{path} must contain a list or an object with a cases list")
+    if len(cases) > MAX_FUNCTION_CASES_PER_PART:
+        raise ValueError(f"{path} contains {len(cases)} cases; each function_cases_part_*.json must contain at most {MAX_FUNCTION_CASES_PER_PART}")
+    return len(cases)
+
+
+def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
+    run_dir = run_dir.resolve()
+    if not run_dir.exists():
+        raise ValueError(f"Batch run directory not found: {run_dir}")
+    templates_dir = run_dir.parent / "templates"
+    expected_headers = {
+        csv_name: template_headers(templates_dir, template_name)
+        for csv_name, template_name in CSV_REQUIRED_FILES.items()
+    }
+
+    batch_rows = read_csv_exact(run_dir / "batch-status.csv", expected_headers["batch-status.csv"], "batch-status.csv")
+    discovery_rows = read_csv_exact(run_dir / "page-discovery.csv", expected_headers["page-discovery.csv"], "page-discovery.csv")
+    plan_rows = read_csv_exact(run_dir / "element-case-plan.csv", expected_headers["element-case-plan.csv"], "element-case-plan.csv")
+    lifecycle_rows = read_csv_exact(run_dir / "test-data-lifecycle.csv", expected_headers["test-data-lifecycle.csv"], "test-data-lifecycle.csv")
+
+    real_discovery_rows = [
+        row for row in discovery_rows
+        if not is_template_or_empty_row(row, ["页面/入口", "元素名称/文案", "元素类型", "交互方式"])
+    ]
+    if phase in {"discovery", "plan", "cases"} and not real_discovery_rows:
+        raise ValueError("page-discovery.csv must contain real page elements before continuing")
+
+    interactive_rows = [row for row in real_discovery_rows if is_interactive_discovery_row(row)]
+    if phase in {"discovery", "plan", "cases"} and not interactive_rows:
+        raise ValueError("page-discovery.csv must contain clickable/input/selectable/testable elements, not only static text")
+
+    if phase in {"plan", "cases"}:
+        real_plan_rows = [
+            row for row in plan_rows
+            if not is_template_or_empty_row(row, ["页面/入口", "功能点", "元素名称/文案", "元素类型", "测试设计方向", "计划用例ID"])
+        ]
+        if not real_plan_rows:
+            raise ValueError("element-case-plan.csv must contain real element-driven case plans before writing cases")
+
+        missing_plan = [
+            row.get("元素名称/文案", "")
+            for row in interactive_rows
+            if row.get("元素名称/文案", "").strip() and not element_is_planned(row.get("元素名称/文案", ""), real_plan_rows)
+        ]
+        if missing_plan:
+            preview = ", ".join(missing_plan[:10])
+            raise ValueError(f"element-case-plan.csv is missing interactive page elements from page-discovery.csv: {preview}")
+
+        computed_min_total = 0
+        declared_total = 0
+        for index, row in enumerate(real_plan_rows, start=2):
+            declared = parse_positive_int(row.get("应生成用例数", ""), f"element-case-plan.csv row {index} 应生成用例数")
+            minimum = minimum_cases_for_plan_row(row)
+            if declared < minimum:
+                raise ValueError(
+                    f"element-case-plan.csv row {index} declares {declared} case(s), "
+                    f"but element type + DFX minimum requires at least {minimum}: "
+                    f"{row.get('元素名称/文案', '')} / {row.get('测试设计方向', '')}"
+                )
+            if planned_case_id_count(row.get("计划用例ID", "")) < declared:
+                raise ValueError(f"element-case-plan.csv row {index} must provide at least {declared} planned case ID(s)")
+            computed_min_total += minimum
+            declared_total += declared
+
+        if declared_total < len(interactive_rows):
+            raise ValueError(
+                f"element-case-plan.csv declares only {declared_total} cases for {len(interactive_rows)} interactive elements; "
+                "DFX扩展后用例数不得低于可交互元素数"
+            )
+
+        has_crud_or_config = any(
+            is_yes(row.get("是否涉及CRUD闭环", "")) or is_yes(row.get("是否涉及配置生效", ""))
+            or contains_any(
+                "\n".join([row.get("功能点", ""), row.get("元素名称/文案", ""), row.get("测试设计方向", "")]),
+                ["新增", "创建", "添加", "保存", "提交", "编辑", "修改", "删除", "配置", "生效"],
+            )
+            for row in real_plan_rows
+        )
+        real_lifecycle_rows = [
+            row for row in lifecycle_rows
+            if not is_template_or_empty_row(row, ["测试数据ID/名称", "创建结果", "查看结果", "编辑结果", "删除确认结果", "清理状态"])
+        ]
+        if has_crud_or_config:
+            if not real_lifecycle_rows:
+                raise ValueError("test-data-lifecycle.csv must record AI_TEST/CODEX_TEST CRUD/config lifecycle before writing cases")
+            for index, row in enumerate(real_lifecycle_rows, start=2):
+                combined = "\n".join(row.values())
+                if not contains_any(combined, ["AI_TEST", "CODEX_TEST", "用户提供测试数据"]):
+                    raise ValueError(f"test-data-lifecycle.csv row {index} must bind to AI_TEST/CODEX_TEST or user-provided test data")
+
+    artifacts_dir = run_dir / "artifacts"
+    scripts_dir = artifacts_dir / "scripts"
+    data_dir = artifacts_dir / "data"
+    screenshots_dir = artifacts_dir / "screenshots"
+    for required_dir in [artifacts_dir, scripts_dir, data_dir, screenshots_dir]:
+        if phase in {"cases"} and not required_dir.exists():
+            raise ValueError(f"Required batch artifact directory is missing: {required_dir}")
+
+    misplaced_parts = sorted(artifacts_dir.glob("function_cases_part_*.json")) if artifacts_dir.exists() else []
+    if misplaced_parts:
+        raise ValueError("function_cases_part_*.json must be written under artifacts/data, not artifacts root")
+
+    if phase == "cases":
+        required_sheet_files = [
+            "overview.json",
+            "requirements.json",
+            "scenarios.json",
+            "performance.json",
+            "risks.json",
+            "automation.json",
+            "page_elements.json",
+        ]
+        missing_sheet_files = [name for name in required_sheet_files if not (data_dir / name).exists()]
+        if missing_sheet_files:
+            raise ValueError(f"artifacts/data is missing sheet-split files: {missing_sheet_files}")
+        parts = sorted(data_dir.glob("function_cases_part_*.json"))
+        if not parts:
+            raise ValueError("artifacts/data must contain function_cases_part_001.json and later function case shards")
+        case_count = sum(validate_function_case_part(path) for path in parts)
+        if plan_rows:
+            declared_total = sum(
+                int(row.get("应生成用例数", "0"))
+                for row in plan_rows
+                if row.get("应生成用例数", "").isdigit()
+            )
+            if declared_total and case_count < declared_total:
+                raise ValueError(f"function case shards contain {case_count} cases, fewer than element-case-plan declared {declared_total}")
+
+    if batch_rows:
+        first_status = batch_rows[0]
+        if phase in {"plan", "cases"}:
+            all_zero = all((first_status.get(field, "") or "0") == "0" for field in ["页面数", "元素总数", "功能用例数"])
+            if first_status.get("状态") == "待开始" or all_zero:
+                raise ValueError("batch-status.csv is still in the initial state; update page/element/case counts before continuing")
+
+    print(f"OK: batch artifacts passed {phase} gate: {run_dir}")
+
+
 def init_batch_run(project_root: Path, run_id: str, module_path: str, batch_id: str, product_name: str | None = None) -> Path:
     run_dir = project_root / "docs" / "test-assets" / "batch-runs" / run_id
     templates_dir = project_root / "docs" / "test-assets" / "batch-runs" / "templates"
@@ -409,7 +749,11 @@ def init_batch_run(project_root: Path, run_id: str, module_path: str, batch_id: 
     run_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir = run_dir / "artifacts"
     scripts_dir = artifacts_dir / "scripts"
+    data_dir = artifacts_dir / "data"
+    screenshots_dir = artifacts_dir / "screenshots"
     scripts_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
 
     for target_name, template_path in required_templates.items():
         copy_template_if_missing(template_path, run_dir / target_name)
@@ -769,6 +1113,8 @@ def complete_deliverables(
 
     if scripts_path and scripts_path.exists():
         run_python_script(script_dir / "validate-generated-python-scripts.py", ["--path", str(scripts_path)])
+    if batch_status:
+        validate_batch_artifacts(batch_status.resolve().parent, "cases")
 
     apply_formal_workbook_styles(formal_workbook)
     generate_import_workbook(formal_workbook, import_template, target_import, module_path, product_name)
@@ -920,6 +1266,10 @@ def main() -> int:
     init.add_argument("--batch-id", default="BATCH-001")
     init.add_argument("--product-name")
 
+    batch_gate = sub.add_parser("validate-batch-artifacts", help="Validate batch-run CSV ledgers, element DFX minimums, CRUD lifecycle, and case shards before continuing.")
+    batch_gate.add_argument("--run-dir", required=True, type=Path)
+    batch_gate.add_argument("--phase", choices=["discovery", "plan", "cases"], default="cases")
+
     finalize = sub.add_parser("finalize-deliverables", help="Copy validated workbooks to current/deliverables/internal archives and update batch-status paths.")
     finalize.add_argument("--project-root", required=True, type=Path)
     finalize.add_argument("--formal-workbook", required=True, type=Path)
@@ -959,6 +1309,8 @@ def main() -> int:
         apply_formal_workbook_styles(args.workbook, args.output, args.template)
     elif args.command == "init-batch-run":
         init_batch_run(args.project_root, args.run_id, args.module_path, args.batch_id, args.product_name)
+    elif args.command == "validate-batch-artifacts":
+        validate_batch_artifacts(args.run_dir, args.phase)
     elif args.command == "finalize-deliverables":
         if args.page_discovery and not args.batch_status:
             raise SystemExit(
@@ -1008,4 +1360,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(1)

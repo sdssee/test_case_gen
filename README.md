@@ -69,9 +69,10 @@ python scripts/test_design_excel_tools.py complete-deliverables `
 
 - 测试策略以 `DFX维度` 和 `DFX场景` 为主字段，`场景类型`、`正向/反向` 已废弃；详细矩阵见 `docs/test-design/rules/dfx-test-strategy.md`。
 - DFX 是扩展检查矩阵，不是用例生成主轴；必须先按页面元素和交互路径建立覆盖骨架，再用 DFX 扩展功能、异常、边界、权限、状态、数据一致性、性能、风险和自动化建议。
-- 页面实探后必须沉淀 `element-case-plan.csv` 和 `test-data-lifecycle.csv`；功能测试用例从元素计划派生，真实新增/编辑/删除形成测试数据生命周期闭环。
+- 页面实探后必须沉淀 `element-case-plan.csv` 和 `test-data-lifecycle.csv`；`应生成用例数` 按元素类型 × DFX 最低预算计算，真实新增/编辑/删除形成测试数据生命周期闭环。
 - 配置项保存类用例必须验证保存后回显和实际生效，不能只写点击保存或提示成功。
-- 功能测试用例按每 10 条一个 `function_cases_part_*.json` 分片生成和校验；Excel 数据按 Sheet 分文件输出，避免单个脚本或 JSON 承载过多内容。
+- 功能测试用例按每 10 条一个 `artifacts/data/function_cases_part_*.json` 分片生成和校验；Excel 数据按 Sheet 分文件输出，避免单个脚本或 JSON 承载过多内容。
+- 页面发现、元素计划、用例分片后分别运行 `validate-batch-artifacts --phase discovery|plan|cases`，门禁通过后再继续下一阶段。
 - `功能测试用例` 不写性能规格测试或 `DFP性能` 场景；性能、并发、大数据量、资源监控和极端压力进入 `性能测试设计`、风险或自动化建议。
 - 下拉必须实际选择代表项并记录联动；分页必须拆出每页条数、翻页/跳转、边界/禁用态；新增/编辑/删除必须绑定本次创建或用户提供的测试数据。
 - 页面实探必须记录所有可点击、可输入、可选择、可测试元素，并写入 `page-discovery.csv`、页面元素覆盖清单和产品版图。

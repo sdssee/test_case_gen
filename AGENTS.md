@@ -43,8 +43,9 @@ Codex 应优先读取并遵守：
 - 有页面时必须深遍历所有可点击、可输入、可选择、可测试元素。
 - 页面、截图、原型或可访问系统相关任务默认直接深度探索，不需要二次确认；只有真实账号/验证码/权限、既有数据变更、生产环境、缺少必要测试数据或真实密钥风险时才暂停确认。
 - DFX 是扩展检查矩阵，不是用例生成主轴；必须先建立页面元素/交互路径覆盖骨架，再按适用 DFX 扩展用例，禁止按“每个 DFX 场景一条”压缩功能覆盖。
-- 页面深探后必须生成或更新 `element-case-plan.csv`，功能测试用例必须从该计划派生；真实新增、编辑、删除必须同步 `test-data-lifecycle.csv`。
-- 功能测试用例必须按每 10 条一个 `function_cases_part_*.json` 分片生成和校验，再汇总写入 Excel。
+- 页面深探后必须生成或更新 `element-case-plan.csv`，功能测试用例必须从该计划派生；`应生成用例数` 必须按元素类型 × DFX 最低覆盖预算计算，禁止所有行统一写 1；真实新增、编辑、删除必须同步 `test-data-lifecycle.csv`。
+- 页面发现、元素计划和用例分片阶段必须分别运行 `python scripts/test_design_excel_tools.py validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery|plan|cases`，门禁失败时先补深探、计划、生命周期或分片，不得继续生成 Excel。
+- 功能测试用例必须按每 10 条一个 `artifacts/data/function_cases_part_*.json` 分片生成和校验，再汇总写入 Excel。
 - Excel 数据必须按 Sheet 分文件输出，禁止一个大 Python 或大 JSON 承载全部 Sheet 和全部用例正文。
 - `功能测试用例` 禁止写入 `测试类型=性能规格测试` 或 `DFX维度=DFP性能`；性能、并发、大数据量、资源监控和极端压力场景必须进入 `性能测试设计`、风险或自动化建议。
 - 分页和下拉是复合控件：下拉必须实际选择代表项并记录联动，分页必须拆出每页条数、翻页/跳转和边界/禁用态。

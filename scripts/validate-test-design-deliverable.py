@@ -1362,7 +1362,11 @@ def is_template_or_empty_row(row: dict[str, str]) -> bool:
     combined = "".join(row.values())
     if not combined:
         return True
-    return any(marker in combined for marker in ["补充页面元素", "补充本次创建", "待确认"])
+    template_markers = [
+        "补充页面元素、DFX扩展方向和计划用例ID",
+        "补充本次创建或用户提供测试数据的完整生命周期",
+    ]
+    return any(marker in combined for marker in template_markers)
 
 
 def has_configuration_effective_evidence(row: dict[str, str]) -> bool:
@@ -1763,6 +1767,7 @@ def validate_element_case_plan_and_lifecycle(
         if not contains_any_marker(" ".join(row.values()), MUTATING_TEST_DATA_MARKERS):
             fail(f"test-data-lifecycle.csv row {index} must use AI_TEST/CODEX_TEST or user-provided test data marker")
         lifecycle_case_ids.update(parse_ids(row.get("创建步骤关联用例", "")))
+        lifecycle_case_ids.update(parse_ids(" ".join(row.values())) & case_ids)
         if row.get("配置生效验证点") and not any(marker in row.get("配置生效验证点", "") for marker in ["回显", "生效", "测试", "调用", "预览", "关联"]):
             fail(f"test-data-lifecycle.csv row {index} 配置生效验证点 must describe echo/effective verification")
 

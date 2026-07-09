@@ -54,6 +54,8 @@ powershell -ExecutionPolicy Bypass -File scripts\new-framework-upgrade-package.p
 
 `docs/test-assets/batch-runs/README.md` 和 `docs/test-assets/batch-runs/templates/` 是框架模板资产，允许随普通框架升级进入升级包；真实批次运行目录和历史业务资产仍受保护，不得覆盖。
 
+如果框架升级新增批次账本模板，例如 `element-case-plan.csv` 或 `test-data-lifecycle.csv`，升级脚本只更新 `docs/test-assets/batch-runs/templates/`，不会自动改写历史批次目录。旧批次作为历史快照保留；如需用新门禁复核旧批次，应先在对应批次目录补齐新账本并从原 `page-discovery.csv`、正式测试设计和测试数据记录中回填事实。
+
 ## 内网应用升级包
 
 在内网项目根目录执行：
@@ -92,6 +94,7 @@ powershell -ExecutionPolicy Bypass -File scripts\validate-test-design-deliverabl
 ```
 
 大范围任务可追加 `-BatchStatusPath <batch-status.csv>` 校验批次状态中的覆盖数量和质量门禁。
+升级到包含 `element-case-plan.csv` 和 `test-data-lifecycle.csv` 的框架后，新批次必须通过 `init-batch-run` 生成完整账本；旧批次如果缺少新账本，交付件严格校验会提示补齐，不应直接用空模板覆盖历史事实。
 只需要单独生成导入文件且不做批次收口时，可使用 `generate-import` 兼容命令。
 
 ## 资产结构升级

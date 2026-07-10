@@ -4,7 +4,7 @@
 
 ## 版本
 
-- framework_version: 1.1.0
+- framework_version: 1.2.0
 - asset_schema_version: 1.0.0
 
 ## 升级类型
@@ -28,6 +28,9 @@
 - `scripts/`
 - `README.md`
 - `README_IMPORT.md`
+- `requirements.txt`
+- `pyproject.toml`
+- `tests/`
 - `VERSION`
 - `UPGRADE_MANIFEST.md`
 
@@ -46,6 +49,8 @@
 当 `asset_schema_version` 变化，或 `product-map.xlsx` 的 Sheet、字段、索引规则发生变化时，属于资产结构升级。资产结构升级必须通过迁移脚本读取旧资产并增量补齐，不能用空模板覆盖内网真实资产。
 
 ## 升级后校验
+
+1.2.0 新增统一运行时入口、依赖锁定、批次初始化防覆盖、交付失败回滚、原子文件替换和架构回归测试；`asset_schema_version` 未变化，不需要迁移既有产品版图。
 
 外网生成升级包：
 

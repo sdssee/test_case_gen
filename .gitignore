@@ -1,3 +1,6 @@
 dist/
 dist-test/
 .upgrade-backups/
+.test-design-locks/
+__pycache__/
+*.pyc

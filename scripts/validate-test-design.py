@@ -325,6 +325,10 @@ def main() -> int:
     excel_tools = repo_root / "scripts" / "test_design_excel_tools.py"
     generated_python_validator = repo_root / "scripts" / "validate-generated-python-scripts.py"
     generated_python_validator_ps1 = repo_root / "scripts" / "validate-generated-python-scripts.ps1"
+    runtime_wrapper = repo_root / "scripts" / "run-test-design.ps1"
+    requirements_file = repo_root / "requirements.txt"
+    project_file = repo_root / "pyproject.toml"
+    architecture_tests = repo_root / "tests" / "test_architecture_safety.py"
     rules_dir = repo_root / "docs" / "test-design" / "rules"
     rule_docs = [
         rules_dir / "README.md",
@@ -364,6 +368,10 @@ def main() -> int:
         excel_tools,
         generated_python_validator,
         generated_python_validator_ps1,
+        runtime_wrapper,
+        requirements_file,
+        project_file,
+        architecture_tests,
         *rule_docs,
     ]:
         if not path.exists():
@@ -371,6 +379,29 @@ def main() -> int:
     for path in lightweight_entries:
         assert_max_chars(path, ENTRY_FILE_CHAR_LIMIT)
     assert_max_chars(repo_root / "README.md", ENTRY_FILE_CHAR_LIMIT)
+    assert_contains(requirements_file, ["openpyxl==3.1.5"])
+    assert_contains(project_file, ["requires-python", "openpyxl==3.1.5"])
+    assert_contains(runtime_wrapper, ["TEST_DESIGN_PYTHON", "openpyxl.__version__", "test_design_excel_tools.py"])
+    assert_contains(
+        excel_tools,
+        [
+            "--resume",
+            "--force-reinitialize",
+            "rollback_files_on_error",
+            "atomic_save_workbook",
+            "validate-test-design-deliverable.py",
+        ],
+    )
+    assert_contains(
+        architecture_tests,
+        [
+            "test_batch_init_requires_explicit_resume_and_preserves_ledgers",
+            "test_delivery_rollback_restores_existing_and_removes_new_files",
+            "test_delivery_lock_rejects_concurrent_writer",
+            "test_complete_delivery_rolls_back_when_prevalidation_fails",
+            "test_product_map_sync_uses_current_schema_and_real_dependencies",
+        ],
+    )
 
     versions = parse_key_value_file(version_file)
     for key in ["framework_version", "asset_schema_version"]:
@@ -378,6 +409,7 @@ def main() -> int:
             fail(f"VERSION is missing {key}")
         if not re.fullmatch(r"\d+\.\d+\.\d+", versions[key]):
             fail(f"VERSION {key} should use semantic numeric format: {versions[key]}")
+    assert_contains(project_file, [f'version = "{versions["framework_version"]}"'])
 
     for dirname in ["current", "deliverables"]:
         path = repo_root / "docs" / "test-design" / dirname

@@ -71,7 +71,7 @@ your-project/
 推荐随批次交付使用统一收口工具：
 
 ```powershell
-python scripts/test_design_excel_tools.py complete-deliverables `
+powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-deliverables `
   --project-root . `
   --formal-workbook docs/test-design/current/<测试设计.xlsx> `
   --import-template docs/test-design/测试用例模板.xlsx `
@@ -91,7 +91,7 @@ python scripts/test_design_excel_tools.py complete-deliverables `
 - 批次账本：`docs/test-assets/batch-runs/`
 
 大范围任务必须建立 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/`，并维护 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`。
-页面实探或批次任务开始前，先运行 `python scripts/test_design_excel_tools.py init-batch-run --project-root . --run-id <YYYYMMDD_任务标识> --module-path "<一级>><二级>><三级>" --batch-id BATCH-001` 初始化标准批次账本；传入 `--page-discovery` 收口时必须同时传入 `--batch-status`。
+页面实探或批次任务开始前，先运行 `powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-run --project-root . --run-id <YYYYMMDD_任务标识> --module-path "<一级>><二级>><三级>" --batch-id BATCH-001` 初始化标准批次账本；已存在批次使用 `--resume`，不得重复初始化覆盖；传入 `--page-discovery` 收口时必须同时传入 `--batch-status`。
 
 ## 自检命令
 

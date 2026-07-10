@@ -35,6 +35,8 @@ $includeFiles = @(
   "CODEBUDDY.md",
   "README.md",
   "README_IMPORT.md",
+  "requirements.txt",
+  "pyproject.toml",
   "VERSION",
   "UPGRADE_MANIFEST.md",
   "docs/ARCHITECTURE.md",
@@ -46,6 +48,7 @@ $includeFiles = @(
 $includeDirs = @(
   ".codebuddy",
   "scripts",
+  "tests",
   "docs/test-assets/batch-runs/templates"
 )
 

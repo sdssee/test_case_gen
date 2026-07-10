@@ -37,10 +37,12 @@
 
 ## 主流程
 
+推荐统一通过 `scripts/run-test-design.ps1` 运行工具。该入口会选择兼容运行时后调用 `scripts/test_design_excel_tools.py`：优先使用 `TEST_DESIGN_PYTHON`，其次使用 Codex 捆绑运行时，最后检查 PATH 中的 Python，并验证 `openpyxl==3.1.5`。独立环境可先执行 `python -m pip install -r requirements.txt`。
+
 批次任务或页面实探任务先初始化批次目录：
 
 ```powershell
-python scripts/test_design_excel_tools.py init-batch-run `
+powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-run `
   --project-root . `
   --run-id <YYYYMMDD_任务标识> `
   --module-path "一级模块>二级菜单>三级菜单" `
@@ -50,7 +52,7 @@ python scripts/test_design_excel_tools.py init-batch-run `
 生成正式测试设计后，优先使用一站式收口命令：
 
 ```powershell
-python scripts/test_design_excel_tools.py complete-deliverables `
+powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-deliverables `
   --project-root . `
   --formal-workbook docs/test-design/current/<测试设计.xlsx> `
   --import-template docs/test-design/测试用例模板.xlsx `
@@ -60,6 +62,8 @@ python scripts/test_design_excel_tools.py complete-deliverables `
   --product-map docs/test-assets/product-map.xlsx `
   --scripts-path docs/test-assets/batch-runs/<任务>/artifacts/scripts
 ```
+
+已存在同名批次时，初始化命令默认拒绝覆盖。继续原批次时追加 `--resume`；确需重建时追加 `--force-reinitialize`，工具会先生成带时间戳的完整备份。`complete-deliverables` 会先预校验正式文件，失败时恢复正式工作簿、导入文件、交付副本、批次账本和产品版图。
 
 只需要单独生成导入文件且不做批次收口时，可使用 `generate-import` 兼容命令。
 

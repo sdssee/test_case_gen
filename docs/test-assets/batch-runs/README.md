@@ -30,7 +30,7 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/
       build_function_cases.py
 ```
 
-只要发生页面实探或生成 `page-discovery.csv`，即使当前任务只有一个最小标题路径，也必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录，禁止临时手写旧版 `page-discovery.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 表头或跳过 `batch-status.csv`。
+只要发生页面实探或生成 `page-discovery.csv`，即使当前任务只有一个最小标题路径，也必须先执行 `scripts/run-test-design.ps1 init-batch-run` 初始化批次目录，禁止临时手写旧版 `page-discovery.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 表头或跳过 `batch-status.csv`。已存在同名批次时使用 `--resume` 原样恢复；强制重建使用 `--force-reinitialize`，工具会先创建时间戳备份。
 
 ## 文件职责
 

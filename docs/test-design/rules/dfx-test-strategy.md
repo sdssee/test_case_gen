@@ -57,7 +57,7 @@
 - 每个最小批次在生成用例前必须根据页面元素覆盖骨架估算最低用例量，防止 DFX 接入后压缩用例；该预算必须落入 `element-case-plan.csv` 的 `应生成用例数`，不得由模型随意统一填写为 1。
 - 最低预算必须结合“元素类型/交互方式 + 适用DFX维度/适用DFX场景”计算：输入框至少覆盖正常值、空值、非法值、边界值；选择类控件至少覆盖展开、代表项选择、联动/无联动、清空/重置；分页至少覆盖条数切换、上一页、下一页、页码跳转、边界页和筛选后重置；新增/编辑/删除必须分别覆盖成功、失败/校验、取消、保存后校验和恢复路径。
 - 涉及 DFS 安全、DFR 可靠、DFU 可用、DFB 业务、配置生效、权限、密钥、状态流转、数据一致性或 CRUD 闭环时，必须在基础元素用例上追加对应 DFX 扩展用例；DFP 性能和 DFX 极端中不适合手工功能执行的场景写入性能测试设计、风险或自动化建议。
-- 写功能用例前必须运行阶段性门禁：`python scripts/test_design_excel_tools.py validate-batch-artifacts --run-dir <batch-run-dir> --phase plan`。门禁会校验 `page-discovery.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 的表头、列数、元素映射、DFX 最低用例数和 CRUD 生命周期。
+- 写功能用例前必须运行阶段性门禁：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase plan`。门禁会校验 `page-discovery.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 的表头、列数、元素映射、DFX 最低用例数和 CRUD 生命周期。
 - 实际功能测试用例数量明显低于已生成页面元素数量时，必须补充用例或说明不可测原因；不得用一条 DFX 场景概括多个可点击、可输入、可选择元素。
 - 如果 `element-case-plan.csv` 中某个元素的 DFX 计划未生成用例，必须填写 `未生成原因`，并同步到风险与待确认问题；禁止仅通过降低应生成用例数来规避覆盖。
 

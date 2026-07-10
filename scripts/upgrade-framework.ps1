@@ -31,6 +31,9 @@ $allowedPrefixes = @(
   "CODEBUDDY.md",
   "README.md",
   "README_IMPORT.md",
+  "requirements.txt",
+  "pyproject.toml",
+  "tests/",
   "VERSION",
   "UPGRADE_MANIFEST.md"
 )

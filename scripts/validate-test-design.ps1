@@ -11,3 +11,8 @@ if (-not (Test-Path $python)) {
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }
+
+& $python -m unittest discover -s (Join-Path $repoRoot "tests") -v
+if ($LASTEXITCODE -ne 0) {
+  exit $LASTEXITCODE
+}

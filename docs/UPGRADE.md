@@ -19,6 +19,9 @@
 - `scripts/`
 - `README.md`
 - `README_IMPORT.md`
+- `requirements.txt`
+- `pyproject.toml`
+- `tests/`
 - `VERSION`
 - `UPGRADE_MANIFEST.md`
 
@@ -35,7 +38,7 @@
 `VERSION` 中包含两个版本：
 
 ```text
-framework_version=1.1.0
+framework_version=1.2.0
 asset_schema_version=1.0.0
 ```
 
@@ -81,8 +84,10 @@ powershell -ExecutionPolicy Bypass -File scripts\validate-test-design-deliverabl
 
 如果本次交付包含测试系统导入文件，升级后还应使用一站式收口工具重新抽样生成或校验导入副本，避免内外网 Python 临时脚本按列序号写入导致字段错位：
 
+统一入口 `scripts/run-test-design.ps1` 会选择兼容 Python 后调用 `scripts/test_design_excel_tools.py`。
+
 ```powershell
-python scripts/test_design_excel_tools.py complete-deliverables `
+powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-deliverables `
   --project-root . `
   --formal-workbook docs/test-design/current/<测试设计.xlsx> `
   --import-template docs/test-design/测试用例模板.xlsx `

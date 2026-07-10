@@ -21,7 +21,7 @@
 - `artifacts/`
 
 必须优先复制 `docs/test-assets/batch-runs/templates/` 中的模板。
-只要发生页面实探或生成 `page-discovery.csv`，即使当前任务只有一个最小标题路径，也必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录，禁止临时手写旧版 `page-discovery.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 表头或跳过 `batch-status.csv`。
+只要发生页面实探或生成 `page-discovery.csv`，即使当前任务只有一个最小标题路径，也必须先执行 `scripts/run-test-design.ps1 init-batch-run` 初始化批次目录，禁止临时手写旧版 `page-discovery.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 表头或跳过 `batch-status.csv`。同名批次默认禁止重复初始化；继续已有批次必须使用 `--resume`，强制重建必须使用 `--force-reinitialize`，并保留工具自动生成的时间戳备份。
 所有截图、临时脚本、页面证据和过程材料必须保存到当前任务目录的 `docs/test-assets/batch-runs/<task>/artifacts/` 下，禁止写入共享的 `docs/test-assets/batch-runs/artifacts/` 根目录 artifacts，避免不同任务证据混淆。
 `init-batch-run` 会创建 `artifacts/scripts/`、`artifacts/data/` 和 `artifacts/screenshots/`；功能用例分片、Sheet JSON 和页面证据必须写入这些目录，禁止把 `function_cases_part_*.json`、页面发现副本或元素计划副本直接写到 `artifacts/` 根目录。
 
@@ -40,15 +40,15 @@
 
 阶段性门禁必须按顺序执行：
 
-1. 页面发现后运行：`python scripts/test_design_excel_tools.py validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery`，校验 `page-discovery.csv` 表头、列数、真实可交互元素和 `batch-status.csv` 状态。
-2. 元素计划和测试数据生命周期补齐后运行：`python scripts/test_design_excel_tools.py validate-batch-artifacts --run-dir <batch-run-dir> --phase plan`，校验 `element-case-plan.csv` 是否覆盖页面元素、`应生成用例数` 是否满足元素类型 × DFX 最低预算、CRUD/配置项是否补齐 `test-data-lifecycle.csv`。
-3. 功能用例分片生成前运行：`python scripts/test_design_excel_tools.py prepare-function-case-generation --run-dir <batch-run-dir>`，清理旧分片和旧 manifest，确保本轮只保留当前批次有效 JSON。
-4. 功能用例分片、Sheet JSON 和正式 Excel 生成前运行：`python scripts/test_design_excel_tools.py validate-batch-artifacts --run-dir <batch-run-dir> --phase cases`，先校验 `function_cases_manifest.json`、三位编号分片、标准字段、步骤/预期完整性和每片最多 10 条，再校验 Sheet 分文件、计划用例数量和实际分片数量一致。
+1. 页面发现后运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery`，校验 `page-discovery.csv` 表头、列数、真实可交互元素和 `batch-status.csv` 状态。
+2. 元素计划和测试数据生命周期补齐后运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase plan`，校验 `element-case-plan.csv` 是否覆盖页面元素、`应生成用例数` 是否满足元素类型 × DFX 最低预算、CRUD/配置项是否补齐 `test-data-lifecycle.csv`。
+3. 功能用例分片生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <batch-run-dir>`，清理旧分片和旧 manifest，确保本轮只保留当前批次有效 JSON。
+4. 功能用例分片、Sheet JSON 和正式 Excel 生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase cases`，先校验 `function_cases_manifest.json`、三位编号分片、标准字段、步骤/预期完整性和每片最多 10 条，再校验 Sheet 分文件、计划用例数量和实际分片数量一致。
 5. 任一阶段门禁失败时，必须回到当前阶段补充页面深探、元素计划、测试数据生命周期或用例分片，禁止通过降低 `应生成用例数`、删除元素、改字段名或跳过 DFX 场景绕过门禁。
 
 当前批次覆盖质量自检通过后，才能进入下一批。所有批次完成后只做最终汇总、跨模块汇总、回归范围、风险清单和客户总览，不得重新生成各批完整用例。
 
-批次交付收口必须使用统一工具 `scripts/test_design_excel_tools.py complete-deliverables` 一站式完成中间文件预检、正式 Excel 格式修复、导入文件生成、交付复制、产品版图同步和交付件校验。禁止手工在 `current/`、`deliverables/`、`docs/test-assets/modules/`、`docs/test-assets/imports/` 之间反复复制，禁止把正常批次拆成多轮修复和校验脚本。`batch-status.csv` 中已通过批次的 `归档路径` 必须指向 `docs/test-assets/modules/` 下的内部模块归档，`导入文件路径` 必须指向 `docs/test-assets/imports/` 下的导入归档。需要同步产品版图时传入 `--product-map`、`--page-discovery` 和 `--batch-status`，由工具调用 `sync-product-map`。
+批次交付收口必须使用统一工具 `scripts/run-test-design.ps1 complete-deliverables` 一站式完成中间文件预检、正式 Excel 格式修复、导入文件生成、交付复制、产品版图同步和交付件校验。收口工具必须先校验正式工作簿和导入文件，再更新正式目录、批次账本与产品版图；任何校验或同步失败时必须恢复本次调用前的文件状态。禁止手工在 `current/`、`deliverables/`、`docs/test-assets/modules/`、`docs/test-assets/imports/` 之间反复复制，禁止把正常批次拆成多轮修复和校验脚本。`batch-status.csv` 中已通过批次的 `归档路径` 必须指向 `docs/test-assets/modules/` 下的内部模块归档，`导入文件路径` 必须指向 `docs/test-assets/imports/` 下的导入归档。需要同步产品版图时传入 `--product-map`、`--page-discovery` 和 `--batch-status`，由工具调用 `sync-product-map`。
 
 交付文件名必须只使用菜单/模块路径，例如 `一级模块_二级菜单_三级菜单_测试设计.xlsx` 和 `一级模块_二级菜单_三级菜单_导入用例.xlsx`。不得把运行文件夹名、批次目录名或产品名拼入文件名；如果 `module-path` 中包含产品名，必须同时传入 `--product-name` 由统一工具自动去除，避免 `文件夹名_产品名_模块名_测试设计.xlsx` 与 `一级菜单_二级菜单_三级菜单_测试设计.xlsx` 形成重复交付。
 

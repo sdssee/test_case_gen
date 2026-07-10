@@ -75,7 +75,7 @@ DFX 落地必须遵循“先元素、后 DFX”的顺序：
 
 ## 功能用例分片生成
 
-- 生成新一轮功能用例分片前，必须先运行 `python scripts/test_design_excel_tools.py prepare-function-case-generation --run-dir <batch-run-dir>` 清理旧的 `function_cases_part_*.json` 和 `function_cases_manifest.json`，避免历史分片混入本轮 Excel。
+- 生成新一轮功能用例分片前，必须先运行 `powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <batch-run-dir>` 清理旧的 `function_cases_part_*.json` 和 `function_cases_manifest.json`，避免历史分片混入本轮 Excel。
 - 功能测试用例较多时必须按 `function_cases_part_001.json`、`function_cases_part_002.json` 等分片生成，每个分片最多 10 条功能用例。
 - 分片只能写入当前批次 `artifacts/data/`，禁止写到 `artifacts/` 根目录或 `artifacts/scripts/`。
 - 分片必须同步生成 `function_cases_manifest.json`，manifest 的 `parts` 只列出本轮有效的三位编号分片；Excel 写入脚本只能读取 manifest 中列出的分片，禁止直接 glob 目录下所有 `function_cases_part_*.json`。

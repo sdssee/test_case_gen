@@ -1312,7 +1312,7 @@ def main() -> int:
         repo_root / "docs" / "test-design" / "rules" / "page-discovery.md",
     ]:
         assert_contains(path, element_plan_markers)
-    split_generation_markers = ["function_cases_part_", "按 Sheet 分文件", "10 条", "artifacts/data"]
+    split_generation_markers = ["function_cases_part_", "按 Sheet 分文件", "10 条", "artifacts/data", "function_cases_manifest"]
     for path in [
         repo_root / "AGENTS.md",
         repo_root / "CODEBUDDY.md",
@@ -1330,8 +1330,20 @@ def main() -> int:
     )
     assert_contains(
         repo_root / "scripts" / "test_design_excel_tools.py",
-        ["validate-batch-artifacts", "minimum_cases_for_plan_row", "元素类型", "适用DFX维度", "应生成用例数", "artifacts/data", "function_cases_part_001.json"],
+        ["validate-batch-artifacts", "prepare-function-case-generation", "minimum_cases_for_plan_row", "元素类型", "适用DFX维度", "应生成用例数", "artifacts/data", "function_cases_part_001.json", "function_cases_manifest.json", "FUNCTION_CASE_REQUIRED_FIELDS"],
     )
+    function_json_schema_markers = ["用例编号", "用侊 ID", "用侊标题", "场景类型", "steps", "expected", "操作步骤", "预期结果"]
+    assert_contains(repo_root / "scripts" / "validate-generated-python-scripts.py", function_json_schema_markers)
+    for path in [
+        repo_root / "CODEBUDDY.md",
+        repo_root / "AGENTS.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "rules" / "case-design.md",
+        repo_root / "docs" / "test-design" / "rules" / "batch-run.md",
+    ]:
+        assert_contains(path, ["prepare-function-case-generation", "function_cases_manifest", "用侊 ID", "场景类型"])
     assert_contains(
         generated_python_validator_ps1,
         ["validate-generated-python-scripts.py", "Python was not found in PATH"],

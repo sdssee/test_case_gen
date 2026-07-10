@@ -1641,6 +1641,8 @@ def validate_batch_plan(batch_status: Path, batch_rows: list[dict[str, str]]) ->
 
 
 def validate_sheet_split_artifacts(run_dir: Path) -> None:
+    import json
+
     data_dir = run_dir / "artifacts" / "data"
     scripts_dir = run_dir / "artifacts" / "scripts"
     if not data_dir.exists():
@@ -1657,13 +1659,47 @@ def validate_sheet_split_artifacts(run_dir: Path) -> None:
     missing_data = [name for name in required_data_files if not (data_dir / name).exists()]
     if missing_data:
         fail(f"artifacts/data is missing sheet-split data files: {missing_data}")
-    function_parts = sorted(data_dir.glob("function_cases_part_*.json"))
-    if not function_parts:
-        fail("artifacts/data must contain function_cases_part_*.json files")
+    manifest = data_dir / "function_cases_manifest.json"
+    if not manifest.exists():
+        fail("artifacts/data must contain function_cases_manifest.json and Excel assembly must read manifest-listed shards")
+    try:
+        manifest_data = json.loads(manifest.read_text(encoding="utf-8-sig"))
+    except Exception as exc:
+        fail(f"{manifest} must be valid JSON: {exc}")
+    manifest_parts = manifest_data.get("parts") if isinstance(manifest_data, dict) else manifest_data
+    if not isinstance(manifest_parts, list) or not manifest_parts:
+        fail("function_cases_manifest.json must contain a non-empty parts list")
+    part_name_re = re.compile(r"^function_cases_part_\d{3}\.json$")
+    bad_part_names = [str(name) for name in manifest_parts if not part_name_re.match(str(name))]
+    if bad_part_names:
+        fail(f"function_cases_manifest.json contains invalid shard names: {bad_part_names[:10]}")
+    function_parts = [data_dir / str(name) for name in manifest_parts]
+    stale_parts = sorted(path.name for path in data_dir.glob("function_cases_part_*.json") if path.name not in set(map(str, manifest_parts)))
+    if stale_parts:
+        fail(f"artifacts/data contains stale function case shards not listed in function_cases_manifest.json: {stale_parts[:10]}")
+    required_fields = [
+        "用例 ID",
+        "Story ID/需求 ID",
+        "模块",
+        "功能点",
+        "用例标题",
+        "优先级",
+        "测试类型",
+        "DFX维度",
+        "DFX场景",
+        "前置条件",
+        "测试数据",
+        "操作步骤",
+        "预期结果",
+        "实际结果",
+        "执行状态",
+        "是否适合自动化",
+        "关联风险",
+        "备注",
+    ]
+    forbidden_fields = {"用例编号", "用侊 ID", "用侊标题", "场景类型", "正向/反向", "steps", "expected", "title", "case_id", "id"}
     for part in function_parts:
         try:
-            import json
-
             data = json.loads(part.read_text(encoding="utf-8-sig"))
         except Exception as exc:
             fail(f"{part} must be valid JSON: {exc}")
@@ -1672,6 +1708,26 @@ def validate_sheet_split_artifacts(run_dir: Path) -> None:
             fail(f"{part} must contain a list or an object with cases list")
         if len(cases) > 10:
             fail(f"{part} contains more than 10 function cases: {len(cases)}")
+        for case_index, case in enumerate(cases, start=1):
+            if not isinstance(case, dict):
+                fail(f"{part.name} case {case_index} must be an object")
+            keys = set(case)
+            forbidden = sorted(keys & forbidden_fields)
+            if forbidden:
+                fail(f"{part.name} case {case_index} contains forbidden/deprecated fields: {forbidden}")
+            missing = [field for field in required_fields if field not in case]
+            if missing:
+                fail(f"{part.name} case {case_index} is missing required fields: {missing}")
+            extra = sorted(keys - set(required_fields))
+            if extra:
+                fail(f"{part.name} case {case_index} contains non-standard fields: {extra}")
+            case_id = str(case.get("用例 ID", "") or "").strip()
+            if not case_id or "XXX" in case_id:
+                fail(f"{part.name} case {case_index} must use a concrete 用例 ID")
+            function_point = str(case.get("功能点", "") or "").strip()
+            title = str(case.get("用例标题", "") or "").strip()
+            if not title.startswith(f"{function_point}-"):
+                fail(f"{part.name} case {case_index} 用例标题 must use 功能点-当前标题 format")
     if scripts_dir.exists():
         if not any((scripts_dir / name).exists() for name in ["assemble_workbook.py", "build_function_cases.py"]):
             fail("artifacts/scripts must include assemble_workbook.py or build_function_cases.py for sheet-split generation")

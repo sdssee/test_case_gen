@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import py_compile
+import re
 import sys
 from pathlib import Path
 
@@ -13,6 +14,29 @@ MAX_PYTHON_BYTES = 200 * 1024
 MAX_JSON_BYTES = 256 * 1024
 MAX_FUNCTION_CASES_PER_PART = 10
 SCAN_EXTS = {".py", ".json", ".csv", ".md", ".txt"}
+FUNCTION_CASE_PART_RE = re.compile(r"^function_cases_part_\d{3}\.json$")
+FUNCTION_CASE_REQUIRED_FIELDS = [
+    "用例 ID",
+    "Story ID/需求 ID",
+    "模块",
+    "功能点",
+    "用例标题",
+    "优先级",
+    "测试类型",
+    "DFX维度",
+    "DFX场景",
+    "前置条件",
+    "测试数据",
+    "操作步骤",
+    "预期结果",
+    "实际结果",
+    "执行状态",
+    "是否适合自动化",
+    "关联风险",
+    "备注",
+]
+FUNCTION_CASE_FORBIDDEN_FIELDS = {"用例编号", "用侊 ID", "用侊标题", "场景类型", "正向/反向", "steps", "expected", "title", "case_id", "id"}
+ENGLISH_TEMPLATE_MARKERS = ["Open browser", "navigate to", "Verify page", "Operate element", "Execute extended scenario", "Extended scenario", "passes", "behaves as expected"]
 
 FORBIDDEN_QUOTE_CHARS = {
     "\u201c": "left double smart quote",
@@ -83,11 +107,64 @@ def validate_json(path: Path) -> None:
     except json.JSONDecodeError as exc:
         fail(f"{path} failed JSON syntax validation: line {exc.lineno}, column {exc.colno}: {exc.msg}")
     if path.name.startswith("function_cases_part_"):
+        if not FUNCTION_CASE_PART_RE.match(path.name):
+            fail(f"{path} must use three-digit shard naming like function_cases_part_001.json")
         cases = data.get("cases") if isinstance(data, dict) else data
         if not isinstance(cases, list):
             fail(f"{path} must contain a list or an object with a cases list")
         if len(cases) > MAX_FUNCTION_CASES_PER_PART:
             fail(f"{path} contains {len(cases)} function cases; each function_cases_part_*.json must contain at most {MAX_FUNCTION_CASES_PER_PART}")
+        for index, case in enumerate(cases, start=1):
+            validate_function_case(case, f"{path.name} case {index}")
+
+
+def numbered_lines(text: str) -> list[str]:
+    return [line.strip() for line in str(text or "").splitlines() if line.strip()]
+
+
+def validate_numbered(text: str, label: str, minimum: int) -> None:
+    lines = numbered_lines(text)
+    if len(lines) < minimum:
+        fail(f"{label} must contain at least {minimum} numbered lines")
+    expected = 1
+    for line in lines:
+        match = re.match(r"^(\d+)\.\s*\S+", line)
+        if not match:
+            fail(f"{label} must use numbered lines like '1. ...': {line}")
+        number = int(match.group(1))
+        if number != expected:
+            fail(f"{label} numbering must be continuous; expected {expected}, got {number}: {line}")
+        expected += 1
+
+
+def validate_function_case(case: object, label: str) -> None:
+    if not isinstance(case, dict):
+        fail(f"{label} must be an object")
+    keys = set(case)
+    forbidden = sorted(keys & FUNCTION_CASE_FORBIDDEN_FIELDS)
+    if forbidden:
+        fail(f"{label} contains forbidden/deprecated fields: {forbidden}")
+    missing = [field for field in FUNCTION_CASE_REQUIRED_FIELDS if field not in case]
+    if missing:
+        fail(f"{label} is missing required fields: {missing}")
+    extra = sorted(keys - set(FUNCTION_CASE_REQUIRED_FIELDS))
+    if extra:
+        fail(f"{label} contains extra fields not allowed by the standard schema: {extra}")
+    case_id = str(case.get("用例 ID", "") or "").strip()
+    if not case_id or "XXX" in case_id or case_id in {"TODO", "TBD"}:
+        fail(f"{label} must use a concrete 用例 ID, got: {case_id}")
+    function_point = str(case.get("功能点", "") or "").strip()
+    title = str(case.get("用例标题", "") or "").strip()
+    if not title.startswith(f"{function_point}-"):
+        fail(f"{label} 用例标题 must use 功能点-当前标题 format")
+    if case.get("测试类型") == "性能规格测试" or case.get("DFX维度") == "DFP性能":
+        fail(f"{label} must not put performance scenarios into function case shards")
+    combined = "\n".join(str(case.get(field, "") or "") for field in ["前置条件", "操作步骤", "预期结果", "备注"])
+    if any(marker in combined for marker in ENGLISH_TEMPLATE_MARKERS):
+        fail(f"{label} contains English placeholder/template text")
+    validate_numbered(str(case.get("前置条件", "") or ""), f"{label} 前置条件", 2)
+    validate_numbered(str(case.get("操作步骤", "") or ""), f"{label} 操作步骤", 4)
+    validate_numbered(str(case.get("预期结果", "") or ""), f"{label} 预期结果", 3)
 
 
 def main() -> int:

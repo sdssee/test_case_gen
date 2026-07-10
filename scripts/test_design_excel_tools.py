@@ -402,6 +402,59 @@ CSV_REQUIRED_FILES = {
 
 FUNCTION_CASE_PART_RE = re.compile(r"^function_cases_part_\d{3}\.json$")
 MAX_FUNCTION_CASES_PER_PART = 10
+FUNCTION_CASE_MANIFEST = "function_cases_manifest.json"
+SHEET_DATA_FILES = [
+    "overview.json",
+    "requirements.json",
+    "scenarios.json",
+    "performance.json",
+    "risks.json",
+    "automation.json",
+    "page_elements.json",
+]
+FUNCTION_CASE_REQUIRED_FIELDS = [
+    "用例 ID",
+    "Story ID/需求 ID",
+    "模块",
+    "功能点",
+    "用例标题",
+    "优先级",
+    "测试类型",
+    "DFX维度",
+    "DFX场景",
+    "前置条件",
+    "测试数据",
+    "操作步骤",
+    "预期结果",
+    "实际结果",
+    "执行状态",
+    "是否适合自动化",
+    "关联风险",
+    "备注",
+]
+FUNCTION_CASE_FORBIDDEN_FIELDS = {
+    "用例编号",
+    "用侊 ID",
+    "用侊标题",
+    "场景类型",
+    "正向/反向",
+    "steps",
+    "expected",
+    "title",
+    "case_id",
+    "id",
+}
+PLACEHOLDER_CASE_IDS = {"", "TC-A2A-XXX", "TC-XXX", "TODO", "TBD"}
+ENGLISH_TEMPLATE_MARKERS = [
+    "Open browser",
+    "navigate to",
+    "Verify page",
+    "Operate element",
+    "Execute extended scenario",
+    "Extended scenario",
+    "passes",
+    "behaves as expected",
+]
 
 INTERACTIVE_ELEMENT_MARKERS = [
     "按钮",
@@ -585,7 +638,91 @@ def planned_case_id_count(value: str) -> int:
     return len(ids)
 
 
-def validate_function_case_part(path: Path) -> int:
+def numbered_lines(text: str) -> list[str]:
+    return [line.strip() for line in str(text or "").splitlines() if line.strip()]
+
+
+def validate_numbered_sequence(text: str, label: str, minimum: int) -> None:
+    lines = numbered_lines(text)
+    if len(lines) < minimum:
+        raise ValueError(f"{label} must contain at least {minimum} numbered lines")
+    expected = 1
+    for line in lines:
+        match = re.match(r"^(\d+)\.\s*\S+", line)
+        if not match:
+            raise ValueError(f"{label} must use numbered lines like '1. ...': {line}")
+        number = int(match.group(1))
+        if number != expected:
+            raise ValueError(f"{label} numbering must be continuous; expected {expected}, got {number}: {line}")
+        expected += 1
+
+
+def validate_case_steps_and_expected(case: dict[str, str], label: str) -> None:
+    steps = str(case.get("操作步骤", "") or "")
+    expected = str(case.get("预期结果", "") or "")
+    precondition = str(case.get("前置条件", "") or "")
+    combined = "\n".join([precondition, steps, expected, str(case.get("备注", "") or "")])
+
+    if any(marker in combined for marker in ENGLISH_TEMPLATE_MARKERS):
+        raise ValueError(f"{label} contains English placeholder/template text; generate concrete Chinese executable steps and expectations")
+
+    validate_numbered_sequence(precondition, f"{label} 前置条件", 2)
+    validate_numbered_sequence(steps, f"{label} 操作步骤", 4)
+    validate_numbered_sequence(expected, f"{label} 预期结果", 3)
+
+    first_steps = "\n".join(numbered_lines(steps)[:3])
+    entry_markers = ["登录", "打开系统", "访问系统", "进入系统", "打开平台", "访问平台", "进入平台", "<product_login_url>"]
+    navigation_markers = ["一级", "二级", "三级", "菜单", "模块", "导航", "路径", ">", "页面"]
+    if not any(marker in first_steps for marker in entry_markers):
+        raise ValueError(f"{label} 操作步骤 must start from system/project entry")
+    if not any(marker in first_steps for marker in navigation_markers):
+        raise ValueError(f"{label} 操作步骤 must include complete menu/module navigation")
+
+    if re.search(r"\b点(搜索|保存|删除|确定|确认|取消)\b", steps):
+        raise ValueError(f"{label} 操作步骤 contains overly terse wording like '点搜索'; write the full control name and action")
+    if any(marker in steps for marker in ["操作元素", "扩展场景", "基本验证", "Extended"]):
+        raise ValueError(f"{label} 操作步骤 contains generic generated wording; write concrete page operations")
+    if any(marker in expected for marker in ["behaves as expected", "passes", "符合预期", "正常显示"]) and len(numbered_lines(expected)) <= 3:
+        raise ValueError(f"{label} 预期结果 is too generic; write observable page/data/state outcomes")
+
+
+def validate_function_case_schema(case: dict[str, object], label: str, planned_ids: set[str] | None = None) -> None:
+    if not isinstance(case, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    keys = set(case)
+    forbidden = sorted(keys & FUNCTION_CASE_FORBIDDEN_FIELDS)
+    if forbidden:
+        raise ValueError(f"{label} contains forbidden/deprecated fields: {forbidden}; use the standard function case schema")
+    missing = [field for field in FUNCTION_CASE_REQUIRED_FIELDS if field not in case]
+    if missing:
+        raise ValueError(f"{label} is missing required fields: {missing}")
+    extra = sorted(keys - set(FUNCTION_CASE_REQUIRED_FIELDS))
+    if extra:
+        raise ValueError(f"{label} contains extra fields not allowed by the standard schema: {extra}")
+
+    normalized = {field: "" if case.get(field) is None else str(case.get(field)).strip() for field in FUNCTION_CASE_REQUIRED_FIELDS}
+    case_id = normalized["用例 ID"]
+    if case_id in PLACEHOLDER_CASE_IDS or "XXX" in case_id:
+        raise ValueError(f"{label} must use a concrete 用例 ID, got: {case_id}")
+    if planned_ids is not None and planned_ids and case_id not in planned_ids:
+        raise ValueError(f"{label} 用例 ID is not declared in element-case-plan.csv 计划用例ID: {case_id}")
+
+    function_point = normalized["功能点"]
+    title = normalized["用例标题"]
+    if not function_point:
+        raise ValueError(f"{label} must fill 功能点")
+    if not title.startswith(f"{function_point}-"):
+        raise ValueError(f"{label} 用例标题 must use 功能点-当前标题 format: {title}")
+    for field in ["模块", "优先级", "测试类型", "DFX维度", "DFX场景", "测试数据"]:
+        if not normalized[field]:
+            raise ValueError(f"{label} must fill {field}")
+    if normalized["测试类型"] == "性能规格测试" or normalized["DFX维度"] == "DFP性能":
+        raise ValueError(f"{label} must not put performance scenarios into function case shards")
+
+    validate_case_steps_and_expected(normalized, label)
+
+
+def validate_function_case_part(path: Path, planned_ids: set[str] | None = None) -> int:
     if not FUNCTION_CASE_PART_RE.match(path.name):
         raise ValueError(f"{path} must use function_cases_part_001.json naming")
     with path.open("r", encoding="utf-8-sig") as fp:
@@ -595,7 +732,58 @@ def validate_function_case_part(path: Path) -> int:
         raise ValueError(f"{path} must contain a list or an object with a cases list")
     if len(cases) > MAX_FUNCTION_CASES_PER_PART:
         raise ValueError(f"{path} contains {len(cases)} cases; each function_cases_part_*.json must contain at most {MAX_FUNCTION_CASES_PER_PART}")
+    seen_ids: set[str] = set()
+    for index, case in enumerate(cases, start=1):
+        validate_function_case_schema(case, f"{path.name} case {index}", planned_ids)
+        case_id = str(case.get("用例 ID", "")).strip()
+        if case_id in seen_ids:
+            raise ValueError(f"{path.name} has duplicate 用例 ID: {case_id}")
+        seen_ids.add(case_id)
     return len(cases)
+
+
+def planned_case_ids(plan_rows: list[dict[str, str]]) -> set[str]:
+    ids: set[str] = set()
+    for row in plan_rows:
+        ids.update(split_plan_values(row.get("计划用例ID", "")))
+    return ids
+
+
+def manifest_parts(data_dir: Path) -> list[Path]:
+    manifest = data_dir / FUNCTION_CASE_MANIFEST
+    if not manifest.exists():
+        raise ValueError(f"artifacts/data must contain {FUNCTION_CASE_MANIFEST}; Excel assembly must read the manifest, not glob stale shards")
+    with manifest.open("r", encoding="utf-8-sig") as fp:
+        data = json.load(fp)
+    raw_parts = data.get("parts") if isinstance(data, dict) else data
+    if not isinstance(raw_parts, list) or not raw_parts:
+        raise ValueError(f"{manifest} must contain a non-empty parts list")
+    result: list[Path] = []
+    for item in raw_parts:
+        name = str(item).strip()
+        if not FUNCTION_CASE_PART_RE.match(name):
+            raise ValueError(f"{manifest} contains invalid part name: {name}; use function_cases_part_001.json")
+        path = data_dir / name
+        if not path.exists():
+            raise ValueError(f"{manifest} references missing function case shard: {name}")
+        result.append(path)
+    declared = {path.name for path in result}
+    stale = sorted(path.name for path in data_dir.glob("function_cases_part_*.json") if path.name not in declared)
+    if stale:
+        raise ValueError(f"artifacts/data contains stale function case shards not listed in {FUNCTION_CASE_MANIFEST}: {stale[:10]}")
+    return result
+
+
+def prepare_function_case_generation(run_dir: Path) -> None:
+    data_dir = run_dir.resolve() / "artifacts" / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    removed: list[str] = []
+    for pattern in ["function_cases_part_*.json", FUNCTION_CASE_MANIFEST]:
+        for path in data_dir.glob(pattern):
+            if path.is_file():
+                removed.append(path.name)
+                path.unlink()
+    print(f"OK: prepared function case generation under {data_dir}; removed {len(removed)} stale file(s).")
 
 
 def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
@@ -696,22 +884,12 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
         raise ValueError("function_cases_part_*.json must be written under artifacts/data, not artifacts root")
 
     if phase == "cases":
-        required_sheet_files = [
-            "overview.json",
-            "requirements.json",
-            "scenarios.json",
-            "performance.json",
-            "risks.json",
-            "automation.json",
-            "page_elements.json",
-        ]
-        missing_sheet_files = [name for name in required_sheet_files if not (data_dir / name).exists()]
+        parts = manifest_parts(data_dir)
+        planned_ids = planned_case_ids(plan_rows)
+        case_count = sum(validate_function_case_part(path, planned_ids) for path in parts)
+        missing_sheet_files = [name for name in SHEET_DATA_FILES if not (data_dir / name).exists()]
         if missing_sheet_files:
             raise ValueError(f"artifacts/data is missing sheet-split files: {missing_sheet_files}")
-        parts = sorted(data_dir.glob("function_cases_part_*.json"))
-        if not parts:
-            raise ValueError("artifacts/data must contain function_cases_part_001.json and later function case shards")
-        case_count = sum(validate_function_case_part(path) for path in parts)
         if plan_rows:
             declared_total = sum(
                 int(row.get("应生成用例数", "0"))
@@ -1270,6 +1448,9 @@ def main() -> int:
     batch_gate.add_argument("--run-dir", required=True, type=Path)
     batch_gate.add_argument("--phase", choices=["discovery", "plan", "cases"], default="cases")
 
+    prepare_cases = sub.add_parser("prepare-function-case-generation", help="Remove stale function case shards and manifest before generating new JSON shards.")
+    prepare_cases.add_argument("--run-dir", required=True, type=Path)
+
     finalize = sub.add_parser("finalize-deliverables", help="Copy validated workbooks to current/deliverables/internal archives and update batch-status paths.")
     finalize.add_argument("--project-root", required=True, type=Path)
     finalize.add_argument("--formal-workbook", required=True, type=Path)
@@ -1311,6 +1492,8 @@ def main() -> int:
         init_batch_run(args.project_root, args.run_id, args.module_path, args.batch_id, args.product_name)
     elif args.command == "validate-batch-artifacts":
         validate_batch_artifacts(args.run_dir, args.phase)
+    elif args.command == "prepare-function-case-generation":
+        prepare_function_case_generation(args.run_dir)
     elif args.command == "finalize-deliverables":
         if args.page_discovery and not args.batch_status:
             raise SystemExit(

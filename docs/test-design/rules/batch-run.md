@@ -42,8 +42,9 @@
 
 1. 页面发现后运行：`python scripts/test_design_excel_tools.py validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery`，校验 `page-discovery.csv` 表头、列数、真实可交互元素和 `batch-status.csv` 状态。
 2. 元素计划和测试数据生命周期补齐后运行：`python scripts/test_design_excel_tools.py validate-batch-artifacts --run-dir <batch-run-dir> --phase plan`，校验 `element-case-plan.csv` 是否覆盖页面元素、`应生成用例数` 是否满足元素类型 × DFX 最低预算、CRUD/配置项是否补齐 `test-data-lifecycle.csv`。
-3. 功能用例分片、Sheet JSON 和正式 Excel 生成前运行：`python scripts/test_design_excel_tools.py validate-batch-artifacts --run-dir <batch-run-dir> --phase cases`，校验 `artifacts/data/` 分片、每片最多 10 条、Sheet 分文件、计划用例数量和实际分片数量一致。
-4. 任一阶段门禁失败时，必须回到当前阶段补充页面深探、元素计划、测试数据生命周期或用例分片，禁止通过降低 `应生成用例数`、删除元素或跳过 DFX 场景绕过门禁。
+3. 功能用例分片生成前运行：`python scripts/test_design_excel_tools.py prepare-function-case-generation --run-dir <batch-run-dir>`，清理旧分片和旧 manifest，确保本轮只保留当前批次有效 JSON。
+4. 功能用例分片、Sheet JSON 和正式 Excel 生成前运行：`python scripts/test_design_excel_tools.py validate-batch-artifacts --run-dir <batch-run-dir> --phase cases`，先校验 `function_cases_manifest.json`、三位编号分片、标准字段、步骤/预期完整性和每片最多 10 条，再校验 Sheet 分文件、计划用例数量和实际分片数量一致。
+5. 任一阶段门禁失败时，必须回到当前阶段补充页面深探、元素计划、测试数据生命周期或用例分片，禁止通过降低 `应生成用例数`、删除元素、改字段名或跳过 DFX 场景绕过门禁。
 
 当前批次覆盖质量自检通过后，才能进入下一批。所有批次完成后只做最终汇总、跨模块汇总、回归范围、风险清单和客户总览，不得重新生成各批完整用例。
 
@@ -65,6 +66,8 @@
 - 当前批次 Python 临时脚本或 JSON 数据分片也不得过大；单个 Python 建议小于 200KB，单个 JSON/CSV/Markdown/TXT 中间文件建议小于 256KB，超过时必须继续按最小标题路径或页面域分片。
 - 不得把大量用例正文、步骤、预期结果或页面元素清单内联到一个 Python 列表/字典或一个 JSON 文件中；Python 只保留模板填充逻辑，数据优先来自当前批次正式 Excel、`page-discovery.csv`、`batch-status.csv` 或小型分片。
 - Excel 数据必须按 Sheet 分文件输出到 `artifacts/data/`：`overview.json`、`requirements.json`、`scenarios.json`、`performance.json`、`risks.json`、`automation.json`、`page_elements.json` 等；功能用例必须按 `function_cases_part_001.json`、`function_cases_part_002.json` 分片，每个分片最多 10 条。
+- 功能用例分片必须同步写 `function_cases_manifest.json`，禁止保留 `function_cases_part_01.json`、旧批次分片或未被 manifest 引用的分片。
+- 功能用例分片字段必须使用标准字段，禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected` 等错字段、旧字段或英文模板字段进入 JSON 和 Excel。
 - Sheet 构建脚本必须按职责拆分，`assemble_workbook.py` 只负责复制模板、调用 Sheet 写入和保存，禁止一个大脚本内联全部 Sheet 数据和用例正文。
 - 当前批次 Python 临时脚本写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取。
 - 执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过单文件大小、JSON 语法、Python 语法编译和中文弯引号、智能引号、未转义双引号风险扫描后才能执行。

@@ -34,7 +34,9 @@
 20. `功能测试用例` 禁止写入 `测试类型=性能规格测试` 或 `DFX维度=DFP性能`；性能、并发、大数据量、资源监控和极端压力场景必须进入 `性能测试设计`、风险或自动化建议。下拉必须实际选择代表项并记录联动，分页必须拆出每页条数、翻页/跳转和边界/禁用态；新增、编辑、删除必须绑定本次创建或用户提供的测试数据，既有数据只能只读深探或取消/关闭。
 21. 页面深探后必须生成或更新 `element-case-plan.csv`，功能测试用例必须从该计划派生；`应生成用例数` 必须按元素类型 × DFX 最低覆盖预算计算，禁止所有行统一写 1；真实新增、编辑、删除必须同步 `test-data-lifecycle.csv`，配置项保存类用例必须验证保存后回显和实际生效。
 22. 页面发现、元素计划和用例分片阶段必须分别运行 `python scripts/test_design_excel_tools.py validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery|plan|cases`；门禁失败时补页面深探、元素计划、测试数据生命周期或分片，禁止继续生成 Excel。
-23. 功能测试用例必须按每 10 条一个 `artifacts/data/function_cases_part_*.json` 分片生成和校验；Excel 数据必须按 Sheet 分文件输出，禁止一个大 Python 或大 JSON 承载全部 Sheet 和全部用例正文。
+23. 生成新一轮功能用例分片前，必须先运行 `python scripts/test_design_excel_tools.py prepare-function-case-generation --run-dir <batch-run-dir>` 清理旧分片和旧 manifest。
+24. 功能测试用例必须按每 10 条一个 `artifacts/data/function_cases_part_001.json` 这类三位编号分片生成，并同步 `artifacts/data/function_cases_manifest.json`；Excel 写入只能读取 manifest 中列出的分片，禁止直接 glob 所有历史分片。
+25. 功能用例 JSON 只能使用标准字段，禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected`、英文模板或泛化占位文本；`前置条件` 至少 2 条，`操作步骤` 至少 4 条且从系统入口和菜单路径开始，`预期结果` 至少 3 条，编号必须连续。
 20. 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/` 五件套。
 21. `batch-status.csv` 和 `page-discovery.csv` 必须使用标准模板表头，禁止自定义精简表头；`page-discovery.csv` 必须结构化写入，防止字段错位。
 22. 禁止创建承载全量测试用例正文的单一 Python/JSON/CSV/Markdown/临时脚本；脚本只能处理当前批次并放在 `artifacts/scripts/`。

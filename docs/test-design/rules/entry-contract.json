@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "max_chars": 10000,
+  "canonical_rule": ".codebuddy/rules/test-design-rule.md",
+  "rule_mirrors": [
+    ".codebuddy/.rules/test-design-rule.mdc"
+  ],
+  "entries": {
+    "AGENTS.md": [
+      "docs/test-design/rules/README.md",
+      "docs/test-design/rules/batch-run.md",
+      "docs/test-design/rules/product-map-sync.md",
+      "scripts/run-test-design.ps1"
+    ],
+    "CODEBUDDY.md": [
+      "docs/test-design/rules/README.md",
+      "docs/test-design/rules/batch-run.md",
+      "docs/test-design/rules/product-map-sync.md",
+      "scripts/run-test-design.ps1"
+    ],
+    ".codebuddy/skills/test-design/SKILL.md": [
+      "docs/test-design/rules/README.md",
+      "docs/test-design/rules/case-design.md",
+      "docs/test-design/rules/dfx-test-strategy.md",
+      "scripts/run-test-design.ps1"
+    ]
+  }
+}

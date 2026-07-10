@@ -46,9 +46,12 @@ $includeFiles = @(
 )
 
 $includeDirs = @(
+  ".github",
   ".codebuddy",
   "scripts",
   "tests",
+  "docs/test-design/rules",
+  "docs/test-design/schemas",
   "docs/test-assets/batch-runs/templates"
 )
 

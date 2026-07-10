@@ -15,7 +15,8 @@
 | `.codebuddy/rules/test-design-rule.md` | CodeBuddy Code/CLI 硬规则。 |
 | `docs/test-design/codebuddy-test-design-template.xlsx` | 正式测试设计模板，固定 8 个 Sheet。 |
 | `docs/test-design/测试用例模板.xlsx` | 测试系统导入模板，使用时复制副本，不修改原模板。 |
-| `docs/test-assets/product-map.xlsx` | 内部产品测试知识图谱，不作为默认客户交付件。 |
+| `docs/test-assets/catalog/` | 按模块 JSON 保存的内部产品测试权威事实源。 |
+| `docs/test-assets/product-map.xlsx` | 从 catalog 重建的 Excel 查询视图，不作为默认客户交付件。 |
 | `docs/RULE_OWNERSHIP.md` | 规则归属矩阵，避免重复和漂移。 |
 
 详细规则按任务读取 `docs/test-design/rules/`；Excel 字段以 `docs/test-design/excel-template-spec.md` 为准；归档和跨模块依赖以 `docs/test-design/archive-and-index-guidelines.md` 为准。
@@ -64,6 +65,8 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
 ```
 
 已存在同名批次时，初始化命令默认拒绝覆盖。继续原批次时追加 `--resume`；确需重建时追加 `--force-reinitialize`，工具会先生成带时间戳的完整备份。`complete-deliverables` 会先预校验正式文件，失败时恢复正式工作簿、导入文件、交付副本、批次账本和产品版图。
+
+旧资产升级或排障时可使用 `migrate-product-facts`、`validate-product-facts`、`rebuild-product-map`；正常 `sync-product-map` 会自动 upsert 模块 JSON 并重建 Excel 视图。
 
 只需要单独生成导入文件且不做批次收口时，可使用 `generate-import` 兼容命令。
 

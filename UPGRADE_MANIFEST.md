@@ -4,24 +4,27 @@
 
 ## 版本
 
-- framework_version: 1.2.0
-- asset_schema_version: 1.0.0
+- framework_version: 2.0.0
+- asset_schema_version: 2.0.0
 
 ## 升级类型
 
-- 类型：普通框架升级
-- 是否需要资产迁移：否
-- 迁移脚本：无
+- 类型：框架与资产结构升级
+- 是否需要资产迁移：是
+- 迁移脚本：`scripts/migrations/1.0.0_to_2.0.0.ps1`
 
 ## 允许升级内容
 
 - `AGENTS.md`
 - `CODEBUDDY.md`
+- `.github/`
 - `.codebuddy/`
 - `docs/ARCHITECTURE.md`
 - `docs/UPGRADE.md`
 - `docs/test-design/*.md`
 - `docs/test-design/*.xlsx`
+- `docs/test-design/rules/`
+- `docs/test-design/schemas/`
 - `docs/test-assets/README.md`
 - `docs/test-assets/batch-runs/README.md`
 - `docs/test-assets/batch-runs/templates/`
@@ -50,7 +53,7 @@
 
 ## 升级后校验
 
-1.2.0 新增统一运行时入口、依赖锁定、批次初始化防覆盖、交付失败回滚、原子文件替换和架构回归测试；`asset_schema_version` 未变化，不需要迁移既有产品版图。
+2.0.0 将产品测试事实迁移到 `docs/test-assets/catalog/modules/*.json`，以 `product-map.xlsx` 作为可重建投影视图；升级会先从既有 Excel 迁移真实行，再启用分模块事实 upsert。框架同时拆出 I/O 与事实仓库领域模块，并新增 CI、升级回滚和一致性测试。
 
 外网生成升级包：
 

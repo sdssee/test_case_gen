@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "product-facts.schema.json",
+  "title": "Product test facts document",
+  "type": "object",
+  "required": ["schema_version", "module_key", "product", "module_path", "updated_at", "source", "facts"],
+  "properties": {
+    "schema_version": {"const": "2.0.0"},
+    "module_key": {"type": "string", "minLength": 1},
+    "product": {"type": "string"},
+    "module_path": {"type": "string", "minLength": 1},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "source": {"type": "object", "additionalProperties": {"type": "string"}},
+    "facts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["id", "data", "evidence"],
+          "additionalProperties": false,
+          "properties": {
+            "id": {"type": "string", "pattern": "^FACT-[0-9a-f]{20}$"},
+            "data": {"type": "object", "additionalProperties": {"type": "string"}},
+            "evidence": {"type": "object", "additionalProperties": {"type": "string"}}
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

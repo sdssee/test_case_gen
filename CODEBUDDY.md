@@ -9,7 +9,7 @@
 - 正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
 - 需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，不修改原模板。
 - 客户交付件放在 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。
-- 内部产品级测试资产库放在 `docs/test-assets/`，主入口为 `docs/test-assets/product-map.xlsx`，不作为默认客户交付件。
+- 内部产品级测试资产库放在 `docs/test-assets/`；`catalog/modules/*.json` 是权威事实源，`product-map.xlsx` 是可重建查询视图，均不作为默认客户交付件。
 
 ## 必读文件
 

@@ -20,9 +20,12 @@ $protectedPrefixes = @(
 # VERSION keys: framework_version, asset_schema_version
 
 $allowedPrefixes = @(
+  ".github/",
   ".codebuddy/",
   "docs/ARCHITECTURE.md",
   "docs/UPGRADE.md",
+  "docs/test-design/rules/",
+  "docs/test-design/schemas/",
   "docs/test-assets/README.md",
   "docs/test-assets/batch-runs/README.md",
   "docs/test-assets/batch-runs/templates/",
@@ -101,6 +104,43 @@ function Get-RelativePath {
   return $full.Substring($base.Length)
 }
 
+function Restore-UpgradeSnapshot {
+  param(
+    [string]$RepositoryRoot,
+    [string]$SnapshotRoot,
+    [System.Collections.Generic.List[string]]$CreatedTargets
+  )
+
+  foreach ($target in $CreatedTargets) {
+    if (Test-Path -LiteralPath $target) {
+      Remove-Item -LiteralPath $target -Force
+    }
+  }
+
+  $frameworkSnapshot = Join-Path $SnapshotRoot "framework"
+  if (Test-Path -LiteralPath $frameworkSnapshot) {
+    Get-ChildItem -Path $frameworkSnapshot -Recurse -File | ForEach-Object {
+      $relative = Get-RelativePath -BasePath $frameworkSnapshot -FullPath $_.FullName
+      $target = Join-Path $RepositoryRoot $relative
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+      Copy-Item -LiteralPath $_.FullName -Destination $target -Force
+    }
+  }
+
+  foreach ($protected in $protectedPrefixes) {
+    $snapshot = Join-Path $SnapshotRoot $protected
+    if (-not (Test-Path -LiteralPath $snapshot)) {
+      continue
+    }
+    $target = Join-Path $RepositoryRoot $protected
+    if (Test-Path -LiteralPath $target) {
+      Remove-Item -LiteralPath $target -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+    Copy-Item -LiteralPath $snapshot -Destination $target -Recurse -Force
+  }
+}
+
 New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
 try {
   Expand-Archive -LiteralPath $resolvedPackage -DestinationPath $extractRoot -Force
@@ -136,16 +176,7 @@ try {
     throw "Missing migration script in upgrade package: $migrationRelativePath"
   }
 
-  New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
-  foreach ($protected in $protectedPrefixes) {
-    $source = Join-Path $repoRoot $protected
-    if (Test-Path $source) {
-      $target = Join-Path $backupRoot $protected
-      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
-      Copy-Item -LiteralPath $source -Destination $target -Recurse -Force
-    }
-  }
-
+  $packageFiles = New-Object System.Collections.Generic.List[object]
   Get-ChildItem -Path $extractRoot -Recurse -File | ForEach-Object {
     $relative = Get-RelativePath -BasePath $extractRoot -FullPath $_.FullName
     $normalized = Normalize-RelativePath $relative
@@ -157,22 +188,60 @@ try {
       Write-Host "Skip unexpected package path: $normalized"
       return
     }
-    $target = Join-Path $repoRoot $relative
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
-    Copy-Item -LiteralPath $_.FullName -Destination $target -Force
+    $packageFiles.Add([PSCustomObject]@{ Source = $_.FullName; Relative = $relative })
   }
 
-  if ($requiresMigration) {
-    & powershell -ExecutionPolicy Bypass -File $repoMigration
+  New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+  foreach ($protected in $protectedPrefixes) {
+    $source = Join-Path $repoRoot $protected
+    if (Test-Path $source) {
+      $target = Join-Path $backupRoot $protected
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+      Copy-Item -LiteralPath $source -Destination $target -Recurse -Force
+    }
   }
 
-  & powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\validate-test-design.ps1")
-  if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+  $frameworkSnapshot = Join-Path $backupRoot "framework"
+  $createdTargets = New-Object System.Collections.Generic.List[string]
+  foreach ($item in $packageFiles) {
+    $target = Join-Path $repoRoot $item.Relative
+    if (Test-Path -LiteralPath $target) {
+      $snapshot = Join-Path $frameworkSnapshot $item.Relative
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $snapshot) | Out-Null
+      Copy-Item -LiteralPath $target -Destination $snapshot -Force
+    }
+    else {
+      $createdTargets.Add($target)
+    }
+  }
+
+  try {
+    foreach ($item in $packageFiles) {
+      $target = Join-Path $repoRoot $item.Relative
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+      Copy-Item -LiteralPath $item.Source -Destination $target -Force
+    }
+
+    if ($requiresMigration) {
+      & powershell -ExecutionPolicy Bypass -File $repoMigration
+      if ($LASTEXITCODE -ne 0) {
+        throw "Asset migration failed with exit code $LASTEXITCODE."
+      }
+    }
+
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\validate-test-design.ps1")
+    if ($LASTEXITCODE -ne 0) {
+      throw "Framework validation failed with exit code $LASTEXITCODE."
+    }
+  }
+  catch {
+    Write-Warning "Upgrade failed; restoring framework and protected assets from $backupRoot"
+    Restore-UpgradeSnapshot -RepositoryRoot $repoRoot -SnapshotRoot $backupRoot -CreatedTargets $createdTargets
+    throw
   }
 
   Write-Host "Framework upgrade applied."
-  Write-Host "Protected assets backup: $backupRoot"
+  Write-Host "Framework and protected assets backup: $backupRoot"
 }
 finally {
   if (Test-Path $extractRoot) {

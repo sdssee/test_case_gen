@@ -323,13 +323,25 @@ def main() -> int:
     deliverable_validator = repo_root / "scripts" / "validate-test-design-deliverable.py"
     deliverable_validator_ps1 = repo_root / "scripts" / "validate-test-design-deliverable.ps1"
     excel_tools = repo_root / "scripts" / "test_design_excel_tools.py"
+    domain_dir = repo_root / "scripts" / "test_design"
+    batch_module = domain_dir / "batch.py"
+    excel_module = domain_dir / "excel_utils.py"
+    io_module = domain_dir / "io_utils.py"
+    paths_module = domain_dir / "paths.py"
+    fact_store_module = domain_dir / "fact_store.py"
+    product_map_sync_module = domain_dir / "product_map_sync.py"
+    fact_schema = repo_root / "docs" / "test-design" / "schemas" / "product-facts.schema.json"
+    asset_migration = repo_root / "scripts" / "migrations" / "1.0.0_to_2.0.0.ps1"
+    ci_workflow = repo_root / ".github" / "workflows" / "validate.yml"
+    rules_dir = repo_root / "docs" / "test-design" / "rules"
+    entry_contract = rules_dir / "entry-contract.json"
+    entry_sync_script = repo_root / "scripts" / "sync-rule-entrypoints.py"
     generated_python_validator = repo_root / "scripts" / "validate-generated-python-scripts.py"
     generated_python_validator_ps1 = repo_root / "scripts" / "validate-generated-python-scripts.ps1"
     runtime_wrapper = repo_root / "scripts" / "run-test-design.ps1"
     requirements_file = repo_root / "requirements.txt"
     project_file = repo_root / "pyproject.toml"
     architecture_tests = repo_root / "tests" / "test_architecture_safety.py"
-    rules_dir = repo_root / "docs" / "test-design" / "rules"
     rule_docs = [
         rules_dir / "README.md",
         rules_dir / "case-design.md",
@@ -366,6 +378,17 @@ def main() -> int:
         deliverable_validator,
         deliverable_validator_ps1,
         excel_tools,
+        batch_module,
+        excel_module,
+        io_module,
+        paths_module,
+        fact_store_module,
+        product_map_sync_module,
+        fact_schema,
+        asset_migration,
+        ci_workflow,
+        entry_contract,
+        entry_sync_script,
         generated_python_validator,
         generated_python_validator_ps1,
         runtime_wrapper,
@@ -400,6 +423,9 @@ def main() -> int:
             "test_delivery_lock_rejects_concurrent_writer",
             "test_complete_delivery_rolls_back_when_prevalidation_fails",
             "test_product_map_sync_uses_current_schema_and_real_dependencies",
+            "test_product_fact_migration_preserves_existing_real_excel_rows",
+            "test_upgrade_failure_restores_framework_and_protected_assets",
+            "test_upgrade_migrates_asset_schema_1_to_2_without_losing_excel_facts",
         ],
     )
 
@@ -410,6 +436,13 @@ def main() -> int:
         if not re.fullmatch(r"\d+\.\d+\.\d+", versions[key]):
             fail(f"VERSION {key} should use semantic numeric format: {versions[key]}")
     assert_contains(project_file, [f'version = "{versions["framework_version"]}"'])
+    assert_contains(fact_store_module, [f'FACT_SCHEMA_VERSION = "{versions["asset_schema_version"]}"', "stable_fact_id", "project_catalog_to_workbook"])
+    assert_contains(fact_schema, [f'"const": "{versions["asset_schema_version"]}"', "FACT-[0-9a-f]{20}"])
+    assert_contains(asset_migration, ["migrate-product-facts", "validate-product-facts", versions["asset_schema_version"]])
+    assert_contains(ci_workflow, ["actions/checkout@v6", "actions/setup-python@v6", "sync-rule-entrypoints.py", "unittest discover", "new-framework-upgrade-package.ps1"])
+    assert_contains(entry_contract, ["canonical_rule", "rule_mirrors", "scripts/run-test-design.ps1"])
+    assert_contains(entry_sync_script, ["--write", "Rule mirror drifted", "entry-contract.json"])
+    assert_contains(upgrade_script, ["Restore-UpgradeSnapshot", "restoring framework and protected assets", "frameworkSnapshot", '".github/"'])
 
     for dirname in ["current", "deliverables"]:
         path = repo_root / "docs" / "test-design" / dirname
@@ -850,7 +883,7 @@ def main() -> int:
 
     for path in [upgrade_manifest, upgrade_doc, repo_root / "README.md", repo_root / "README_IMPORT.md"]:
         assert_contains(path, ["new-framework-upgrade-package.ps1", "upgrade-framework.ps1"])
-    assert_contains(package_script, ["Test-GeneratedPath", "__pycache__", ".pyc"])
+    assert_contains(package_script, ["Test-GeneratedPath", "__pycache__", ".pyc", '".github"', '"docs/test-design/rules"', '"docs/test-design/schemas"'])
 
     batch_design_markers = [
         "全产品",
@@ -1270,28 +1303,39 @@ def main() -> int:
             "complete-deliverables",
             "fix-formal-styles",
             "init-batch-run",
-            "element-case-plan-template.csv",
-            "test-data-lifecycle-template.csv",
             "finalize-deliverables",
             "sync-product-map",
+            "migrate-product-facts",
+            "validate-product-facts",
+            "rebuild-product-map",
             "header_map",
             "IMPORT_AUTO_FIELDS",
-            "wrap_text=True",
             "remove_workbook_tables_and_refresh_filters",
-            "auto_filter.ref",
-            "性能测试设计",
             "update_batch_status_paths",
             "sync_batch_markdown_paths",
             "cleanup_batch_artifacts",
             "--batch-status is required when --page-discovery is provided",
             "apply_template_workbook_format",
-            "extend_validation_ranges",
             "sync_product_map",
             "complete_deliverables",
             "deliverable_names",
             "canonical_module_parts",
         ],
     )
+    assert_contains(
+        batch_module,
+        [
+            "element-case-plan-template.csv",
+            "test-data-lifecycle-template.csv",
+            "minimum_cases_for_plan_row",
+            "FUNCTION_CASE_REQUIRED_FIELDS",
+            "function_cases_part_001.json",
+            "function_cases_manifest.json",
+        ],
+    )
+    assert_contains(excel_module, ["wrap_text=True", "auto_filter.ref", "extend_validation_ranges", "write_mapped_row", "性能测试设计"])
+    assert_contains(paths_module, ["deliverable_names", "canonical_module_parts", "safe_filename"])
+    assert_contains(product_map_sync_module, ["save_module_document", "project_catalog_to_workbook", "facts_by_sheet"])
     complete_deliverable_markers = [
         "complete-deliverables",
         "一站式",
@@ -1361,9 +1405,10 @@ def main() -> int:
         ["FORBIDDEN_QUOTE_CHARS", "py_compile", "MAX_PYTHON_BYTES", "MAX_JSON_BYTES", "json.load", "MAX_FUNCTION_CASES_PER_PART", "function_cases_part_"],
     )
     assert_contains(
-        repo_root / "scripts" / "test_design_excel_tools.py",
-        ["validate-batch-artifacts", "prepare-function-case-generation", "minimum_cases_for_plan_row", "元素类型", "适用DFX维度", "应生成用例数", "artifacts/data", "function_cases_part_001.json", "function_cases_manifest.json", "FUNCTION_CASE_REQUIRED_FIELDS"],
+        batch_module,
+        ["validate_batch_artifacts", "prepare_function_case_generation", "minimum_cases_for_plan_row", "元素类型", "适用DFX维度", "应生成用例数", "artifacts/data", "function_cases_part_001.json", "function_cases_manifest.json", "FUNCTION_CASE_REQUIRED_FIELDS"],
     )
+    assert_contains(excel_tools, ["validate-batch-artifacts", "prepare-function-case-generation"])
     function_json_schema_markers = ["用例编号", "用侊 ID", "用侊标题", "场景类型", "steps", "expected", "操作步骤", "预期结果"]
     assert_contains(repo_root / "scripts" / "validate-generated-python-scripts.py", function_json_schema_markers)
     for path in [

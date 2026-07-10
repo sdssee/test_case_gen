@@ -12,10 +12,11 @@
 | 专题规则 | `docs/test-design/rules/` | 按任务类型保存详细规则，包括用例设计、页面实探、批次运行、导入文件、产品版图和数据安全。 |
 | 模板契约 | `docs/test-design/excel-template-spec.md`、`docs/test-design/*.xlsx` | 定义 Excel Sheet、字段、枚举、下拉框、导入模板和样式约束。 |
 | 客户交付件 | `docs/test-design/current/`、`docs/test-design/deliverables/` | 保存本次任务范围内交付给客户或测试系统的测试设计和导入文件，不包含内部产品全量版图。 |
-| 内部测试资产事实 | `docs/test-assets/product-map.xlsx`、`docs/test-assets/modules/`、`docs/test-assets/imports/`、`docs/test-assets/batch-runs/` | 保存产品测试知识图谱、最终测试设计归档、导入文件副本、批次运行状态、模块能力、业务对象、业务链路、跨模块依赖和可复用测试数据。 |
+| 内部测试资产事实 | `docs/test-assets/catalog/`、`docs/test-assets/product-map.xlsx`、`docs/test-assets/modules/`、`docs/test-assets/imports/`、`docs/test-assets/batch-runs/` | catalog 保存按模块 JSON 权威事实，product-map.xlsx 是可重建查询视图，其余目录保存归档、导入副本和批次状态。 |
 | 升级机制 | `VERSION`、`UPGRADE_MANIFEST.md`、`docs/UPGRADE.md`、`scripts/new-framework-upgrade-package.ps1`、`scripts/upgrade-framework.ps1` | 支持外网生成框架升级包、内网受控应用升级包，并保护内网业务资产。 |
 | 自动化校验 | `scripts/validate-test-design.py`、`scripts/validate-test-design.ps1`、`scripts/validate-test-design-deliverable.py`、`scripts/validate-test-design-deliverable.ps1` | 防止模板结构、导入模板下拉框、升级边界和关键规则发生漂移，并校验已生成交付件的覆盖关系、批次状态与产品版图同步。 |
-| 运行时与事务保护 | `pyproject.toml`、`requirements.txt`、`scripts/run-test-design.ps1`、`scripts/test_design_excel_tools.py`、`tests/` | 固定 Python/openpyxl 契约，统一选择运行时，并验证批次初始化幂等性、资产同步字段和交付失败回滚。 |
+| 领域实现 | `scripts/test_design/`、`scripts/test_design_excel_tools.py` | 兼容 CLI 只负责编排；batch、excel_utils、io_utils、paths、fact_store、product_map_sync 分别承载批次、Excel、事务、路径和事实领域逻辑。 |
+| 运行时与事务保护 | `pyproject.toml`、`requirements.txt`、`scripts/run-test-design.ps1`、`tests/`、`.github/workflows/validate.yml` | 固定运行时契约，执行跨平台 CI，并验证批次幂等性、事实迁移、并发锁、交付回滚和升级回滚。 |
 
 规则归属和精简边界见 `docs/RULE_OWNERSHIP.md`。修改规则时，应先判断规则类型和权威源，再更新摘要引用和校验脚本。
 
@@ -29,8 +30,8 @@
    既有数据必须主动只读深探：可以进入详情、编辑页、删除/停用/提交确认弹窗观察字段、联动、二次确认、权限提示和取消路径，但不得最终确认；可以复制既有数据的非敏感字段，改名或改编码为带测试标识的新数据后新增，再用新数据探索后续页面。
 6. 用例标题和测试系统导入文件中的测试用例名称必须正式、简洁、可检索，避免口语化，并使用 `功能点-当前用例标题` 格式补偿测试系统缺少独立功能点字段的问题。
 7. 测试系统导入文件的 `执行方式` 默认是 `手动`；只有已有可运行、可维护并覆盖用例主要校验点的自动化资产，且本次交付明确按自动化导入或关联资产时，才填写 `自动化`。
-8. 客户交付件与内部维护资产必须分离；`docs/test-assets/product-map.xlsx` 是内部产品版图，不作为默认客户交付件。
-9. AI 记忆只保存规则和索引入口，具体业务事实必须保存在产品版图和归档测试设计中。
+8. 客户交付件与内部维护资产必须分离；`docs/test-assets/catalog/` 和 `product-map.xlsx` 都是内部资产，不作为默认客户交付件。
+9. AI 记忆只保存规则和索引入口，具体业务事实必须保存在按模块 JSON catalog 和归档测试设计中，Excel 只作为可重建视图。
 10. 每次生成前读取 `product-map.xlsx` 和用户指定依赖模块的归档测试设计，正式生成前展示产品理解摘要，包含风险项与待确认问题；正式写测试用例前必须先让用户确认风险项与待确认问题，并根据确认结果动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级；每次生成后回存最终测试设计并更新产品版图。
 11. 当用户要求为某个模块生成测试设计时，正式写用例前必须先做模块级粗遍历，识别菜单入口、页面清单、核心功能点、业务对象、状态流转和跨模块依赖；具体写测试用例时，再在对应页面或功能点内做深遍历，有可访问页面时使用浏览器或 computer use 覆盖所有可点击、可输入、可测试元素以及所有可点击/可交互功能点。下拉框、级联选择、单选框、复选框、树选择、枚举筛选等选择类控件不得只展开查看选项，必须分别选择代表性选项并记录 `选项取值/输入值`、`联动/依赖变化`、字段或列表变化、按钮禁用态、校验提示和清空重置结果。输入框、搜索框、文本域、数字框、日期框、URL/地址、端口、邮箱、手机号、名称、编码等输入类控件不得只观察字段存在，必须实际输入正常、异常、边界或用户提供的测试数据，并记录真实提示、后续页面、结果分支/后续状态和可恢复路径。新增、创建、添加、新建、保存、提交、下一步、完成、测试连接等新增类流程必须实填实走，成功时进入详情页、下一级页面或后续配置页继续观察，失败时记录真实失败提示、停留页面和可恢复路径。
 12. 每一批测试设计都必须严格执行完整 test-design Skill 和 Rule，不得因为分批而降级；每批都必须覆盖功能测试、性能测试、异常流程、边界值、权限/角色、状态流转、数据一致性、兼容性/稳定性、风险与待确认问题、自动化建议和页面元素覆盖清单。
@@ -43,13 +44,13 @@
 17. 测试系统导入文件由统一表头映射链路生成，随批次交付优先使用 `scripts/run-test-design.ps1 complete-deliverables`；只需单独生成导入文件时才使用 `generate-import`。批次临时脚本只能调用统一工具或复用同等映射函数，禁止按固定列序号数组写入模板；生成后必须通过 `-ImportWorkbookPath` 校验字段错位、下拉框、自动字段空值、模板数据验证、多行换行样式和 DFX 标签落地。
 18. 测试用例必须尽可能详细，这是架构约束。每个测试点、每个页面元素都必须按 Skill 从主流程、异常、边界、权限、状态、数据一致性、组合条件、禁用态/空状态/错误态、兼容性/稳定性、性能影响、审计/日志/通知、副作用和可恢复路径等不同测试方向展开；禁止用一个笼统用例替代多个可验证方向。
 19. 模块或批次正式写测试用例前，必须先完成 DFX 覆盖评估，综合评估 DFX 12 维度 × 4 场景覆盖，权威规则为 `docs/test-design/rules/dfx-test-strategy.md`；评估结论必须明确适用、不适用、待确认和需补充证据的维度，并据此展开异常值、边界值和测试策略，不得只写一句笼统策略。每批至少考虑 DFT、DFB、DFS、DFR、DFU、DFP 的适用场景，涉及接口、兼容、维护、部署、运维、极端压测时追加 DFI、DFC、DFM、DFD、DFO、DFX。
-20. 模块级粗遍历、菜单轮廓、页面清单和功能地图不是临时分析结果，必须沉淀到 `product-map.xlsx` 的产品模块地图、页面元素地图、业务对象地图、业务链路地图、模块能力索引、跨模块依赖关系和变更记录，形成对整个项目或模块的长期理解。
-    `product-map.xlsx` 的十个 Sheet 都必须沉淀真实产品资产，禁止保留 `示例产品`、`示例模块`、`示例页面` 等模板样例行；`用例资产索引` 必须覆盖正式测试设计中的全部功能用例 ID，`页面元素地图` 必须覆盖正式测试设计中的全部页面元素。
+20. 模块级粗遍历、菜单轮廓、页面清单和功能地图不是临时分析结果，必须沉淀到 `catalog/modules/*.json`，再投影到 `product-map.xlsx` 的产品模块地图、页面元素地图、业务对象地图、业务链路地图、模块能力索引、跨模块依赖关系、用例资产索引、可复用测试数据、变更影响分析和变更记录；投影不得保留 `示例产品`、`示例模块`、`示例页面` 等模板行。
 21. 外网到内网升级以脚本升级为主、手动确认兜底；普通框架升级不得覆盖 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。标识：PROTECTED_ASSET_DIRS。
-22. `VERSION` 中的 `framework_version` 表示框架版本，`asset_schema_version` 表示内部资产结构版本。`product-map.xlsx` 是主要可能演进的内部资产结构；历史归档 Excel 默认作为历史快照保留，不批量重写。`asset_schema_version` 变化时必须通过迁移脚本增量补齐，不得用空模板覆盖真实资产。
+22. `VERSION` 中的 `framework_version` 表示框架版本，`asset_schema_version` 表示内部事实结构版本。2.0.0 起 `catalog/modules/*.json` 是权威事实源，`product-map.xlsx` 是投影视图；历史归档 Excel 继续作为快照保留。结构升级必须通过迁移脚本先保留旧 Excel 真实行，再生成 catalog。
 23. `init-batch-run` 对已存在批次默认拒绝覆盖，`--resume` 只读恢复账本，`--force-reinitialize` 必须先备份再重建；`complete-deliverables` 必须先获取 `.test-design-locks/delivery.lock` 项目级排他锁，再预校验并对正式工作簿、导入文件、交付副本、批次账本和产品版图提供失败回滚。Excel、CSV 和 Markdown 的单文件写入使用同目录临时文件加原子替换。
 24. 正式测试设计、测试系统导入文件、批次账本、页面实探记录、临时脚本和 `product-map.xlsx` 都不得保留疑似真实密钥、Token、密码或内部敏感凭据；必须使用 `<valid_api_key>`、`<test_token>`、`<test_service_url>` 等占位符。
 25. 每次修改规范或模板后必须运行稳定性自检。
+26. Rule 镜像和轻量入口引用由 `docs/test-design/rules/entry-contract.json` 与 `scripts/sync-rule-entrypoints.py` 校验；修改权威 Rule 后使用 `--write` 更新镜像，禁止分别编辑两份 Rule。
 
 ## 变更同步规则
 

@@ -25,6 +25,7 @@
 | 客户交付与内部资产边界 | `docs/test-design/archive-and-index-guidelines.md`、`docs/test-assets/README.md` | `README.md`、`README_IMPORT.md`、`docs/ARCHITECTURE.md` | Skill 中的长篇资产目录说明 |
 | 外网到内网升级 | `docs/UPGRADE.md`、`UPGRADE_MANIFEST.md`、`scripts/new-framework-upgrade-package.ps1`、`scripts/upgrade-framework.ps1` | `README.md`、`README_IMPORT.md`、`docs/ARCHITECTURE.md` | Skill、Rule 中的长篇升级流程 |
 | 架构分层与维护边界 | `docs/ARCHITECTURE.md`、`docs/RULE_OWNERSHIP.md` | `README.md`、`README_IMPORT.md` | Skill、Rule |
+| 轻量入口与 Rule 镜像契约 | `docs/test-design/rules/entry-contract.json`、`.codebuddy/rules/test-design-rule.md` | `scripts/sync-rule-entrypoints.py`、AGENTS、CODEBUDDY、Skill | 分别手工维护两份 Rule 镜像 |
 
 ## 精简要求
 
@@ -34,6 +35,7 @@
 - `AGENTS.md` 与 `CODEBUDDY.md` 只保留最高优先级规则摘要和读取路由，目标低于 10000 字符。
 - Skill 保留执行步骤、自检命令和读取路由，目标低于 10000 字符；硬规则正文以 Rule 与专题规则为准。
 - Rule 保留不可违反的硬门禁和读取路由，目标低于 10000 字符；两个 Rule 文件必须完全一致。
+- `.codebuddy/rules/test-design-rule.md` 是 Rule 权威文件，`.codebuddy/.rules/test-design-rule.mdc` 由 `scripts/sync-rule-entrypoints.py --write` 生成；发布前使用无参数模式检查入口契约。
 - `docs/test-design/rules/` 保存可按任务类型读取的详细规则，避免 CodeBuddy 加载 Skill 时超过 1 万字。
 - 模板字段、下拉框、导入文件、Excel 格式只在 `excel-template-spec.md` 中完整描述。
 - 资产归档、产品版图、跨模块依赖只在 `archive-and-index-guidelines.md` 中完整描述。

@@ -10,11 +10,14 @@
 
 - `AGENTS.md`
 - `CODEBUDDY.md`
+- `.github/`
 - `.codebuddy/`
 - `docs/ARCHITECTURE.md`
 - `docs/UPGRADE.md`
 - `docs/test-design/*.md`
 - `docs/test-design/*.xlsx`
+- `docs/test-design/rules/`
+- `docs/test-design/schemas/`
 - `docs/test-assets/README.md`
 - `scripts/`
 - `README.md`
@@ -38,8 +41,8 @@
 `VERSION` 中包含两个版本：
 
 ```text
-framework_version=1.2.0
-asset_schema_version=1.0.0
+framework_version=2.0.0
+asset_schema_version=2.0.0
 ```
 
 - `framework_version` 变化：通常表示规则、模板或脚本升级。
@@ -75,6 +78,9 @@ powershell -ExecutionPolicy Bypass -File scripts\upgrade-framework.ps1 -PackageP
 4. 跳过 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。
 5. 对比 `asset_schema_version`。
 6. 执行稳定性校验。
+7. 任一复制、迁移或校验步骤失败时，自动恢复全部被覆盖的框架文件、删除本次新增文件，并恢复受保护资产快照。
+
+从 `asset_schema_version=1.0.0` 升级到 `2.0.0` 时必须传入 `-RunMigrations`。迁移会读取现有 `product-map.xlsx` 的非模板真实行，保存到 `docs/test-assets/catalog/modules/_legacy.json`，再建立 catalog 索引；不会用空 JSON 覆盖既有资产。
 
 生成正式测试设计交付件后，可额外执行交付件质量校验：
 

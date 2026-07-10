@@ -10,7 +10,7 @@
 - 需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，不修改原模板。
 - 测试资产事实必须沉淀到项目文件，不依赖 AI 对话记忆。
 - 客户交付件放在 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。
-- 内部产品级测试资产库放在 `docs/test-assets/`，主入口为 `docs/test-assets/product-map.xlsx`，不作为默认客户交付件。
+- 内部产品级测试资产库放在 `docs/test-assets/`；`catalog/modules/*.json` 是权威事实源，`product-map.xlsx` 是可重建查询视图，均不作为默认客户交付件。
 
 ## 使用现有规范
 
@@ -35,7 +35,7 @@ Codex 应优先读取并遵守：
 
 ## 执行摘要
 
-- 生成或补充测试用例前，读取 `docs/test-assets/product-map.xlsx` 和用户指定依赖模块的归档测试设计。
+- 生成或补充测试用例前，读取 `docs/test-assets/catalog/index.json`、相关模块 JSON、`product-map.xlsx` 视图和用户指定依赖模块的归档测试设计。
 - 正式生成前展示产品理解摘要或模块理解摘要，包括当前模块、依赖模块、业务对象、业务链路、可复用历史用例、预计新增范围、风险项和待确认问题。
 - 正式写测试用例前，必须先把风险项与待确认问题发给用户确认，并根据用户确认、补充、排除或调整动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级。
 - 模块或批次正式写测试用例前，必须先综合评估 DFX 12 维度 × 4 场景覆盖，明确适用、不适用、待确认和需补充证据的维度，再进入用例设计。

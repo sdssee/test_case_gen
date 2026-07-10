@@ -13,7 +13,8 @@ docs/test-design/
   current/       # 当前任务交付件，可被用户下载或移动
   deliverables/  # 已交付给客户或测试系统的文件副本
 docs/test-assets/
-  product-map.xlsx  # 内部产品测试知识图谱主入口
+  catalog/          # 按模块 JSON 保存的权威事实源
+  product-map.xlsx  # 从 catalog 重建的 Excel 查询视图
   modules/          # 归档正式测试设计最终版
   imports/          # 归档基于测试用例模板.xlsx 生成的测试系统导入文件副本
   batch-runs/       # 归档大范围任务的批次运行状态账本
@@ -52,7 +53,7 @@ docs/test-assets/product-map.xlsx
 
 ## 每次生成前
 
-1. 读取 `docs/test-assets/product-map.xlsx`。
+1. 读取 `docs/test-assets/catalog/index.json`、相关模块 JSON 和 `product-map.xlsx` 查询视图；旧资产尚未迁移时先执行 `migrate-product-facts`。
 2. 如果用户指定依赖模块，优先读取该模块在产品版图中登记的归档测试设计。
 3. 如果产品版图缺失但 `docs/test-assets/modules/` 中存在相关归档文件，应读取归档文件并补充产品版图。
 4. 不得仅凭 AI 对话记忆判断已有模块能力。
@@ -133,8 +134,8 @@ docs/test-assets/product-map.xlsx
 1. 将客户交付件保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。
 2. 将正式测试设计最终版保存到 `docs/test-assets/modules/`。
 3. 如需导入测试系统，将导入文件副本保存到 `docs/test-assets/imports/`。
-4. 将本模块提供的能力、业务对象、关键状态、业务链路、可复用前置条件、可复用测试数据、跨模块依赖、影响分析和关联用例 ID 更新到 `product-map.xlsx`。
-   `product-map.xlsx` 的十个 Sheet 都必须沉淀真实产品资产，禁止保留 `示例产品`、`示例模块`、`示例页面` 等模板样例行；其中 `用例资产索引` 必须覆盖正式测试设计中的全部功能用例 ID，`页面元素地图` 必须覆盖正式测试设计中的全部页面元素。
+4. 将本模块提供的能力、业务对象、关键状态、业务链路、可复用前置条件、可复用测试数据、跨模块依赖、影响分析和关联用例 ID upsert 到 `catalog/modules/*.json`，再重建 `product-map.xlsx`。
+   JSON 必须通过 `product-facts.schema.json` 和稳定事实 ID 校验；投影后的十个 Sheet 不得保留 `示例产品`、`示例模块`、`示例页面` 等模板样例行，其中 `用例资产索引` 必须覆盖全部功能用例 ID，`页面元素地图` 必须覆盖全部页面元素。
 5. 如果用户人工修改了测试设计，最终版必须回存内部资产库，并更新产品版图中的变更记录。
 6. 生成正式测试设计 Excel 后，必须运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务追加 `-BatchStatusPath <batch-status.csv>`，并强制读取同级 `page-discovery.csv` 与 `docs/test-assets/product-map.xlsx` 做产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的最小标题路径、页面元素、关联用例、用例资产索引和变更记录是否同步。
 
@@ -150,7 +151,7 @@ docs/test-assets/product-map.xlsx
 ## 外网到内网升级保护
 
 - `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/` 是受保护目录，普通框架升级不得覆盖或删除。标识：PROTECTED_ASSET_DIRS。
-- `product-map.xlsx` 是主要可能演进的内部资产结构；历史归档 Excel 默认作为历史快照保留，不因普通框架升级而批量重写。
+- `catalog/modules/*.json` 是主要可能演进的内部事实结构，`product-map.xlsx` 是投影视图；历史归档 Excel 默认作为历史快照保留。
 - 如果 `asset_schema_version` 或产品版图结构变化，必须通过升级清单、校验脚本和迁移脚本增量补齐旧资产，不得用空模板覆盖内网真实资产。
 - 分批必须按当前产品或模块可识别的最深标题级别执行，例如一级标题、二级标题、三级标题、四级标题等，哪个标题级别最小就以哪个最小标题作为一个批次。每个已通过批次只能覆盖 1 个最小标题路径，`最小标题路径` 使用 `一级>二级>三级>四级` 形式记录唯一叶子节点；禁止合并多个最小标题，禁止再拆分一个最小标题为多个批次。已通过批次的导入文件路径必须真实存在，并能与归档测试设计逐个匹配校验。
 - 当任务范围超过一个最小标题时，必须建立批次队列并按最小标题路径逐批执行。

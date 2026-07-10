@@ -2,7 +2,7 @@
 
 ## 读取规则
 
-- 生成或补充测试用例前，必须读取 `docs/test-assets/product-map.xlsx`。
+- 生成或补充测试用例前，必须读取 `docs/test-assets/catalog/index.json` 和相关模块 JSON；兼容旧项目或需要表格浏览时读取 `docs/test-assets/product-map.xlsx`。
 - 如果用户指定依赖模块，优先读取产品版图中登记的依赖模块归档测试设计。
 - 如果产品版图缺失但 `docs/test-assets/modules/` 存在相关归档文件，应读取归档文件，并登记产品版图待同步问题。
 - 不得仅凭 AI 对话记忆判断已有模块能力、已有用例、可复用测试数据或跨模块依赖。
@@ -23,7 +23,7 @@
 ## 粗遍历和沉淀
 
 - 当用户要求为某个模块生成测试设计时，正式写用例前必须先做模块级粗遍历，识别菜单入口、页面清单、核心功能点、主要业务对象、状态流转和跨模块依赖。
-- 模块级粗遍历、菜单轮廓、页面清单和功能地图不是临时分析结果，必须沉淀到 `product-map.xlsx`。
+- 模块级粗遍历、菜单轮廓、页面清单和功能地图不是临时分析结果，必须沉淀到 `catalog/modules/*.json`，并投影到 `product-map.xlsx`。
 - 菜单和页面写入产品模块地图。
 - 页面入口和交互元素写入页面元素地图。
 - 业务对象和状态流转写入业务对象地图或业务链路地图。
@@ -36,7 +36,8 @@
 - 客户交付件保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。
 - 最终版测试设计回存 `docs/test-assets/modules/`。
 - 测试系统导入文件副本回存 `docs/test-assets/imports/`。
-- `product-map.xlsx` 十个 Sheet 均必须回写当前批次真实资产，不得保留 `示例产品`、`示例模块`、`示例页面` 等模板示例行。
+- `catalog/modules/*.json` 必须通过 `product-facts.schema.json` 和稳定事实 ID 校验；`product-map.xlsx` 十个 Sheet 由 catalog 重建并回写当前批次真实资产，不得保留模板示例行。
+- 同一模块再次同步时必须替换该模块 JSON，不得向中央 Excel 直接追加；人工历史 Excel 行在首次迁移时保存到 `_legacy.json`，后续按稳定 ID 合并投影。
 - `用例资产索引` 至少覆盖正式功能用例全部用例 ID。
 - `页面元素地图` 至少覆盖正式页面元素覆盖清单全部元素。
 - 如果当前任务存在页面实探，`element-case-plan.csv` 中的元素到用例计划必须与页面元素地图和用例资产索引一致；`test-data-lifecycle.csv` 中可复用的测试数据应沉淀到 `可复用测试数据`。

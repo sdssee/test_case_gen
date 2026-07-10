@@ -12,6 +12,11 @@ if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }
 
+& $python (Join-Path $scriptDir "sync-rule-entrypoints.py")
+if ($LASTEXITCODE -ne 0) {
+  exit $LASTEXITCODE
+}
+
 & $python -m unittest discover -s (Join-Path $repoRoot "tests") -v
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE

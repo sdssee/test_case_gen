@@ -3,9 +3,14 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import json
+import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -14,6 +19,7 @@ from openpyxl import load_workbook
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = REPO_ROOT / "scripts" / "test_design_excel_tools.py"
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location("test_design_excel_tools", MODULE_PATH)
 assert SPEC and SPEC.loader
 TOOLS = importlib.util.module_from_spec(SPEC)
@@ -202,11 +208,236 @@ class ArchitectureSafetyTests(unittest.TestCase):
             self.assertEqual("CODEX_TEST_001", reusable_data[-1]["数据用途"])
             self.assertTrue(impacts[-1]["变更ID"].startswith("CHANGE-"))
             self.assertTrue(changes[-1]["日期"])
+            catalog = root / "catalog"
+            self.assertTrue((catalog / "index.json").exists())
+            module_documents = list((catalog / "modules").glob("*.json"))
+            documents = [json.loads(path.read_text(encoding="utf-8")) for path in module_documents]
+            matching_documents = [
+                item for item in documents if item["module_key"] == "产品>模块>页面"
+            ]
+            self.assertEqual(1, len(matching_documents))
+            document = matching_documents[0]
+            self.assertEqual("2.0.0", document["schema_version"])
+            self.assertEqual("产品>模块>页面", document["module_key"])
+            self.assertEqual("依赖系统A", document["facts"]["跨模块依赖关系"][0]["data"]["依赖模块"])
             for sheet in synced.worksheets:
                 for row_index in range(2, sheet.max_row + 1):
                     combined = "".join("" if cell.value is None else str(cell.value) for cell in sheet[row_index])
                     self.assertNotIn("示例", combined, f"{sheet.title} still contains a sample row")
                     self.assertNotIn("FLOW-DEMO-001", combined, f"{sheet.title} still contains a demo row")
+
+            TOOLS.sync_product_map(
+                product_map,
+                formal,
+                discovery,
+                "产品>模块>页面",
+                "docs/test-assets/modules/模块_页面_测试设计.xlsx",
+            )
+            repeated_documents = [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in (catalog / "modules").glob("*.json")
+            ]
+            self.assertEqual(
+                1,
+                len([item for item in repeated_documents if item["module_key"] == "产品>模块>页面"]),
+            )
+            rebuilt = load_workbook(product_map, data_only=True)
+            rebuilt_dependencies = TOOLS.non_empty_rows(
+                rebuilt["跨模块依赖关系"], TOOLS.header_map(rebuilt["跨模块依赖关系"])
+            )
+            self.assertEqual(
+                1,
+                len([item for item in rebuilt_dependencies if item["当前模块"] == "产品>模块>页面"]),
+            )
+
+    def test_product_fact_migration_preserves_existing_real_excel_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            product_map = root / "product-map.xlsx"
+            shutil.copy2(REPO_ROOT / "docs" / "test-assets" / "product-map.xlsx", product_map)
+            workbook = load_workbook(product_map)
+            sheet = workbook["产品模块地图"]
+            headers = TOOLS.header_map(sheet)
+            for cell in sheet[2]:
+                cell.value = None
+            TOOLS.write_mapped_row(
+                sheet,
+                headers,
+                2,
+                {
+                    "产品/系统": "真实产品",
+                    "一级模块": "资产模块",
+                    "页面/入口": "资产页面",
+                    "菜单路径/URL": "资产模块>资产页面",
+                    "模块功能摘要": "迁移前已存在的真实资产",
+                    "归档测试设计路径": "docs/test-assets/modules/资产模块_测试设计.xlsx",
+                    "覆盖状态": "已覆盖",
+                    "最后更新时间": "2026-07-10",
+                },
+            )
+            workbook.save(product_map)
+
+            TOOLS.ensure_catalog(product_map)
+            TOOLS.rebuild_index(product_map)
+            TOOLS.project_catalog_to_workbook(product_map)
+
+            legacy_path = root / "catalog" / "modules" / "_legacy.json"
+            self.assertTrue(legacy_path.exists())
+            legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
+            migrated_rows = legacy["facts"]["产品模块地图"]
+            self.assertEqual("真实产品", migrated_rows[0]["data"]["产品/系统"])
+            projected = load_workbook(product_map, data_only=True)
+            projected_rows = TOOLS.non_empty_rows(
+                projected["产品模块地图"], TOOLS.header_map(projected["产品模块地图"])
+            )
+            self.assertEqual("真实产品", projected_rows[0]["产品/系统"])
+
+    @unittest.skipIf(os.name != "nt", "PowerShell upgrade rollback integration runs on Windows")
+    @unittest.skipIf(os.environ.get("TEST_DESIGN_SKIP_UPGRADE_INTEGRATION") == "1", "Avoid recursive upgrade test")
+    def test_upgrade_failure_restores_framework_and_protected_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            sandbox = root / "repo"
+            ignore = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "dist", "dist-test", ".upgrade-backups", ".test-design-locks")
+            shutil.copytree(REPO_ROOT, sandbox, ignore=ignore)
+            environment = os.environ.copy()
+            environment["TEST_DESIGN_SKIP_UPGRADE_INTEGRATION"] = "1"
+
+            package_result = subprocess.run(
+                [
+                    "powershell",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(sandbox / "scripts" / "new-framework-upgrade-package.ps1"),
+                    "-OutputDir",
+                    "dist-test",
+                ],
+                cwd=sandbox,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, package_result.returncode, package_result.stderr)
+            valid_package = sandbox / "dist-test" / "framework-upgrade-2.0.0.zip"
+            extracted = root / "broken-package"
+            with zipfile.ZipFile(valid_package) as archive:
+                archive.extractall(extracted)
+            (extracted / "README.md").write_text("BROKEN UPGRADE PACKAGE\n", encoding="utf-8")
+            probe_file = extracted / "tests" / "new-file-probe.txt"
+            probe_file.parent.mkdir(parents=True, exist_ok=True)
+            probe_file.write_text("must be removed by rollback", encoding="utf-8")
+            broken_package = root / "broken-upgrade.zip"
+            with zipfile.ZipFile(broken_package, "w", zipfile.ZIP_DEFLATED) as archive:
+                for path in extracted.rglob("*"):
+                    if path.is_file():
+                        archive.write(path, path.relative_to(extracted))
+
+            readme_before = (sandbox / "README.md").read_bytes()
+            product_map_before = (sandbox / "docs" / "test-assets" / "product-map.xlsx").read_bytes()
+            upgrade_result = subprocess.run(
+                [
+                    "powershell",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(sandbox / "scripts" / "upgrade-framework.ps1"),
+                    "-PackagePath",
+                    str(broken_package),
+                ],
+                cwd=sandbox,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(0, upgrade_result.returncode)
+            self.assertIn("restoring framework and protected assets", upgrade_result.stderr + upgrade_result.stdout)
+            self.assertEqual(readme_before, (sandbox / "README.md").read_bytes())
+            self.assertEqual(product_map_before, (sandbox / "docs" / "test-assets" / "product-map.xlsx").read_bytes())
+            self.assertFalse((sandbox / "tests" / "new-file-probe.txt").exists())
+
+    @unittest.skipIf(os.name != "nt", "PowerShell asset migration integration runs on Windows")
+    @unittest.skipIf(os.environ.get("TEST_DESIGN_SKIP_UPGRADE_INTEGRATION") == "1", "Avoid recursive upgrade test")
+    def test_upgrade_migrates_asset_schema_1_to_2_without_losing_excel_facts(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            sandbox = root / "repo"
+            ignore = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "dist", "dist-test", ".upgrade-backups", ".test-design-locks")
+            shutil.copytree(REPO_ROOT, sandbox, ignore=ignore)
+            environment = os.environ.copy()
+            environment["TEST_DESIGN_SKIP_UPGRADE_INTEGRATION"] = "1"
+
+            package_result = subprocess.run(
+                [
+                    "powershell",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(sandbox / "scripts" / "new-framework-upgrade-package.ps1"),
+                    "-OutputDir",
+                    "dist-test",
+                ],
+                cwd=sandbox,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, package_result.returncode, package_result.stderr)
+            package = sandbox / "dist-test" / "framework-upgrade-2.0.0.zip"
+
+            (sandbox / "VERSION").write_text(
+                "framework_version=1.2.0\nasset_schema_version=1.0.0\n",
+                encoding="utf-8",
+            )
+            product_map = sandbox / "docs" / "test-assets" / "product-map.xlsx"
+            workbook = load_workbook(product_map)
+            sheet = workbook["产品模块地图"]
+            for cell in sheet[2]:
+                cell.value = None
+            TOOLS.write_mapped_row(
+                sheet,
+                TOOLS.header_map(sheet),
+                2,
+                {
+                    "产品/系统": "迁移产品",
+                    "一级模块": "迁移模块",
+                    "页面/入口": "迁移页面",
+                    "菜单路径/URL": "迁移模块>迁移页面",
+                    "模块功能摘要": "升级前真实事实",
+                    "归档测试设计路径": "docs/test-assets/modules/迁移模块_测试设计.xlsx",
+                    "覆盖状态": "已覆盖",
+                    "最后更新时间": "2026-07-10",
+                },
+            )
+            workbook.save(product_map)
+
+            upgrade_result = subprocess.run(
+                [
+                    "powershell",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(sandbox / "scripts" / "upgrade-framework.ps1"),
+                    "-PackagePath",
+                    str(package),
+                    "-RunMigrations",
+                ],
+                cwd=sandbox,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, upgrade_result.returncode, upgrade_result.stderr + upgrade_result.stdout)
+            self.assertIn("asset_schema_version=2.0.0", (sandbox / "VERSION").read_text(encoding="utf-8-sig"))
+            legacy_path = sandbox / "docs" / "test-assets" / "catalog" / "modules" / "_legacy.json"
+            self.assertTrue(legacy_path.exists())
+            legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
+            migrated = legacy["facts"]["产品模块地图"]
+            self.assertEqual("迁移产品", migrated[0]["data"]["产品/系统"])
 
 
 if __name__ == "__main__":

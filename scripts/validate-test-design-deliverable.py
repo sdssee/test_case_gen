@@ -10,6 +10,8 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from test_design.fact_store import validate_catalog
+
 NS = {
     "x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
@@ -2123,6 +2125,7 @@ def main() -> int:
     if bool(args.product_map) != bool(args.page_discovery):
         fail("--product-map and --page-discovery must be provided together")
     if args.product_map and args.page_discovery:
+        validate_catalog(args.product_map, require_existing=True)
         validate_product_map_sync(workbook_data, args.product_map, args.page_discovery, batch_rows)
     print("OK: test design deliverable quality checks passed.")
     return 0

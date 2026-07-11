@@ -134,7 +134,31 @@ class ArchitectureSafetyTests(unittest.TestCase):
             self.assertEqual("0", reset["页面数"])
             self.assertEqual(1, len(list(run_dir.parent.glob("probe_backup_*"))))
 
-    def test_plan_gate_requires_confirmed_risk_deep_dive_evidence(self) -> None:
+    def test_resume_migrates_legacy_risk_driven_deep_dive_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = TOOLS.init_batch_run(project_root, "legacy-risk", "产品>模块>页面", "BATCH-001")
+            risk_path = run_dir / "risk-confirmation.csv"
+            old_headers = [
+                "批次ID", "风险ID", "风险/待确认问题", "用户确认结论", "处置策略", "是否需要补充深探",
+                "补充深探目标", "关联页面/入口", "关联元素名称/文案", "补充证据路径", "补充深探状态",
+                "关联用例ID", "备注",
+            ]
+            with risk_path.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=old_headers)
+                writer.writeheader()
+                writer.writerow({"批次ID": "BATCH-001", "风险ID": "RISK-001", "风险/待确认问题": "旧问题"})
+
+            TOOLS.init_batch_run(project_root, "legacy-risk", "产品>模块>页面", "BATCH-001", resume=True)
+
+            with risk_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                row = next(csv.DictReader(stream))
+            self.assertEqual("旧问题", row["模型不理解内容/待确认问题"])
+            self.assertEqual("待确认", row["确认状态"])
+            self.assertTrue(risk_path.with_suffix(".pre-default-deep-dive.csv").exists())
+
+    def test_plan_gate_requires_confirmed_model_uncertainty(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             project_root = Path(value)
             self.create_project_root(project_root)
@@ -174,22 +198,21 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 {
                     "批次ID": "BATCH-001",
                     "风险ID": "RISK-001",
-                    "风险/待确认问题": "危险操作是否有确认弹窗",
-                    "用户确认结论": "需要继续观察确认与取消路径",
-                    "处置策略": "补充深探并生成用例",
-                    "是否需要补充深探": "是",
-                    "补充深探目标": "打开弹窗并验证确认、取消和关闭",
+                    "模型不理解内容/待确认问题": "确认后是否触发异步审批",
+                    "已完成深探依据": "已完成确认、取消和关闭路径，页面未展示审批规则",
+                    "用户确认结论": "确认后触发异步审批",
+                    "处置策略": "按异步审批设计用例",
+                    "是否阻塞用例设计": "否",
                     "关联页面/入口": "风险页面",
                     "关联元素名称/文案": "危险操作按钮",
-                    "补充证据路径": "artifacts/screenshots/risk.png",
-                    "补充深探状态": "已完成",
+                    "确认状态": "待确认",
                 }
             )
             with risk_path.open("w", encoding="utf-8-sig", newline="") as stream:
                 writer = csv.DictWriter(stream, fieldnames=risk_headers)
                 writer.writeheader()
                 writer.writerow(risk)
-            with self.assertRaisesRegex(ValueError, "supplemental evidence does not exist"):
+            with self.assertRaisesRegex(ValueError, "确认状态 must be 已确认"):
                 TOOLS.validate_batch_artifacts(run_dir, "plan")
 
     def test_delivery_rollback_restores_existing_and_removes_new_files(self) -> None:

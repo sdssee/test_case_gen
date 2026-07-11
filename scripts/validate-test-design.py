@@ -430,7 +430,8 @@ def main() -> int:
             "test_upgrade_migrates_asset_schema_1_to_2_without_losing_excel_facts",
             "test_formal_assembler_populates_all_sheets_and_removes_template_examples",
             "test_deliverable_validator_rejects_unmodified_formal_template",
-            "test_plan_gate_requires_confirmed_risk_deep_dive_evidence",
+            "test_plan_gate_requires_confirmed_model_uncertainty",
+            "test_resume_migrates_legacy_risk_driven_deep_dive_ledger",
         ],
     )
 
@@ -1117,8 +1118,8 @@ def main() -> int:
     if len(test_data_lifecycle_rows) < 2 or len(test_data_lifecycle_rows[1]) != len(test_data_lifecycle_rows[0]):
         fail("test-data-lifecycle-template.csv sample row must have the same column count as its header")
     expected_risk_confirmation_header = (
-        "批次ID,风险ID,风险/待确认问题,用户确认结论,处置策略,是否需要补充深探,补充深探目标,"
-        "关联页面/入口,关联元素名称/文案,补充证据路径,补充深探状态,关联用例ID,备注"
+        "批次ID,风险ID,模型不理解内容/待确认问题,已完成深探依据,用户确认结论,处置策略,是否阻塞用例设计,"
+        "关联页面/入口,关联元素名称/文案,证据路径,确认状态,关联用例ID,备注"
     )
     if read_text(risk_confirmation_template).splitlines()[0] != expected_risk_confirmation_header:
         fail("risk-confirmation-template.csv header changed unexpectedly")
@@ -1425,7 +1426,7 @@ def main() -> int:
     )
     assert_contains(
         batch_module,
-        ["validate_batch_artifacts", "prepare_function_case_generation", "minimum_cases_for_plan_row", "元素类型", "适用DFX维度", "应生成用例数", "artifacts/data", "function_cases_part_001.json", "function_cases_manifest.json", "FUNCTION_CASE_REQUIRED_FIELDS", "risk-confirmation.csv", "补充深探状态"],
+        ["validate_batch_artifacts", "prepare_function_case_generation", "minimum_cases_for_plan_row", "元素类型", "适用DFX维度", "应生成用例数", "artifacts/data", "function_cases_part_001.json", "function_cases_manifest.json", "FUNCTION_CASE_REQUIRED_FIELDS", "risk-confirmation.csv", "确认状态"],
     )
     assert_contains(excel_tools, ["validate-batch-artifacts", "prepare-function-case-generation", "assemble-formal-workbook", "--run-dir"])
     function_json_schema_markers = ["用例编号", "用侊 ID", "用侊标题", "场景类型", "steps", "expected", "操作步骤", "预期结果"]

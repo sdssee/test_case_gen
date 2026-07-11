@@ -527,51 +527,26 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
         for index, row in enumerate(confirmed_risk_rows, start=2):
             risk_id = row.get("风险ID", "").strip()
             conclusion = row.get("用户确认结论", "").strip()
-            needs_deep_dive = row.get("是否需要补充深探", "").strip()
+            blocks_design = row.get("是否阻塞用例设计", "").strip()
             if risk_id == "RISK-PENDING" or conclusion in {"", "待用户确认", "待确认"}:
                 raise ValueError(
                     f"risk-confirmation.csv row {index} is still pending user confirmation; "
                     "do not start element planning or case generation"
                 )
-            if not (is_yes(needs_deep_dive) or is_no(needs_deep_dive)):
-                raise ValueError(f"risk-confirmation.csv row {index} 是否需要补充深探 must be 是/否")
+            if not (is_yes(blocks_design) or is_no(blocks_design)):
+                raise ValueError(f"risk-confirmation.csv row {index} 是否阻塞用例设计 must be 是/否")
             if risk_id == "RISK-NONE":
-                if is_yes(needs_deep_dive):
-                    raise ValueError("RISK-NONE cannot require supplemental deep exploration")
+                if is_yes(blocks_design):
+                    raise ValueError("RISK-NONE cannot block case design")
                 continue
-            if not row.get("风险/待确认问题", "").strip() or not row.get("处置策略", "").strip():
-                raise ValueError(f"risk-confirmation.csv row {index} must record the risk and its confirmed handling strategy")
-            if is_yes(needs_deep_dive):
-                required = ["补充深探目标", "关联页面/入口", "关联元素名称/文案", "补充证据路径"]
-                missing = [field for field in required if not row.get(field, "").strip()]
-                if missing:
-                    raise ValueError(f"risk-confirmation.csv row {index} requires supplemental exploration but is missing {missing}")
-                if row.get("补充深探状态", "").strip() != "已完成":
-                    raise ValueError(
-                        f"risk-confirmation.csv row {index} requires supplemental exploration; "
-                        "补充深探状态 must be 已完成 before continuing"
-                    )
-                if not evidence_path_exists(run_dir, row.get("补充证据路径", "")):
-                    raise ValueError(
-                        f"risk-confirmation.csv row {index} supplemental evidence does not exist: "
-                        f"{row.get('补充证据路径', '')}"
-                    )
-                page = normalized_text(row.get("关联页面/入口", ""))
-                element = normalized_text(row.get("关联元素名称/文案", ""))
-                matching = [
-                    item for item in real_discovery_rows
-                    if page == normalized_text(item.get("页面/入口", ""))
-                    and element == normalized_text(item.get("元素名称/文案", ""))
-                ]
-                if not matching:
-                    raise ValueError(
-                        f"risk-confirmation.csv row {index} supplemental exploration is not written back to page-discovery.csv: "
-                        f"{row.get('关联页面/入口', '')} / {row.get('关联元素名称/文案', '')}"
-                    )
-                if not any(item.get("证据路径", "").strip() for item in matching):
-                    raise ValueError(
-                        f"page-discovery.csv must record evidence for supplemental exploration risk {risk_id}"
-                    )
+            required = ["模型不理解内容/待确认问题", "已完成深探依据", "处置策略"]
+            missing = [field for field in required if not row.get(field, "").strip()]
+            if missing:
+                raise ValueError(f"risk-confirmation.csv row {index} is missing {missing}")
+            if row.get("确认状态", "").strip() != "已确认":
+                raise ValueError(f"risk-confirmation.csv row {index} 确认状态 must be 已确认 before continuing")
+            if is_yes(blocks_design):
+                raise ValueError(f"risk-confirmation.csv row {index} is confirmed but still blocks case design")
             risk_case_ids.update(split_plan_values(row.get("关联用例ID", "")))
 
     if phase in {"plan", "cases"}:
@@ -632,6 +607,17 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
                 combined = "\n".join(row.values())
                 if not contains_any(combined, ["AI_TEST", "CODEX_TEST", "用户提供测试数据"]):
                     raise ValueError(f"test-data-lifecycle.csv row {index} must bind to AI_TEST/CODEX_TEST or user-provided test data")
+                required_results = ["创建结果", "查看结果", "编辑前值", "编辑后值", "编辑结果"]
+                missing_results = [field for field in required_results if not row.get(field, "").strip()]
+                if missing_results:
+                    raise ValueError(
+                        f"test-data-lifecycle.csv row {index} must prove create/edit success and persisted values; missing {missing_results}"
+                    )
+                if row.get("编辑前值", "").strip() == row.get("编辑后值", "").strip():
+                    raise ValueError(f"test-data-lifecycle.csv row {index} 编辑前值 and 编辑后值 must differ")
+                if contains_any(combined, ["配置", "开关", "状态", "权限", "变量", "模型", "路由", "认证"]):
+                    if not row.get("配置生效验证点", "").strip():
+                        raise ValueError(f"test-data-lifecycle.csv row {index} must record actual configuration effect verification")
 
     artifacts_dir = run_dir / "artifacts"
     scripts_dir = artifacts_dir / "scripts"
@@ -754,12 +740,12 @@ def init_batch_run(
                     {
                         "批次ID": batch_id,
                         "风险ID": "RISK-PENDING",
-                        "风险/待确认问题": "旧批次升级后需补录用户风险确认结论",
+                        "模型不理解内容/待确认问题": "旧批次升级后需补录模型不理解项的用户确认结论",
+                        "已完成深探依据": "先完成默认全量深探，再记录仍无法判定的业务语义",
                         "用户确认结论": "待用户确认",
                         "处置策略": "待确认",
-                        "是否需要补充深探": "是",
-                        "补充深探目标": "根据用户确认结论补充页面、状态和交互探索",
-                        "补充深探状态": "待开始",
+                        "是否阻塞用例设计": "是",
+                        "确认状态": "待确认",
                         "备注": "由 --resume 自动补齐的新版本风险确认账本",
                     },
                 )
@@ -767,6 +753,41 @@ def init_batch_run(
                 print(f"Added missing risk-confirmation.csv to legacy batch run: {run_dir}")
             if missing_run_files:
                 raise ValueError(f"Existing batch run is incomplete and cannot be resumed: {missing_run_files}")
+            risk_path = run_dir / "risk-confirmation.csv"
+            expected_risk_headers = template_headers(templates_dir, "risk-confirmation-template.csv")
+            with risk_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                current_headers = reader.fieldnames or []
+                current_rows = list(reader)
+            if current_headers != expected_risk_headers and "是否需要补充深探" in current_headers:
+                backup_path = risk_path.with_suffix(".pre-default-deep-dive.csv")
+                shutil.copy2(risk_path, backup_path)
+                migrated_rows: list[dict[str, str]] = []
+                for row in current_rows:
+                    migrated = {header: "" for header in expected_risk_headers}
+                    migrated.update(
+                        {
+                            "批次ID": row.get("批次ID", batch_id),
+                            "风险ID": row.get("风险ID", "RISK-PENDING"),
+                            "模型不理解内容/待确认问题": row.get("风险/待确认问题", ""),
+                            "已完成深探依据": row.get("补充深探目标", "") or "旧账本迁移：需核对是否已完成默认全量深探",
+                            "用户确认结论": row.get("用户确认结论", "待用户确认"),
+                            "处置策略": row.get("处置策略", "待确认"),
+                            "是否阻塞用例设计": "是",
+                            "关联页面/入口": row.get("关联页面/入口", ""),
+                            "关联元素名称/文案": row.get("关联元素名称/文案", ""),
+                            "证据路径": row.get("补充证据路径", ""),
+                            "确认状态": "待确认",
+                            "关联用例ID": row.get("关联用例ID", ""),
+                            "备注": "由 --resume 从旧风险驱动深探账本迁移；请按默认全量深探规则复核",
+                        }
+                    )
+                    migrated_rows.append(migrated)
+                with risk_path.open("w", encoding="utf-8-sig", newline="") as stream:
+                    writer = csv.DictWriter(stream, fieldnames=expected_risk_headers)
+                    writer.writeheader()
+                    writer.writerows(migrated_rows)
+                print(f"Migrated legacy risk-confirmation.csv and preserved backup: {backup_path}")
             print(f"Resumed existing batch run without changing ledgers: {run_dir}")
             return run_dir
         if not force_reinitialize:
@@ -849,12 +870,12 @@ def init_batch_run(
         {
             "批次ID": batch_id,
             "风险ID": "RISK-PENDING",
-            "风险/待确认问题": "正式写测试用例前列出风险并提交用户确认",
+            "模型不理解内容/待确认问题": "默认全量深探后，列出模型仍无法理解的内容并提交用户确认",
+            "已完成深探依据": "填写已执行的页面操作、观察结果和仍无法判定的原因",
             "用户确认结论": "待用户确认",
             "处置策略": "待确认",
-            "是否需要补充深探": "是",
-            "补充深探目标": "根据用户确认结论填写需要继续探索的页面、状态和交互路径",
-            "补充深探状态": "待开始",
+            "是否阻塞用例设计": "是",
+            "确认状态": "待确认",
             "备注": "没有风险时改为 RISK-NONE，并记录用户明确确认无新增风险",
         },
     )

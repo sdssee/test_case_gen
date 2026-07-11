@@ -27,7 +27,7 @@
 13. 新增类流程必须实填实走；成功进入详情页、下一级页面或后续配置页继续观察，失败记录真实失败提示、停留页面和可恢复路径。
 14. 弹窗、下拉、输入、编辑、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环。
 15. 生成或补充前必须读取 `docs/test-assets/product-map.xlsx`；不得依赖 AI 对话记忆判断已有模块能力、已有用例或跨模块依赖。
-16. 正式生成前必须展示产品理解摘要或模块理解摘要，包含风险项与待确认问题；正式写测试用例前必须先让用户确认，并根据确认结果动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级。
+16. 正式生成前必须展示产品理解摘要或模块理解摘要，包含风险项与待确认问题；正式写测试用例前必须先让用户确认并逐条写入 `risk-confirmation.csv`。需要补充深探的风险必须先完成页面/状态/交互探索、保存证据并回写 `page-discovery.csv`，通过 plan 门禁后才能生成用例。
 17. 范围超过一个最小标题时，必须按最深标题级别建立批次队列，逐个最小标题路径执行；禁止合并多个最小标题，禁止再拆分一个最小标题。
 18. 每一批都必须完整覆盖功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险、自动化建议和页面元素覆盖清单，不得因为分批而降级。
 19. 模块或批次正式写测试用例前，必须先综合评估 DFX 12 维度 × 4 场景覆盖，明确适用、不适用、待确认和需补充证据的维度；异常值、边界值和测试策略必须按 `docs/test-design/rules/dfx-test-strategy.md` 落地，不得只写一句笼统策略。DFX 是扩展检查矩阵，不是用例生成主轴；必须先按页面元素/交互路径建立覆盖骨架，再按 DFX 扩展用例，禁止按“每个 DFX 场景一条”压缩功能覆盖。正式 Excel 必须填写 `DFX维度` 和 `DFX场景`，`场景类型`、`正向/反向` 不再作为测试策略字段。
@@ -37,7 +37,7 @@
 23. 生成新一轮功能用例分片前，必须先运行 `powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <batch-run-dir>` 清理旧分片和旧 manifest。
 24. 功能测试用例必须按每 10 条一个 `artifacts/data/function_cases_part_001.json` 这类三位编号分片生成，并同步 `artifacts/data/function_cases_manifest.json`；Excel 写入只能读取 manifest 中列出的分片，禁止直接 glob 所有历史分片。
 25. 功能用例 JSON 只能使用标准字段，禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected`、英文模板或泛化占位文本；`前置条件` 至少 2 条，`操作步骤` 至少 4 条且从系统入口和菜单路径开始，`预期结果` 至少 3 条，编号必须连续。
-20. 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/run-test-design.ps1 init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/` 五件套；同名批次继续执行时使用 `--resume`，强制重建使用 `--force-reinitialize` 并保留自动备份。
+20. 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/run-test-design.ps1 init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv`、`risk-confirmation.csv` 和 `artifacts/`；同名批次继续执行时使用 `--resume`，强制重建使用 `--force-reinitialize` 并保留自动备份。
 21. `batch-status.csv` 和 `page-discovery.csv` 必须使用标准模板表头，禁止自定义精简表头；`page-discovery.csv` 必须结构化写入，防止字段错位。
 22. 禁止创建承载全量测试用例正文的单一 Python/JSON/CSV/Markdown/临时脚本；脚本只能处理当前批次并放在 `artifacts/scripts/`。
 23. 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。

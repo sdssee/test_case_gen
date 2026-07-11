@@ -62,6 +62,7 @@ CSV_REQUIRED_FILES = {
     "page-discovery.csv": "page-discovery-template.csv",
     "element-case-plan.csv": "element-case-plan-template.csv",
     "test-data-lifecycle.csv": "test-data-lifecycle-template.csv",
+    "risk-confirmation.csv": "risk-confirmation-template.csv",
 }
 
 FUNCTION_CASE_PART_RE = re.compile(r"^function_cases_part_\d{3}\.json$")
@@ -192,6 +193,19 @@ def parse_positive_int(value: str, label: str) -> int:
 
 def is_yes(value: str) -> bool:
     return (value or "").strip() in {"是", "Y", "Yes", "yes", "true", "True", "1"}
+
+
+def is_no(value: str) -> bool:
+    return (value or "").strip() in {"否", "N", "No", "no", "false", "False", "0", "不适用"}
+
+
+def evidence_path_exists(run_dir: Path, value: str) -> bool:
+    raw = (value or "").strip()
+    if not raw or raw in {"待填写", "待补充", "无"}:
+        return False
+    path = Path(raw)
+    candidates = [path] if path.is_absolute() else [run_dir / path, run_dir.parents[3] / path]
+    return any(candidate.exists() for candidate in candidates)
 
 
 def contains_any(text: str, markers: list[str]) -> bool:
@@ -482,6 +496,11 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
     discovery_rows = read_csv_exact(run_dir / "page-discovery.csv", expected_headers["page-discovery.csv"], "page-discovery.csv")
     plan_rows = read_csv_exact(run_dir / "element-case-plan.csv", expected_headers["element-case-plan.csv"], "element-case-plan.csv")
     lifecycle_rows = read_csv_exact(run_dir / "test-data-lifecycle.csv", expected_headers["test-data-lifecycle.csv"], "test-data-lifecycle.csv")
+    risk_confirmation_rows = read_csv_exact(
+        run_dir / "risk-confirmation.csv",
+        expected_headers["risk-confirmation.csv"],
+        "risk-confirmation.csv",
+    )
 
     real_discovery_rows = [
         row for row in discovery_rows
@@ -493,6 +512,67 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
     interactive_rows = [row for row in real_discovery_rows if is_interactive_discovery_row(row)]
     if phase in {"discovery", "plan", "cases"} and not interactive_rows:
         raise ValueError("page-discovery.csv must contain clickable/input/selectable/testable elements, not only static text")
+
+    confirmed_risk_rows: list[dict[str, str]] = []
+    risk_case_ids: set[str] = set()
+    if phase in {"plan", "cases"}:
+        confirmed_risk_rows = [
+            row for row in risk_confirmation_rows
+            if (row.get("风险ID", "") or "").strip()
+        ]
+        if not confirmed_risk_rows:
+            raise ValueError(
+                "risk-confirmation.csv must record the user's risk confirmation before element planning or case generation"
+            )
+        for index, row in enumerate(confirmed_risk_rows, start=2):
+            risk_id = row.get("风险ID", "").strip()
+            conclusion = row.get("用户确认结论", "").strip()
+            needs_deep_dive = row.get("是否需要补充深探", "").strip()
+            if risk_id == "RISK-PENDING" or conclusion in {"", "待用户确认", "待确认"}:
+                raise ValueError(
+                    f"risk-confirmation.csv row {index} is still pending user confirmation; "
+                    "do not start element planning or case generation"
+                )
+            if not (is_yes(needs_deep_dive) or is_no(needs_deep_dive)):
+                raise ValueError(f"risk-confirmation.csv row {index} 是否需要补充深探 must be 是/否")
+            if risk_id == "RISK-NONE":
+                if is_yes(needs_deep_dive):
+                    raise ValueError("RISK-NONE cannot require supplemental deep exploration")
+                continue
+            if not row.get("风险/待确认问题", "").strip() or not row.get("处置策略", "").strip():
+                raise ValueError(f"risk-confirmation.csv row {index} must record the risk and its confirmed handling strategy")
+            if is_yes(needs_deep_dive):
+                required = ["补充深探目标", "关联页面/入口", "关联元素名称/文案", "补充证据路径"]
+                missing = [field for field in required if not row.get(field, "").strip()]
+                if missing:
+                    raise ValueError(f"risk-confirmation.csv row {index} requires supplemental exploration but is missing {missing}")
+                if row.get("补充深探状态", "").strip() != "已完成":
+                    raise ValueError(
+                        f"risk-confirmation.csv row {index} requires supplemental exploration; "
+                        "补充深探状态 must be 已完成 before continuing"
+                    )
+                if not evidence_path_exists(run_dir, row.get("补充证据路径", "")):
+                    raise ValueError(
+                        f"risk-confirmation.csv row {index} supplemental evidence does not exist: "
+                        f"{row.get('补充证据路径', '')}"
+                    )
+                page = normalized_text(row.get("关联页面/入口", ""))
+                element = normalized_text(row.get("关联元素名称/文案", ""))
+                matching = [
+                    item for item in real_discovery_rows
+                    if page == normalized_text(item.get("页面/入口", ""))
+                    and element == normalized_text(item.get("元素名称/文案", ""))
+                ]
+                if not matching:
+                    raise ValueError(
+                        f"risk-confirmation.csv row {index} supplemental exploration is not written back to page-discovery.csv: "
+                        f"{row.get('关联页面/入口', '')} / {row.get('关联元素名称/文案', '')}"
+                    )
+                if not any(item.get("证据路径", "").strip() for item in matching):
+                    raise ValueError(
+                        f"page-discovery.csv must record evidence for supplemental exploration risk {risk_id}"
+                    )
+            risk_case_ids.update(split_plan_values(row.get("关联用例ID", "")))
 
     if phase in {"plan", "cases"}:
         real_plan_rows = [
@@ -580,6 +660,28 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
                 f"{MAX_FUNCTION_CASES_PER_PART} cases: {invalid_nonfinal}"
             )
         case_count = sum(part_counts)
+        actual_case_ids: set[str] = set()
+        for path in parts:
+            with path.open("r", encoding="utf-8-sig") as fp:
+                payload = json.load(fp)
+            case_rows = payload.get("cases") if isinstance(payload, dict) else payload
+            actual_case_ids.update(str(item.get("用例 ID", "")).strip() for item in case_rows if isinstance(item, dict))
+        unknown_risk_case_ids = sorted(risk_case_ids - actual_case_ids)
+        if unknown_risk_case_ids:
+            raise ValueError(
+                f"risk-confirmation.csv references case IDs not present in current function shards: {unknown_risk_case_ids[:10]}"
+            )
+        for index, row in enumerate(confirmed_risk_rows, start=2):
+            if row.get("风险ID", "").strip() == "RISK-NONE":
+                continue
+            linked = split_plan_values(row.get("关联用例ID", ""))
+            strategy = row.get("处置策略", "")
+            non_case_landing = contains_any(strategy, ["仅记录风险", "不生成用例", "性能测试设计", "自动化建议"])
+            if not linked and not non_case_landing:
+                raise ValueError(
+                    f"risk-confirmation.csv row {index} must link generated case IDs or explicitly land in "
+                    "性能测试设计/自动化建议/仅记录风险"
+                )
         with (data_dir / FUNCTION_CASE_MANIFEST).open("r", encoding="utf-8-sig") as fp:
             manifest_data = json.load(fp)
         if isinstance(manifest_data, dict):
@@ -636,6 +738,7 @@ def init_batch_run(
         "page-discovery.csv": templates_dir / "page-discovery-template.csv",
         "element-case-plan.csv": templates_dir / "element-case-plan-template.csv",
         "test-data-lifecycle.csv": templates_dir / "test-data-lifecycle-template.csv",
+        "risk-confirmation.csv": templates_dir / "risk-confirmation-template.csv",
     }
     missing = [str(path) for path in required_templates.values() if not path.exists()]
     if missing:
@@ -644,6 +747,24 @@ def init_batch_run(
     if run_dir.exists():
         if resume:
             missing_run_files = [name for name in required_templates if not (run_dir / name).exists()]
+            if missing_run_files == ["risk-confirmation.csv"]:
+                copy_template_if_missing(required_templates["risk-confirmation.csv"], run_dir / "risk-confirmation.csv")
+                write_single_csv_row(
+                    run_dir / "risk-confirmation.csv",
+                    {
+                        "批次ID": batch_id,
+                        "风险ID": "RISK-PENDING",
+                        "风险/待确认问题": "旧批次升级后需补录用户风险确认结论",
+                        "用户确认结论": "待用户确认",
+                        "处置策略": "待确认",
+                        "是否需要补充深探": "是",
+                        "补充深探目标": "根据用户确认结论补充页面、状态和交互探索",
+                        "补充深探状态": "待开始",
+                        "备注": "由 --resume 自动补齐的新版本风险确认账本",
+                    },
+                )
+                missing_run_files = []
+                print(f"Added missing risk-confirmation.csv to legacy batch run: {run_dir}")
             if missing_run_files:
                 raise ValueError(f"Existing batch run is incomplete and cannot be resumed: {missing_run_files}")
             print(f"Resumed existing batch run without changing ledgers: {run_dir}")
@@ -721,6 +842,20 @@ def init_batch_run(
             "是否已生成用例": "否",
             "覆盖状态": "待确认",
             "备注": "按当前批次页面实探结果补充页面、元素、取值、联动和关联用例",
+        },
+    )
+    write_single_csv_row(
+        run_dir / "risk-confirmation.csv",
+        {
+            "批次ID": batch_id,
+            "风险ID": "RISK-PENDING",
+            "风险/待确认问题": "正式写测试用例前列出风险并提交用户确认",
+            "用户确认结论": "待用户确认",
+            "处置策略": "待确认",
+            "是否需要补充深探": "是",
+            "补充深探目标": "根据用户确认结论填写需要继续探索的页面、状态和交互路径",
+            "补充深探状态": "待开始",
+            "备注": "没有风险时改为 RISK-NONE，并记录用户明确确认无新增风险",
         },
     )
 

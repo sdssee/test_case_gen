@@ -38,6 +38,7 @@ Codex 应优先读取并遵守：
 - 生成或补充测试用例前，读取 `docs/test-assets/catalog/index.json`、相关模块 JSON、`product-map.xlsx` 视图和用户指定依赖模块的归档测试设计。
 - 正式生成前展示产品理解摘要或模块理解摘要，包括当前模块、依赖模块、业务对象、业务链路、可复用历史用例、预计新增范围、风险项和待确认问题。
 - 正式写测试用例前，必须先把风险项与待确认问题发给用户确认，并根据用户确认、补充、排除或调整动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级。
+- 用户确认风险项后必须逐条写入 `risk-confirmation.csv`；确认结论要求补充验证、继续观察或深探时，必须先完成目标页面/状态/交互的补充深探，将证据和发现回写 `page-discovery.csv`，通过 plan 门禁后才能生成测试用例，禁止确认后直接进入用例编写。
 - 模块或批次正式写测试用例前，必须先综合评估 DFX 12 维度 × 4 场景覆盖，明确适用、不适用、待确认和需补充证据的维度，再进入用例设计。
 - 模块任务先做粗遍历，识别菜单入口、页面清单、核心功能点、业务对象、状态流转和跨模块依赖，并沉淀到 `product-map.xlsx`。
 - 有页面时必须深遍历所有可点击、可输入、可选择、可测试元素。
@@ -62,7 +63,7 @@ Codex 应优先读取并遵守：
 - `用例标题` 和导入文件 `测试用例名称` 使用 `功能点-当前用例标题` 格式。
 - 页面已有数据只能查看和只读深探，不得保存、提交、最终确认或改变状态；敏感操作只允许作用于本次创建且带测试标识的数据。
 - 弹窗、下拉、输入、编辑、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环。
-- 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/run-test-design.ps1 init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/` 五件套；同名批次继续执行时使用 `--resume`，禁止重复初始化覆盖账本，强制重建必须使用 `--force-reinitialize` 并保留自动备份。
+- 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/run-test-design.ps1 init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv`、`risk-confirmation.csv` 和 `artifacts/`；同名批次继续执行时使用 `--resume`，禁止重复初始化覆盖账本，强制重建必须使用 `--force-reinitialize` 并保留自动备份。
 - `batch-status.csv` 和 `page-discovery.csv` 使用标准模板表头，禁止自定义精简表头和字段错位。
 - 批次截图、临时脚本和证据必须放在当前任务 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享根目录 artifacts。
 - 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。

@@ -18,6 +18,7 @@
 - `page-discovery.csv`
 - `element-case-plan.csv`
 - `test-data-lifecycle.csv`
+- `risk-confirmation.csv`
 - `artifacts/`
 
 必须优先复制 `docs/test-assets/batch-runs/templates/` 中的模板。
@@ -41,7 +42,7 @@
 阶段性门禁必须按顺序执行：
 
 1. 页面发现后运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery`，校验 `page-discovery.csv` 表头、列数、真实可交互元素和 `batch-status.csv` 状态。
-2. 元素计划和测试数据生命周期补齐后运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase plan`，校验 `element-case-plan.csv` 是否覆盖页面元素、`应生成用例数` 是否满足元素类型 × DFX 最低预算、CRUD/配置项是否补齐 `test-data-lifecycle.csv`。
+2. 用户确认风险后，先逐条更新 `risk-confirmation.csv`。凡 `是否需要补充深探=是` 的风险，必须完成补充深探目标、保存真实证据、回写对应 `page-discovery.csv` 记录并将 `补充深探状态` 更新为 `已完成`；随后运行 plan 门禁，校验风险深探闭环、元素计划、DFX 最低预算和 CRUD 生命周期。没有新增风险时也必须使用 `RISK-NONE` 明确记录用户确认结论。
 3. 功能用例分片生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <batch-run-dir>`，清理旧分片和旧 manifest，确保本轮只保留当前批次有效 JSON。
 4. 功能用例分片、Sheet JSON 和正式 Excel 生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase cases`，先校验 `function_cases_manifest.json`、三位编号分片、标准字段、步骤/预期完整性和每片最多 10 条，再校验 Sheet 分文件、计划用例数量和实际分片数量一致。
 5. 任一阶段门禁失败时，必须回到当前阶段补充页面深探、元素计划、测试数据生命周期或用例分片，禁止通过降低 `应生成用例数`、删除元素、改字段名或跳过 DFX 场景绕过门禁。
@@ -54,7 +55,7 @@
 
 ## 文件格式门禁
 
-- `batch-status.csv`、`page-discovery.csv`、`element-case-plan.csv` 和 `test-data-lifecycle.csv` 必须复制标准模板或按完全相同表头生成，禁止自定义精简表头。
+- `batch-status.csv`、`page-discovery.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 和 `risk-confirmation.csv` 必须复制标准模板或按完全相同表头生成，禁止自定义精简表头。
 - `page-discovery.csv`、`element-case-plan.csv` 和 `test-data-lifecycle.csv` 必须使用 CSV writer 或等价结构化方式写入，保证每行列数与表头一致，防止字段错位。
 - `batch-plan.md` 不得仍标记已完成批次为执行中或待开始；页面清单数量必须与 `batch-status.csv` 页面数一致。
 - `batch-review.md` 必须引用已完成批次的批次 ID、归档路径和导入文件路径。

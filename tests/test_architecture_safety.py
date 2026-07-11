@@ -112,12 +112,14 @@ class ArchitectureSafetyTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "already exists"):
                 TOOLS.init_batch_run(project_root, "probe", "产品>模块>页面", "BATCH-001")
+            (run_dir / "risk-confirmation.csv").unlink()
             TOOLS.init_batch_run(project_root, "probe", "产品>模块>页面", "BATCH-001", resume=True)
 
             with status_path.open("r", encoding="utf-8-sig", newline="") as fp:
                 resumed = next(csv.DictReader(fp))
             self.assertEqual("执行中", resumed["状态"])
             self.assertEqual("3", resumed["页面数"])
+            self.assertTrue((run_dir / "risk-confirmation.csv").exists())
 
             TOOLS.init_batch_run(
                 project_root,
@@ -131,6 +133,64 @@ class ArchitectureSafetyTests(unittest.TestCase):
             self.assertEqual("待开始", reset["状态"])
             self.assertEqual("0", reset["页面数"])
             self.assertEqual(1, len(list(run_dir.parent.glob("probe_backup_*"))))
+
+    def test_plan_gate_requires_confirmed_risk_deep_dive_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = TOOLS.init_batch_run(project_root, "risk-probe", "产品>模块>页面", "BATCH-001")
+
+            discovery_path = run_dir / "page-discovery.csv"
+            with discovery_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                headers = reader.fieldnames or []
+            discovery = {header: "" for header in headers}
+            discovery.update(
+                {
+                    "批次ID": "BATCH-001",
+                    "最小标题路径": "模块>页面",
+                    "页面/入口": "风险页面",
+                    "元素名称/文案": "危险操作按钮",
+                    "元素类型": "按钮",
+                    "交互方式": "点击",
+                    "完整点击路径": "系统>模块>页面>危险操作按钮",
+                    "预期/观察行为": "打开确认弹窗",
+                }
+            )
+            with discovery_path.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=headers)
+                writer.writeheader()
+                writer.writerow(discovery)
+
+            with self.assertRaisesRegex(ValueError, "pending user confirmation"):
+                TOOLS.validate_batch_artifacts(run_dir, "plan")
+
+            risk_path = run_dir / "risk-confirmation.csv"
+            with risk_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                risk_headers = reader.fieldnames or []
+            risk = {header: "" for header in risk_headers}
+            risk.update(
+                {
+                    "批次ID": "BATCH-001",
+                    "风险ID": "RISK-001",
+                    "风险/待确认问题": "危险操作是否有确认弹窗",
+                    "用户确认结论": "需要继续观察确认与取消路径",
+                    "处置策略": "补充深探并生成用例",
+                    "是否需要补充深探": "是",
+                    "补充深探目标": "打开弹窗并验证确认、取消和关闭",
+                    "关联页面/入口": "风险页面",
+                    "关联元素名称/文案": "危险操作按钮",
+                    "补充证据路径": "artifacts/screenshots/risk.png",
+                    "补充深探状态": "已完成",
+                }
+            )
+            with risk_path.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=risk_headers)
+                writer.writeheader()
+                writer.writerow(risk)
+            with self.assertRaisesRegex(ValueError, "supplemental evidence does not exist"):
+                TOOLS.validate_batch_artifacts(run_dir, "plan")
 
     def test_delivery_rollback_restores_existing_and_removes_new_files(self) -> None:
         with tempfile.TemporaryDirectory() as value:

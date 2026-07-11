@@ -54,10 +54,11 @@
 - 弹窗、下拉、输入、编辑、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环。
 - 范围超过一个最小标题时，必须按最深标题级别分批执行，逐个最小标题路径完成完整测试设计，不得合并多个最小标题，不得再拆分一个最小标题。
 - 正式写测试用例前，必须先展示风险项与待确认问题并让用户确认；用户确认、补充、排除或调整后，动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级。
+- 风险确认结果必须逐条写入 `risk-confirmation.csv`；凡用户要求补充验证、继续观察或深探的风险，必须先完成补充页面深探、保存证据并回写 `page-discovery.csv`，通过 plan 门禁后才能编写用例。
 - 模块或批次正式写测试用例前，必须先综合评估 DFX 12 维度 × 4 场景覆盖，明确适用、不适用、待确认和需补充证据的维度，再进入用例设计。
 - 每批都必须覆盖功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险、自动化建议和页面元素覆盖清单。
 - 异常值、边界值和测试策略必须按 DFX 覆盖评估结果落地，不得只写一句笼统策略；正式 Excel 必须填写 `DFX维度` 和 `DFX场景`，`场景类型`、`正向/反向` 不再作为测试策略字段；无法验证的 DFX 场景写入风险、性能设计或自动化建议。
-- 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/run-test-design.ps1 init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/` 五件套；同名批次继续执行时使用 `--resume`，强制重建必须使用 `--force-reinitialize` 并保留自动备份。
+- 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/run-test-design.ps1 init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv`、`risk-confirmation.csv` 和 `artifacts/`；同名批次继续执行时使用 `--resume`，强制重建必须使用 `--force-reinitialize` 并保留自动备份。
 - `batch-status.csv` 和 `page-discovery.csv` 必须使用标准模板表头，禁止自定义精简表头和字段错位。
 - 批次截图、临时脚本和证据必须放在当前任务 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享根目录 artifacts。
 - 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。

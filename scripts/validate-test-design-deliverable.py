@@ -1551,6 +1551,7 @@ def validate_batch_run_directory_from_page_discovery(page_discovery: Path) -> Pa
         "page-discovery.csv",
         "element-case-plan.csv",
         "test-data-lifecycle.csv",
+        "risk-confirmation.csv",
         "artifacts",
     ]
     missing = [name for name in required_entries if not (run_dir / name).exists()]

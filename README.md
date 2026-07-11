@@ -62,7 +62,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
 
 如需排查组装问题，可先运行 `assemble-formal-workbook --run-dir <批次目录> --output <临时检查.xlsx>`；禁止在批次目录编写 `gen_excel.py` 之类脚本绕过标准组装器。
 
-已存在同名批次时，初始化命令默认拒绝覆盖。继续原批次时追加 `--resume`；确需重建时追加 `--force-reinitialize`，工具会先生成带时间戳的完整备份。`complete-deliverables` 只有在组装、正式文件、导入文件、资产同步和最终校验全部通过后才保留 `deliverables/` 输出；任一步失败都会恢复正式工作簿、导入文件、交付副本、批次账本和产品版图。
+已存在同名批次时，初始化命令默认拒绝覆盖。继续原批次时追加 `--resume`；旧批次缺少 `risk-confirmation.csv` 时会自动补齐待确认账本，要求完成风险处置与补充深探后再继续。确需重建时追加 `--force-reinitialize`，工具会先生成带时间戳的完整备份。`complete-deliverables` 只有在组装、正式文件、导入文件、资产同步和最终校验全部通过后才保留 `deliverables/` 输出；任一步失败都会恢复正式工作簿、导入文件、交付副本、批次账本和产品版图。
 
 旧资产升级或排障时可使用 `migrate-product-facts`、`validate-product-facts`、`rebuild-product-map`；正常 `sync-product-map` 会自动 upsert 模块 JSON 并重建 Excel 视图。
 

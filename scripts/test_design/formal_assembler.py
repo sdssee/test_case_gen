@@ -8,6 +8,7 @@ from typing import Any
 from openpyxl import load_workbook
 
 from .batch import manifest_parts
+from .contracts.sheet_data import SHEET_DATA_HEADERS
 from .excel_utils import (
     clear_data_rows,
     header_map,
@@ -99,6 +100,8 @@ def assemble_formal_workbook(run_dir: Path, template: Path, output: Path) -> dic
             source_path = data_dir / filename
             if not source_path.exists():
                 raise ValueError(f"Batch Sheet data file not found: {source_path}")
+            if list(headers) != SHEET_DATA_HEADERS.get(filename):
+                raise ValueError(f"Formal template headers drifted from the shared contract for {sheet_name}/{filename}")
             rows = _load_rows(source_path)
         _validate_rows(source_path, rows, headers)
         clear_data_rows(worksheet)

@@ -1,3 +1,8 @@
+param(
+  [ValidateSet("Fast", "Full")]
+  [string]$Mode = "Full"
+)
+
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
@@ -7,17 +12,7 @@ if (-not (Test-Path $python)) {
   $python = "python"
 }
 
-& $python (Join-Path $scriptDir "validate-test-design.py")
-if ($LASTEXITCODE -ne 0) {
-  exit $LASTEXITCODE
-}
-
-& $python (Join-Path $scriptDir "sync-rule-entrypoints.py")
-if ($LASTEXITCODE -ne 0) {
-  exit $LASTEXITCODE
-}
-
-& $python -m unittest discover -s (Join-Path $repoRoot "tests") -v
+& $python (Join-Path $scriptDir "run-validation.py") --mode $Mode.ToLowerInvariant()
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }

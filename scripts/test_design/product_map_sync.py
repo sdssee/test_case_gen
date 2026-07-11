@@ -21,6 +21,24 @@ from .io_utils import rollback_files_on_error
 from .paths import safe_filename
 
 
+def product_map_mutable_paths(
+    product_map: Path,
+    module_path: str,
+    product_name: str | None = None,
+) -> list[Path]:
+    product, modules = split_module_parts(module_path, product_name)
+    module_label = ">".join(modules) or module_path
+    module_key = module_label if module_label == product or module_label.startswith(f"{product}>") else f"{product}>{module_label}"
+    catalog = catalog_dir(product_map)
+    return [
+        product_map,
+        catalog / "migration.json",
+        catalog / "index.json",
+        catalog / "modules" / "_legacy.json",
+        catalog / "modules" / module_document_name(module_key),
+    ]
+
+
 def sync_product_map(
     product_map: Path,
     formal_workbook: Path,
@@ -308,15 +326,7 @@ def sync_product_map(
         },
     )
     module_key = module_label if module_label == product or module_label.startswith(f"{product}>") else f"{product}>{module_label}"
-    catalog = catalog_dir(product_map)
-    document_path = catalog / "modules" / module_document_name(module_key)
-    catalog_paths = [
-        product_map,
-        catalog / "migration.json",
-        catalog / "index.json",
-        catalog / "modules" / "_legacy.json",
-        document_path,
-    ]
+    catalog_paths = product_map_mutable_paths(product_map, module_path, product_name)
     with rollback_files_on_error(catalog_paths):
         save_module_document(
             product_map,

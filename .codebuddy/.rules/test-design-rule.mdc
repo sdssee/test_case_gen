@@ -1,52 +1,20 @@
-# CodeBuddy Rule：测试设计硬性门禁
+# 测试设计硬性门禁
 
-本文件是轻量硬规则入口。详细规则按任务类型读取 `docs/test-design/rules/`，不得把专题规则正文复制回本入口。
+`.codebuddy/rules/test-design-rule.md` 是唯一 Rule 权威源；当前文件位于 `.mdc` 路径时只是自动生成镜像。详细做法按 `docs/test-design/rules/README.md` 路由读取。
 
-## 必须读取
+- [TD-GATE-DELIVERY] 正式测试设计只含 8 个标准 Sheet；测试系统导入文件必须由独立模板副本生成。
+- [TD-GATE-FULL-DISCOVERY] 页面默认全量深探，风险确认不是是否深探的开关。
+- [TD-GATE-CRUD-EFFECT] 创建必须成功；编辑/修改项必须逐项执行并验证持久化回显和实际生效。
+- [TD-GATE-DATA-SAFETY] 既有数据只读；变更只作用于本次创建且带 `AI_TEST`、`CODEX_TEST` 或用户明确提供的数据。
+- [TD-GATE-RISK-UNCERTAINTY] 仅把模型仍不理解的内容交给用户确认；风险只阻塞 risk/cases，不阻塞 plan。
+- [TD-GATE-DFX] 先建立元素与交互骨架，再按 `docs/test-design/rules/dfx-test-strategy.md` 完成 DFX 12×4 评估和扩展；性能规格测试和 DFP性能不进入功能用例。
+- [TD-GATE-LEAF-BATCH] 超过一个最小标题时逐最深标题分批，不合并、不再拆分；每个最小标题使用独立 run-dir，禁止在同一账本和 manifest 混装多个批次。
+- [TD-GATE-PHASES] 批次严格按 discovery → plan → risk → cases → delivery 累积门禁执行。
+- [TD-GATE-SHARDS] 新一轮先清旧产物；功能用例每 10 条写入 `artifacts/data/function_cases_part_001.json` 等分片，`function_cases_manifest.json` 是唯一读取源。
+- [TD-GATE-ASSEMBLY] 正式 Excel 只能由标准组装器生成，并由 `complete-deliverables` 一站式收口。
+- [TD-GATE-ASSET-FACTS] `catalog/modules/*.json` 是产品事实源，`product-map.xlsx` 是查询投影。
+- [TD-GATE-SENSITIVE-DATA] 交付件、账本、证据和产品资产不得保留真实 URL/IP、账号、密钥、Token 或密码。
+- [TD-GATE-PROTECTED-ASSETS] 框架升级必须保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。标识：PROTECTED_ASSET_DIRS。
+- [TD-GATE-CASE-QUALITY] 前置条件、操作步骤、预期结果编号换行；步骤从系统入口写完整导航；标题为“功能点-当前用例标题”；临时交互必须闭环。
 
-- 所有任务：`docs/test-design/rules/case-design.md`、`excel-deliverable.md`、`data-safety.md`、`docs/test-design/rules/dfx-test-strategy.md`、`docs/test-design/excel-template-spec.md`。
-- 页面/截图/原型/浏览器/computer use：追加 `docs/test-design/rules/page-discovery.md`。
-- 全产品/大模块/多菜单/超过一个最小标题：追加 `docs/test-design/rules/batch-run.md`。
-- 测试系统导入：追加 `docs/test-design/rules/import-template.md`。
-- 跨模块依赖/历史归档/补充任务/资产同步：追加 `docs/test-design/rules/product-map-sync.md`、`docs/test-design/archive-and-index-guidelines.md`。
-
-## 最高优先级规则
-
-1. 正式测试设计交付物必须是 Excel，且只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
-2. 任何测试设计都必须包含性能测试内容；页面元素覆盖清单只是追踪矩阵，不是测试用例 Sheet。
-3. 敏捷用户故事每条至少 10 条功能测试用例，不得同质化凑数。
-4. `前置条件`、`操作步骤`、`预期结果` 必须编号换行；`操作步骤` 必须从系统或项目入口开始写完整导航路径。
-5. `用例标题` 和导入文件 `测试用例名称` 必须使用 `功能点-当前用例标题` 格式，正式、简洁、可检索。
-6. 页面、截图、原型或可访问地址必须覆盖所有可点击/可交互功能；每个元素必须关联用例 ID、不适用、不测范围或待确认问题。
-7. 页面业务逻辑必须结合需求、设计文档、接口文档和验收标准；页面实探用于补齐入口、控件、路径和真实状态。
-8. 页面已有数据只能查看、搜索、筛选、排序、分页、详情、编辑页观察和危险操作确认弹窗观察，不得保存、提交、最终确认或改变状态。
-9. 只能对本次创建且带 `AI_TEST`、`CODEX_TEST`、日期或任务编号的数据执行新增、编辑、删除、启停、审批、发布、外部调用等敏感操作。
-10. 用户提供测试数据必须优先用于实探和用例设计；最终输出中的敏感数据必须脱敏或替换为占位符。
-11. 选择类控件不得只展开查看，必须选择代表性选项并记录 `选项取值/输入值` 与 `联动/依赖变化`。
-12. 输入类控件不得只观察字段存在，必须实际输入正常、异常、边界或用户提供数据，并记录真实提示、结果分支/后续状态和可恢复路径。
-13. 新增类流程必须实填实走；成功进入详情页、下一级页面或后续配置页继续观察，失败记录真实失败提示、停留页面和可恢复路径。
-14. 弹窗、下拉、输入、编辑、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环。
-15. 生成或补充前必须读取 `docs/test-assets/product-map.xlsx`；不得依赖 AI 对话记忆判断已有模块能力、已有用例或跨模块依赖。
-16. 正式生成前必须先完成默认全量深探，再展示产品理解摘要或模块理解摘要；仅把模型仍无法理解的业务语义、规则歧义或页面无法观察项交给用户确认并逐条写入 `risk-confirmation.csv`。风险确认不是深探开关。
-17. 范围超过一个最小标题时，必须按最深标题级别建立批次队列，逐个最小标题路径执行；禁止合并多个最小标题，禁止再拆分一个最小标题。
-18. 每一批都必须完整覆盖功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险、自动化建议和页面元素覆盖清单，不得因为分批而降级。
-19. 模块或批次正式写测试用例前，必须先综合评估 DFX 12 维度 × 4 场景覆盖，明确适用、不适用、待确认和需补充证据的维度；异常值、边界值和测试策略必须按 `docs/test-design/rules/dfx-test-strategy.md` 落地，不得只写一句笼统策略。DFX 是扩展检查矩阵，不是用例生成主轴；必须先按页面元素/交互路径建立覆盖骨架，再按 DFX 扩展用例，禁止按“每个 DFX 场景一条”压缩功能覆盖。正式 Excel 必须填写 `DFX维度` 和 `DFX场景`，`场景类型`、`正向/反向` 不再作为测试策略字段。
-20. `功能测试用例` 禁止写入 `测试类型=性能规格测试` 或 `DFX维度=DFP性能`；性能、并发、大数据量、资源监控和极端压力场景必须进入 `性能测试设计`、风险或自动化建议。下拉必须实际选择代表项并记录联动，分页必须拆出每页条数、翻页/跳转和边界/禁用态；新增、编辑、删除必须绑定本次创建或用户提供的测试数据，既有数据只能只读深探或取消/关闭。
-21. 页面深探后必须生成或更新 `element-case-plan.csv`，功能测试用例必须从该计划派生；`应生成用例数` 必须按元素类型 × DFX 最低覆盖预算计算，禁止所有行统一写 1；真实新增、编辑、删除必须同步 `test-data-lifecycle.csv`，配置项保存类用例必须验证保存后回显和实际生效。
-22. 页面发现、元素计划和用例分片阶段必须分别运行 `powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery|plan|cases`；门禁失败时补页面深探、元素计划、测试数据生命周期或分片，禁止继续生成 Excel。
-23. 生成新一轮功能用例分片前，必须先运行 `powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <batch-run-dir>` 清理旧分片和旧 manifest。
-24. 功能测试用例必须按每 10 条一个 `artifacts/data/function_cases_part_001.json` 这类三位编号分片生成，并同步 `artifacts/data/function_cases_manifest.json`；Excel 写入只能读取 manifest 中列出的分片，禁止直接 glob 所有历史分片。
-25. 功能用例 JSON 只能使用标准字段，禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected`、英文模板或泛化占位文本；`前置条件` 至少 2 条，`操作步骤` 至少 4 条且从系统入口和菜单路径开始，`预期结果` 至少 3 条，编号必须连续。
-20. 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/run-test-design.ps1 init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv`、`risk-confirmation.csv` 和 `artifacts/`；同名批次继续执行时使用 `--resume`，强制重建使用 `--force-reinitialize` 并保留自动备份。
-21. `batch-status.csv` 和 `page-discovery.csv` 必须使用标准模板表头，禁止自定义精简表头；`page-discovery.csv` 必须结构化写入，防止字段错位。
-22. 禁止创建承载全量测试用例正文的单一 Python/JSON/CSV/Markdown/临时脚本；脚本只能处理当前批次并放在 `artifacts/scripts/`。
-23. 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
-24. 批次截图、临时脚本和证据必须放在当前任务 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享根目录 artifacts。
-25. 批次交付收口使用 `scripts/test_design_excel_tools.py complete-deliverables` 一站式完成中间文件预检、格式修复、导入生成、交付复制、产品版图同步和交付件校验；禁止手工拆分成多轮复制、修复和校验脚本。交付文件名只使用菜单/模块路径，不拼运行文件夹名、批次目录名或产品名。
-26. 当前批次 Python 临时脚本必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件写入中文文本，执行前运行生成脚本预检，检查单文件大小、JSON 语法、Python 语法和中文弯引号风险。
-27. 测试系统导入文件必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，随批次交付优先使用 `scripts/test_design_excel_tools.py complete-deliverables`，只需单独生成导入文件时才使用 `generate-import`，保留下拉框、必填样式、标红字段和自动生成字段空值。
-28. 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。
-29. 导入文件 `执行方式` 默认 `手动`；只有已有可运行、可维护且覆盖主要校验点的自动化资产，并且本次明确按自动化导入或关联资产时，才允许填写 `自动化`。
-30. 正式交付件、导入文件、批次账本、页面实探记录、临时脚本和产品版图不得写入真实环境 URL/IP、真实账号、真实密钥、Token、密码或内部敏感凭据；使用 `<product_login_url>` 等占位符。
-31. 生成正式测试设计后必须运行 `scripts/validate-test-design-deliverable.ps1`；有批次、页面实探、产品版图或导入文件时必须追加对应参数。
-32. 外网到内网普通框架升级必须保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。标识：PROTECTED_ASSET_DIRS。
+阶段命令统一通过 `scripts/run-test-design.ps1` 执行；最终交付必须通过 `scripts/validate-test-design-deliverable.ps1`。

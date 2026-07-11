@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -128,7 +130,13 @@ def copy_workbook(source: Path, target: Path) -> None:
     atomic_copy(source, target)
 
 
-def update_batch_status_paths(batch_status: Path, batch_id: str | None, archive_rel: str, import_rel: str) -> list[dict[str, str]]:
+def update_batch_status_paths(
+    batch_status: Path,
+    batch_id: str | None,
+    archive_rel: str,
+    import_rel: str,
+    product_map_updated: bool = False,
+) -> list[dict[str, str]]:
     if not batch_status:
         return []
     with batch_status.open("r", encoding="utf-8-sig", newline="") as fp:
@@ -158,6 +166,21 @@ def update_batch_status_paths(batch_status: Path, batch_id: str | None, archive_
         row["归档路径"] = archive_rel
         row["导入文件路径"] = import_rel
         row["导入文件已生成"] = "是"
+        terminal_values = {
+            "状态": "已完成",
+            "页面遍历完成": "是",
+            "功能用例完成": "是",
+            "性能设计完成": "是",
+            "异常边界权限覆盖完成": "是",
+            "页面元素覆盖完成": "是",
+            "覆盖质量自检": "通过",
+            "下一步动作": "批次完成",
+        }
+        if product_map_updated:
+            terminal_values["产品版图已更新"] = "是"
+        for field, value in terminal_values.items():
+            if field in row:
+                row[field] = value
     temporary = temporary_sibling(batch_status)
     try:
         with temporary.open("w", encoding="utf-8-sig", newline="") as fp:
@@ -200,13 +223,88 @@ def cleanup_batch_artifacts(batch_status: Path | None) -> None:
 
 
 from test_design.batch import (
+    DELIVERY_RECEIPT,
+    generation_session_data,
+    generation_session_core_is_current,
+    generation_session_is_current,
+    split_module_parts,
     prepare_function_case_generation,
+    record_no_model_uncertainty,
     validate_batch_artifacts,
     init_batch_run,
 )
+from test_design.pipeline import derive_pipeline_status
 
 
-from test_design.product_map_sync import sync_product_map
+from test_design.product_map_sync import product_map_mutable_paths, sync_product_map
+
+
+def validate_delivery_scope(
+    batch_status: Path,
+    batch_id: str | None,
+    module_path: str,
+    product_name: str | None,
+) -> None:
+    with batch_status.open("r", encoding="utf-8-sig", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    if len(rows) != 1:
+        raise ValueError("Delivery requires exactly one batch-status.csv row in the independent run directory")
+    row = rows[0]
+    ledger_batch_id = row.get("批次ID", "").strip()
+    if batch_id and batch_id != ledger_batch_id:
+        raise ValueError(f"--batch-id {batch_id!r} does not match batch-status.csv {ledger_batch_id!r}")
+    _, modules = split_module_parts(module_path, product_name)
+    requested_leaf = ">".join(modules) or module_path.strip()
+    ledger_leaf = row.get("最小标题路径", "").strip()
+    if requested_leaf != ledger_leaf:
+        raise ValueError(
+            f"--module-path resolves to leaf {requested_leaf!r}, but batch-status.csv is scoped to {ledger_leaf!r}; "
+            "do not deliver one leaf batch under another module path"
+        )
+
+
+def write_delivery_receipt(
+    project_root: Path,
+    batch_status: Path,
+    published: list[Path],
+    product_map: Path | None,
+    page_discovery: Path | None,
+    module_path: str,
+    product_name: str | None,
+) -> Path:
+    run_dir = batch_status.resolve().parent
+    if not generation_session_core_is_current(run_dir):
+        raise ValueError("Cannot write delivery receipt for a missing or stale generation session")
+    session = generation_session_data(run_dir) or {}
+    tracked = list(published)
+    if product_map and page_discovery:
+        tracked.extend(path for path in product_map_mutable_paths(product_map, module_path, product_name) if path.is_file())
+    files = []
+    for path in dict.fromkeys(item.resolve() for item in tracked):
+        if not path.is_file() or path.stat().st_size == 0:
+            raise ValueError(f"Cannot write delivery receipt for missing or empty file: {path}")
+        files.append(
+            {
+                "path": relative_project_path(project_root, path),
+                "size": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    receipt = {
+        "version": 1,
+        "generation_session_id": session.get("generation_session_id"),
+        "source_fingerprint": session.get("source_fingerprint"),
+        "catalog_source_fingerprint": session.get("catalog_source_fingerprint"),
+        "product_map_path": (
+            relative_project_path(project_root, product_map)
+            if product_map and page_discovery and product_map.is_file()
+            else ""
+        ),
+        "files": files,
+    }
+    target = run_dir / "artifacts" / "data" / DELIVERY_RECEIPT
+    atomic_write_text(target, json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return target
 
 
 def finalize_deliverables(
@@ -223,11 +321,6 @@ def finalize_deliverables(
     project_root = project_root.resolve()
     _, formal_name, import_name = deliverable_names(module_path, product_name)
 
-    apply_formal_workbook_styles(formal_workbook)
-    import_wb = load_workbook(import_workbook)
-    remove_workbook_tables_and_refresh_filters(import_wb)
-    atomic_save_workbook(import_wb, import_workbook)
-
     module_archive = project_root / "docs" / "test-assets" / "modules" / formal_name
     import_archive = project_root / "docs" / "test-assets" / "imports" / import_name
     current_copy = project_root / "docs" / "test-design" / "current" / formal_name
@@ -239,15 +332,6 @@ def finalize_deliverables(
     for target in [import_archive, deliverable_import]:
         copy_workbook(import_workbook, target)
 
-    if batch_status:
-        changes = update_batch_status_paths(
-            batch_status,
-            batch_id,
-            relative_project_path(project_root, module_archive),
-            relative_project_path(project_root, import_archive),
-        )
-        sync_batch_markdown_paths(batch_status, changes)
-        cleanup_batch_artifacts(batch_status)
     if product_map and page_discovery:
         sync_product_map(
             product_map,
@@ -257,6 +341,16 @@ def finalize_deliverables(
             relative_project_path(project_root, module_archive),
             product_name,
         )
+    if batch_status:
+        changes = update_batch_status_paths(
+            batch_status,
+            batch_id,
+            relative_project_path(project_root, module_archive),
+            relative_project_path(project_root, import_archive),
+            product_map_updated=bool(product_map and page_discovery),
+        )
+        sync_batch_markdown_paths(batch_status, changes)
+        cleanup_batch_artifacts(batch_status)
 
 
 def run_python_script(script: Path, args: list[str]) -> None:
@@ -279,6 +373,8 @@ def complete_deliverables(
     scripts_path: Path | None = None,
 ) -> None:
     project_root = project_root.resolve()
+    if batch_status:
+        validate_delivery_scope(batch_status.resolve(), batch_id, module_path, product_name)
     script_dir = Path(__file__).resolve().parent
     _, _, import_name = deliverable_names(module_path, product_name)
     target_import = import_workbook or (project_root / "docs" / "test-assets" / "imports" / import_name)
@@ -298,10 +394,13 @@ def complete_deliverables(
                 batch_status,
                 batch_status.resolve().parent / "batch-plan.md",
                 batch_status.resolve().parent / "batch-review.md",
+                batch_status.resolve().parent / "artifacts" / "data" / DELIVERY_RECEIPT,
             ]
         )
     if product_map:
         mutable_paths.append(product_map)
+        if page_discovery:
+            mutable_paths.extend(product_map_mutable_paths(product_map, module_path, product_name))
 
     if scripts_path and scripts_path.exists():
         run_python_script(script_dir / "validate-generated-python-scripts.py", ["--path", str(scripts_path)])
@@ -313,11 +412,6 @@ def complete_deliverables(
         apply_formal_workbook_styles(formal_workbook)
         generate_import_workbook(formal_workbook, import_template, target_import, module_path, product_name)
 
-        # Validate workbook content before publishing copies or updating shared ledgers.
-        run_python_script(
-            script_dir / "validate-test-design-deliverable.py",
-            ["--workbook", str(formal_workbook), "--import-workbook", str(target_import)],
-        )
         finalize_deliverables(
             project_root,
             formal_workbook,
@@ -348,9 +442,28 @@ def complete_deliverables(
         missing_published = [str(path) for path in published if not path.exists() or path.stat().st_size == 0]
         if missing_published:
             raise ValueError(f"Delivery reported success but published files are missing or empty: {missing_published}")
+        formal_hash = hashlib.sha256(formal_workbook.read_bytes()).hexdigest()
+        import_hash = hashlib.sha256(target_import.read_bytes()).hexdigest()
+        for path in published:
+            expected_hash = import_hash if path.name == import_name else formal_hash
+            if hashlib.sha256(path.read_bytes()).hexdigest() != expected_hash:
+                raise ValueError(f"Published file hash differs from its validated source: {path}")
+        receipt: Path | None = None
+        if batch_status:
+            receipt = write_delivery_receipt(
+                project_root,
+                batch_status,
+                published,
+                product_map,
+                page_discovery,
+                module_path,
+                product_name,
+            )
         print("OK: delivery outputs published and validated:")
         for path in published:
             print(f"- {relative_project_path(project_root, path)}")
+        if receipt:
+            print(f"- {relative_project_path(project_root, receipt)}")
 
 
 def generate_import_workbook(
@@ -503,27 +616,24 @@ def main() -> int:
 
     batch_gate = sub.add_parser("validate-batch-artifacts", help="Validate batch-run CSV ledgers, element DFX minimums, CRUD lifecycle, and case shards before continuing.")
     batch_gate.add_argument("--run-dir", required=True, type=Path)
-    batch_gate.add_argument("--phase", choices=["discovery", "plan", "cases"], default="cases")
+    batch_gate.add_argument("--phase", choices=["discovery", "plan", "risk", "cases"], default="cases")
+    batch_gate.add_argument("--no-cache", action="store_true", help="Ignore a successful hash cache and run the phase again.")
 
     prepare_cases = sub.add_parser("prepare-function-case-generation", help="Remove stale function case shards and manifest before generating new JSON shards.")
     prepare_cases.add_argument("--run-dir", required=True, type=Path)
+
+    no_risk = sub.add_parser("record-risk-none", help="Record that full exploration found no model uncertainty; does not impersonate user confirmation.")
+    no_risk.add_argument("--run-dir", required=True, type=Path)
+
+    pipeline_status = sub.add_parser("pipeline-status", help="Derive the next batch action from validated artifacts instead of trusting manual status text.")
+    pipeline_status.add_argument("--run-dir", required=True, type=Path)
+    pipeline_status.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
     assemble = sub.add_parser("assemble-formal-workbook", help="Assemble all 8 formal-design Sheets from one batch run and the standard template.")
     assemble.add_argument("--run-dir", required=True, type=Path)
     assemble.add_argument("--template", type=Path)
     assemble.add_argument("--output", required=True, type=Path)
     assemble.add_argument("--project-root", type=Path, default=Path("."))
-
-    finalize = sub.add_parser("finalize-deliverables", help="Copy validated workbooks to current/deliverables/internal archives and update batch-status paths.")
-    finalize.add_argument("--project-root", required=True, type=Path)
-    finalize.add_argument("--formal-workbook", required=True, type=Path)
-    finalize.add_argument("--import-workbook", required=True, type=Path)
-    finalize.add_argument("--module-path", required=True)
-    finalize.add_argument("--batch-status", type=Path)
-    finalize.add_argument("--batch-id")
-    finalize.add_argument("--product-map", type=Path)
-    finalize.add_argument("--page-discovery", type=Path)
-    finalize.add_argument("--product-name")
 
     complete = sub.add_parser("complete-deliverables", help="One-shot precheck, style, import generation, finalize, and delivery validation.")
     complete.add_argument("--project-root", type=Path, default=Path("."))
@@ -576,31 +686,27 @@ def main() -> int:
             args.force_reinitialize,
         )
     elif args.command == "validate-batch-artifacts":
-        validate_batch_artifacts(args.run_dir, args.phase)
+        validate_batch_artifacts(args.run_dir, args.phase, use_cache=not args.no_cache)
     elif args.command == "prepare-function-case-generation":
         prepare_function_case_generation(args.run_dir)
+    elif args.command == "record-risk-none":
+        record_no_model_uncertainty(args.run_dir)
+    elif args.command == "pipeline-status":
+        status = derive_pipeline_status(args.run_dir)
+        if args.json:
+            print(json.dumps(status, ensure_ascii=False, indent=2))
+        else:
+            print(f"state={status['state']}")
+            print(f"next_action={status['next_action']}")
+            if status.get("command"):
+                print(f"command={status['command']}")
+            for reason in status.get("reasons", []):
+                print(f"reason={reason}")
     elif args.command == "assemble-formal-workbook":
         project_root = args.project_root.resolve()
         template = args.template or (project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx")
         counts = assemble_formal_workbook(args.run_dir, template, args.output)
         print(f"OK: assembled formal workbook: {args.output} ({sum(counts.values())} total data rows)")
-    elif args.command == "finalize-deliverables":
-        if args.page_discovery and not args.batch_status:
-            raise SystemExit(
-                "ERROR: --batch-status is required when --page-discovery is provided. "
-                "Run init-batch-run first and keep batch-plan.md, batch-status.csv, batch-review.md, and page-discovery.csv together."
-            )
-        finalize_deliverables(
-            args.project_root,
-            args.formal_workbook,
-            args.import_workbook,
-            args.module_path,
-            args.batch_status,
-            args.batch_id,
-            args.product_map,
-            args.page_discovery,
-            args.product_name,
-        )
     elif args.command == "complete-deliverables":
         project_root = args.project_root.resolve()
         run_dir = args.run_dir.resolve() if args.run_dir else None
@@ -622,12 +728,6 @@ def main() -> int:
                 page_discovery, args.product_name, scripts_path,
             )
         elif run_dir:
-            if scripts_path and scripts_path.exists():
-                run_python_script(
-                    Path(__file__).resolve().parent / "validate-generated-python-scripts.py",
-                    ["--path", str(scripts_path)],
-                )
-            validate_batch_artifacts(run_dir, "cases")
             with tempfile.TemporaryDirectory(prefix="test-design-formal-") as value:
                 assembled = Path(value) / "formal.xlsx"
                 counts = assemble_formal_workbook(run_dir, formal_template, assembled)

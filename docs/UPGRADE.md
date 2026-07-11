@@ -41,7 +41,7 @@
 `VERSION` 中包含两个版本：
 
 ```text
-framework_version=2.0.0
+framework_version=2.1.0
 asset_schema_version=2.0.0
 ```
 
@@ -60,7 +60,9 @@ powershell -ExecutionPolicy Bypass -File scripts\new-framework-upgrade-package.p
 
 `docs/test-assets/batch-runs/README.md` 和 `docs/test-assets/batch-runs/templates/` 是框架模板资产，允许随普通框架升级进入升级包；真实批次运行目录和历史业务资产仍受保护，不得覆盖。
 
-如果框架升级新增批次账本模板，例如 `element-case-plan.csv` 或 `test-data-lifecycle.csv`，升级脚本只更新 `docs/test-assets/batch-runs/templates/`，不会自动改写历史批次目录。旧批次作为历史快照保留；如需用新门禁复核旧批次，应先在对应批次目录补齐新账本并从原 `page-discovery.csv`、正式测试设计和测试数据记录中回填事实。
+框架升级只更新批次模板，不批量改写历史运行目录；对需要继续执行的旧批次，使用 `init-batch-run --resume` 做单批兼容迁移。迁移前自动保留 `.pre-structured-ledger.csv` 或旧风险账本备份，新增结构化字段保持待复核状态，不伪造已执行事实。
+
+2.1.0 起一个 run-dir 只能包含一个最小标题批次。旧目录若在 `batch-status.csv` 中保存多行批次，必须先按批次复制并拆分 ledgers、证据和产物到独立目录；框架会拒绝混装，不会猜测性自动拆分历史事实。
 
 ## 内网应用升级包
 
@@ -79,6 +81,8 @@ powershell -ExecutionPolicy Bypass -File scripts\upgrade-framework.ps1 -PackageP
 5. 对比 `asset_schema_version`。
 6. 执行稳定性校验。
 7. 任一复制、迁移或校验步骤失败时，自动恢复全部被覆盖的框架文件、删除本次新增文件，并恢复受保护资产快照。
+
+`AGENTS.md`、`CODEBUDDY.md` 和测试设计 Skill 的 `LOCAL-OVERRIDES` 区块会在升级时保留；旧入口若没有该区块，升级会在覆盖前中止，要求先人工迁移本地约束，避免静默丢失。
 
 从 `asset_schema_version=1.0.0` 升级到 `2.0.0` 时必须传入 `-RunMigrations`。迁移会读取现有 `product-map.xlsx` 的非模板真实行，保存到 `docs/test-assets/catalog/modules/_legacy.json`，再建立 catalog 索引；不会用空 JSON 覆盖既有资产。
 

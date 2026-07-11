@@ -7,13 +7,13 @@
 - 权威源保存完整规则正文；超过入口加载阈值的规则必须沉淀到 `docs/test-design/rules/` 专题文档。
 - 摘要引用文件只说明入口、边界、读取路由和必须读取的权威源，不复制完整规则。
 - 校验脚本优先检查权威源是否完整，再检查摘要引用是否指向权威源。
-- `.codebuddy/.rules/test-design-rule.mdc` 与 `.codebuddy/rules/test-design-rule.md` 是同一硬规则的双入口镜像，必须保持内容一致。
+- `.codebuddy/rules/test-design-rule.md` 是唯一 Rule 权威源；`.codebuddy/.rules/test-design-rule.mdc` 是自动生成镜像。入口的 Gate 区块由稳定 Gate ID 自动生成，本地扩展只写入 `LOCAL-OVERRIDES` 区块。
 
 ## 规则归属矩阵
 
 | 规则类型 | 权威源 | 可摘要引用 | 不应承载完整规则 |
 | --- | --- | --- | --- |
-| 硬性测试质量规则 | `.codebuddy/.rules/test-design-rule.mdc`、`.codebuddy/rules/test-design-rule.md`、`docs/test-design/rules/case-design.md` | `AGENTS.md`、`CODEBUDDY.md`、`.codebuddy/skills/test-design/SKILL.md` | `README.md`、`docs/test-design/README.md` |
+| 硬性测试质量规则 | `.codebuddy/rules/test-design-rule.md`、`docs/test-design/rules/case-design.md` | `.codebuddy/.rules/test-design-rule.mdc`、`AGENTS.md`、`CODEBUDDY.md`、Skill | `README.md`、`docs/test-design/README.md` |
 | DFX 测试策略矩阵 | `docs/test-design/rules/dfx-test-strategy.md`、`docs/test-design/rules/case-design.md` | Rule、Skill、`AGENTS.md`、`CODEBUDDY.md`、`README.md`、`docs/test-design/README.md` | 入口文件中的完整 12 维度矩阵正文 |
 | 执行流程与自检步骤 | `.codebuddy/skills/test-design/SKILL.md`、`docs/test-design/rules/README.md` | `AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | `README.md` |
 | 页面实探与数据安全 | `docs/test-design/rules/page-discovery.md`、`docs/test-design/rules/data-safety.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md` | `README.md` |
@@ -44,7 +44,7 @@
 
 | 变更类型 | 必改文件 | 可选同步 |
 | --- | --- | --- |
-| 修改硬性测试质量规则 | 两个 Rule 文件、校验脚本 | Skill 自检摘要、AGENTS/CODEBUDDY 摘要 |
+| 修改硬性测试质量规则 | canonical Rule、专题规则、entry contract | 运行 `sync-rule-entrypoints.py --write` 自动更新镜像与入口 Gate 区块 |
 | 修改执行流程 | Skill、校验脚本 | AGENTS/CODEBUDDY 摘要 |
 | 修改 Excel 字段或枚举 | Excel 模板、`excel-template-spec.md`、校验脚本 | Skill/Rule 中的摘要 |
 | 修改归档、批次运行状态或产品版图规则 | `archive-and-index-guidelines.md`、`docs/test-assets/batch-runs/README.md`、批次模板、校验脚本 | Skill/Rule/AGENTS/CODEBUDDY 摘要 |

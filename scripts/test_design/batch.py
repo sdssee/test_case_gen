@@ -2,14 +2,31 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 import re
 import shutil
+import uuid
 from datetime import datetime
 from pathlib import Path
 
 from .io_utils import atomic_copy, atomic_write_text, temporary_sibling
+from .contracts.function_cases import (
+    FUNCTION_CASE_PART_RE,
+    MAX_FUNCTION_CASES_PER_PART,
+)
+from .validators.function_cases import validate_function_case_part, validate_sheet_data_file
+from .validation_cache import cache_hit, fingerprint, record_success
+from .validators.batch_ledgers import (
+    risk_confirmation_state,
+    validate_single_batch_scope,
+    validate_lifecycle_rows,
+    validate_discovery_rows,
+    validate_mutation_discovery_evidence,
+    validate_operation_plan_rows,
+    validate_risk_confirmation,
+)
 
 
 def canonical_module_parts(module_path: str, product_name: str | None = None) -> list[str]:
@@ -65,9 +82,9 @@ CSV_REQUIRED_FILES = {
     "risk-confirmation.csv": "risk-confirmation-template.csv",
 }
 
-FUNCTION_CASE_PART_RE = re.compile(r"^function_cases_part_\d{3}\.json$")
-MAX_FUNCTION_CASES_PER_PART = 10
 FUNCTION_CASE_MANIFEST = "function_cases_manifest.json"
+GENERATION_SESSION = "generation-session.json"
+DELIVERY_RECEIPT = "delivery-receipt.json"
 SHEET_DATA_FILES = [
     "overview.json",
     "requirements.json",
@@ -77,49 +94,17 @@ SHEET_DATA_FILES = [
     "automation.json",
     "page_elements.json",
 ]
-FUNCTION_CASE_REQUIRED_FIELDS = [
-    "用例 ID",
-    "Story ID/需求 ID",
-    "模块",
-    "功能点",
-    "用例标题",
-    "优先级",
-    "测试类型",
-    "DFX维度",
-    "DFX场景",
-    "前置条件",
-    "测试数据",
-    "操作步骤",
-    "预期结果",
-    "实际结果",
-    "执行状态",
-    "是否适合自动化",
-    "关联风险",
-    "备注",
-]
-FUNCTION_CASE_FORBIDDEN_FIELDS = {
-    "用例编号",
-    "用侊 ID",
-    "用侊标题",
-    "场景类型",
-    "正向/反向",
-    "steps",
-    "expected",
-    "title",
-    "case_id",
-    "id",
+
+GENERATION_LEDGER_INCLUDE_FIELDS = {
+    "batch-status.csv": {
+        "批次ID", "一级模块", "二级菜单", "三级菜单/页面域", "批次范围", "页面数", "元素总数", "最小标题路径", "待确认问题",
+    },
 }
-PLACEHOLDER_CASE_IDS = {"", "TC-A2A-XXX", "TC-XXX", "TODO", "TBD"}
-ENGLISH_TEMPLATE_MARKERS = [
-    "Open browser",
-    "navigate to",
-    "Verify page",
-    "Operate element",
-    "Execute extended scenario",
-    "Extended scenario",
-    "passes",
-    "behaves as expected",
-]
+GENERATION_LEDGER_RESULT_FIELDS = {
+    "page-discovery.csv": {"是否已生成用例", "关联用例ID", "覆盖状态", "未覆盖/待确认原因"},
+    "element-case-plan.csv": {"实际用例ID", "未生成原因"},
+    "test-data-lifecycle.csv": {"创建步骤关联用例"},
+}
 
 INTERACTIVE_ELEMENT_MARKERS = [
     "按钮",
@@ -177,6 +162,92 @@ def template_headers(templates_dir: Path, template_name: str) -> list[str]:
         return next(csv.reader(fp))
 
 
+def infer_operation_category(row: dict[str, str]) -> str:
+    combined = "\n".join(row.values())
+    mappings = [
+        ("配置", ["配置", "开关", "认证", "变量", "路由"]),
+        ("状态变更", ["启用", "停用", "发布", "下线", "审批", "状态"]),
+        ("删除", ["删除", "移除"]),
+        ("编辑", ["编辑", "修改", "保存"]),
+        ("创建", ["新增", "创建", "添加", "新建"]),
+        ("分页", ["分页", "翻页", "页码", "每页"]),
+        ("筛选", ["筛选"]),
+        ("搜索", ["搜索", "查询"]),
+        ("导入", ["导入"]),
+        ("导出", ["导出"]),
+        ("上传", ["上传"]),
+        ("下载", ["下载"]),
+    ]
+    for category, markers in mappings:
+        if contains_any(combined, markers):
+            return category
+    return "查看"
+
+
+def migrate_structured_batch_ledgers(run_dir: Path, templates_dir: Path) -> None:
+    migrations = {
+        "element-case-plan.csv": "element-case-plan-template.csv",
+        "test-data-lifecycle.csv": "test-data-lifecycle-template.csv",
+    }
+    removed_fields = {
+        "element-case-plan.csv": {"操作类别", "验证要求", "数据策略", "执行状态"},
+        "test-data-lifecycle.csv": {"关联页面/入口", "修改项/元素", "保存后回显", "实际生效结果"},
+    }
+    pending: list[tuple[Path, list[str], list[dict[str, str]], str]] = []
+    for filename, template_name in migrations.items():
+        path = run_dir / filename
+        expected_headers = template_headers(templates_dir, template_name)
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            current_headers = reader.fieldnames or []
+            rows = list(reader)
+        if current_headers == expected_headers:
+            continue
+        known_legacy_headers = [header for header in expected_headers if header not in removed_fields[filename]]
+        if current_headers != known_legacy_headers:
+            raise ValueError(f"Cannot automatically migrate unsupported {filename} header: {current_headers}")
+        pending.append((path, expected_headers, rows, filename))
+
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    for path, expected_headers, rows, filename in pending:
+        backup_path = path.with_name(f"{path.stem}.pre-structured-ledger-{timestamp}.csv")
+        shutil.copy2(path, backup_path)
+        migrated_rows: list[dict[str, str]] = []
+        for old in rows:
+            row = {header: old.get(header, "") for header in expected_headers}
+            if filename == "element-case-plan.csv":
+                category = infer_operation_category(old)
+                required = {
+                    "创建": "回显,持久化",
+                    "编辑": "回显,持久化,实际生效",
+                    "配置": "回显,持久化,实际生效",
+                    "状态变更": "回显,持久化,实际生效",
+                    "删除": "持久化,确认取消",
+                }.get(category, "结果分支")
+                row.update(
+                    {
+                        "操作类别": category,
+                        "验证要求": required,
+                        "数据策略": "本次创建测试数据" if category in {"创建", "编辑", "删除", "配置", "状态变更"} else "无数据变更",
+                        "执行状态": "待执行" if any(old.values()) else "不适用",
+                        "备注": ((old.get("备注", "") + "；") if old.get("备注") else "") + "旧账本自动迁移，需按结构化字段复核",
+                    }
+                )
+            else:
+                row["备注"] = ((old.get("备注", "") + "；") if old.get("备注") else "") + "旧账本自动迁移，需逐修改项补充页面、元素、回显和生效证据"
+            migrated_rows.append(row)
+        temporary = temporary_sibling(path)
+        try:
+            with temporary.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=expected_headers)
+                writer.writeheader()
+                writer.writerows(migrated_rows)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        print(f"Migrated structured ledger and preserved backup: {backup_path}")
+
+
 def split_plan_values(text: str) -> list[str]:
     return [item.strip() for item in re.split(r"[,，、;；/\s]+", text or "") if item.strip()]
 
@@ -199,13 +270,16 @@ def is_no(value: str) -> bool:
     return (value or "").strip() in {"否", "N", "No", "no", "false", "False", "0", "不适用"}
 
 
-def evidence_path_exists(run_dir: Path, value: str) -> bool:
+def evidence_path_candidates(run_dir: Path, value: str) -> list[Path]:
     raw = (value or "").strip()
     if not raw or raw in {"待填写", "待补充", "无"}:
-        return False
+        return []
     path = Path(raw)
-    candidates = [path] if path.is_absolute() else [run_dir / path, run_dir.parents[3] / path]
-    return any(candidate.exists() for candidate in candidates)
+    return [path] if path.is_absolute() else [run_dir / path, run_dir.parents[3] / path]
+
+
+def evidence_path_exists(run_dir: Path, value: str) -> bool:
+    return any(candidate.exists() for candidate in evidence_path_candidates(run_dir, value))
 
 
 def contains_any(text: str, markers: list[str]) -> bool:
@@ -221,15 +295,10 @@ def is_template_or_empty_row(row: dict[str, str], meaningful_fields: list[str]) 
 
 
 def is_interactive_discovery_row(row: dict[str, str]) -> bool:
-    combined = "\n".join(
-        [
-            row.get("元素名称/文案", ""),
-            row.get("元素类型", ""),
-            row.get("交互方式", ""),
-            row.get("完整点击路径", ""),
-        ]
+    return bool(
+        row.get("元素名称/文案", "").strip()
+        and (row.get("元素类型", "").strip() or row.get("交互方式", "").strip())
     )
-    return contains_any(combined, INTERACTIVE_ELEMENT_MARKERS)
 
 
 def dfx_pair_count(dimensions_text: str, scenarios_text: str) -> int:
@@ -242,22 +311,18 @@ def dfx_pair_count(dimensions_text: str, scenarios_text: str) -> int:
     return max(len(dimensions), len(scenarios))
 
 
-def element_is_planned(discovery_name: str, plan_rows: list[dict[str, str]]) -> bool:
-    name = normalized_text(discovery_name)
+def element_is_planned(discovery: dict[str, str], plan_rows: list[dict[str, str]]) -> bool:
+    name = normalized_text(discovery.get("元素名称/文案", ""))
     if not name:
         return True
     for row in plan_rows:
-        planned = normalized_text(
-            "\n".join(
-                [
-                    row.get("元素名称/文案", ""),
-                    row.get("功能点", ""),
-                    row.get("交互方式", ""),
-                    row.get("业务路径", ""),
-                ]
-            )
-        )
-        if name in planned or planned in name:
+        same_leaf = normalized_text(discovery.get("最小标题路径", "")) == normalized_text(row.get("最小标题路径", ""))
+        same_page = normalized_text(discovery.get("页面/入口", "")) == normalized_text(row.get("页面/入口", ""))
+        same_name = name == normalized_text(row.get("元素名称/文案", ""))
+        discovery_type = normalized_text(discovery.get("元素类型", ""))
+        plan_type = normalized_text(row.get("元素类型", ""))
+        same_type = bool(discovery_type and plan_type and discovery_type == plan_type)
+        if same_leaf and same_page and same_name and same_type:
             return True
     return False
 
@@ -316,128 +381,6 @@ def planned_case_id_count(value: str) -> int:
     return len(ids)
 
 
-def numbered_lines(text: str) -> list[str]:
-    return [line.strip() for line in str(text or "").splitlines() if line.strip()]
-
-
-def validate_numbered_sequence(text: str, label: str, minimum: int) -> None:
-    lines = numbered_lines(text)
-    if len(lines) < minimum:
-        raise ValueError(f"{label} must contain at least {minimum} numbered lines")
-    expected = 1
-    for line in lines:
-        match = re.match(r"^(\d+)\.\s*\S+", line)
-        if not match:
-            raise ValueError(f"{label} must use numbered lines like '1. ...': {line}")
-        number = int(match.group(1))
-        if number != expected:
-            raise ValueError(f"{label} numbering must be continuous; expected {expected}, got {number}: {line}")
-        expected += 1
-
-
-def validate_case_steps_and_expected(case: dict[str, str], label: str) -> None:
-    steps = str(case.get("操作步骤", "") or "")
-    expected = str(case.get("预期结果", "") or "")
-    precondition = str(case.get("前置条件", "") or "")
-    combined = "\n".join([precondition, steps, expected, str(case.get("备注", "") or "")])
-
-    if any(marker in combined for marker in ENGLISH_TEMPLATE_MARKERS):
-        raise ValueError(f"{label} contains English placeholder/template text; generate concrete Chinese executable steps and expectations")
-
-    validate_numbered_sequence(precondition, f"{label} 前置条件", 2)
-    validate_numbered_sequence(steps, f"{label} 操作步骤", 4)
-    validate_numbered_sequence(expected, f"{label} 预期结果", 3)
-
-    step_lines = numbered_lines(steps)
-    expected_lines = numbered_lines(expected)
-    strip_number = lambda line: re.sub(r"^\d+\.\s*", "", line).strip()
-    if [strip_number(line) for line in step_lines[:3]] == [strip_number(line) for line in expected_lines[:3]]:
-        raise ValueError(
-            f"{label} 预期结果 repeats navigation/actions from 操作步骤; "
-            "write observable page, data, message, and state outcomes instead"
-        )
-
-    first_steps = "\n".join(numbered_lines(steps)[:3])
-    entry_markers = ["登录", "打开系统", "访问系统", "进入系统", "打开平台", "访问平台", "进入平台", "<product_login_url>"]
-    navigation_markers = ["一级", "二级", "三级", "菜单", "模块", "导航", "路径", ">", "页面"]
-    if not any(marker in first_steps for marker in entry_markers):
-        raise ValueError(f"{label} 操作步骤 must start from system/project entry")
-    if not any(marker in first_steps for marker in navigation_markers):
-        raise ValueError(f"{label} 操作步骤 must include complete menu/module navigation")
-
-    if re.search(r"\b点(搜索|保存|删除|确定|确认|取消)\b", steps):
-        raise ValueError(f"{label} 操作步骤 contains overly terse wording like '点搜索'; write the full control name and action")
-    if any(marker in steps for marker in ["操作元素", "扩展场景", "基本验证", "Extended"]):
-        raise ValueError(f"{label} 操作步骤 contains generic generated wording; write concrete page operations")
-    if any(marker in expected for marker in ["behaves as expected", "passes", "符合预期", "正常显示"]) and len(numbered_lines(expected)) <= 3:
-        raise ValueError(f"{label} 预期结果 is too generic; write observable page/data/state outcomes")
-
-    mutation_markers = ["点击「确定」", "点击“确定”", "点击「确认」", "点击“确认”", "保存", "提交", "批量确认", "屏蔽成功"]
-    mutation_success_markers = ["成功", "已确认", "已屏蔽", "保存后", "提交后", "状态更新", "数据更新"]
-    if contains_any(steps, mutation_markers) and contains_any(expected, mutation_success_markers):
-        test_data_context = "\n".join([precondition, str(case.get("测试数据", "") or ""), steps])
-        if not contains_any(test_data_context, ["AI_TEST", "CODEX_TEST", "用户提供测试数据"]):
-            raise ValueError(
-                f"{label} changes data/state but is not bound to AI_TEST/CODEX_TEST or user-provided test data"
-            )
-
-
-def validate_function_case_schema(case: dict[str, object], label: str, planned_ids: set[str] | None = None) -> None:
-    if not isinstance(case, dict):
-        raise ValueError(f"{label} must be a JSON object")
-    keys = set(case)
-    forbidden = sorted(keys & FUNCTION_CASE_FORBIDDEN_FIELDS)
-    if forbidden:
-        raise ValueError(f"{label} contains forbidden/deprecated fields: {forbidden}; use the standard function case schema")
-    missing = [field for field in FUNCTION_CASE_REQUIRED_FIELDS if field not in case]
-    if missing:
-        raise ValueError(f"{label} is missing required fields: {missing}")
-    extra = sorted(keys - set(FUNCTION_CASE_REQUIRED_FIELDS))
-    if extra:
-        raise ValueError(f"{label} contains extra fields not allowed by the standard schema: {extra}")
-
-    normalized = {field: "" if case.get(field) is None else str(case.get(field)).strip() for field in FUNCTION_CASE_REQUIRED_FIELDS}
-    case_id = normalized["用例 ID"]
-    if case_id in PLACEHOLDER_CASE_IDS or "XXX" in case_id:
-        raise ValueError(f"{label} must use a concrete 用例 ID, got: {case_id}")
-    if planned_ids is not None and planned_ids and case_id not in planned_ids:
-        raise ValueError(f"{label} 用例 ID is not declared in element-case-plan.csv 计划用例ID: {case_id}")
-
-    function_point = normalized["功能点"]
-    title = normalized["用例标题"]
-    if not function_point:
-        raise ValueError(f"{label} must fill 功能点")
-    if not title.startswith(f"{function_point}-"):
-        raise ValueError(f"{label} 用例标题 must use 功能点-当前标题 format: {title}")
-    for field in ["模块", "优先级", "测试类型", "DFX维度", "DFX场景", "测试数据"]:
-        if not normalized[field]:
-            raise ValueError(f"{label} must fill {field}")
-    if normalized["测试类型"] == "性能规格测试" or normalized["DFX维度"] == "DFP性能":
-        raise ValueError(f"{label} must not put performance scenarios into function case shards")
-
-    validate_case_steps_and_expected(normalized, label)
-
-
-def validate_function_case_part(path: Path, planned_ids: set[str] | None = None) -> int:
-    if not FUNCTION_CASE_PART_RE.match(path.name):
-        raise ValueError(f"{path} must use function_cases_part_001.json naming")
-    with path.open("r", encoding="utf-8-sig") as fp:
-        data = json.load(fp)
-    cases = data.get("cases") if isinstance(data, dict) else data
-    if not isinstance(cases, list):
-        raise ValueError(f"{path} must contain a list or an object with a cases list")
-    if len(cases) > MAX_FUNCTION_CASES_PER_PART:
-        raise ValueError(f"{path} contains {len(cases)} cases; each function_cases_part_*.json must contain at most {MAX_FUNCTION_CASES_PER_PART}")
-    seen_ids: set[str] = set()
-    for index, case in enumerate(cases, start=1):
-        validate_function_case_schema(case, f"{path.name} case {index}", planned_ids)
-        case_id = str(case.get("用例 ID", "")).strip()
-        if case_id in seen_ids:
-            raise ValueError(f"{path.name} has duplicate 用例 ID: {case_id}")
-        seen_ids.add(case_id)
-    return len(cases)
-
-
 def planned_case_ids(plan_rows: list[dict[str, str]]) -> set[str]:
     ids: set[str] = set()
     for row in plan_rows:
@@ -451,7 +394,11 @@ def manifest_parts(data_dir: Path) -> list[Path]:
         raise ValueError(f"artifacts/data must contain {FUNCTION_CASE_MANIFEST}; Excel assembly must read the manifest, not glob stale shards")
     with manifest.open("r", encoding="utf-8-sig") as fp:
         data = json.load(fp)
-    raw_parts = data.get("parts") if isinstance(data, dict) else data
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"{manifest} must be a JSON object containing parts, generation_session_id, and source_fingerprint"
+        )
+    raw_parts = data.get("parts")
     if not isinstance(raw_parts, list) or not raw_parts:
         raise ValueError(f"{manifest} must contain a non-empty parts list")
     result: list[Path] = []
@@ -471,21 +418,268 @@ def manifest_parts(data_dir: Path) -> list[Path]:
 
 
 def prepare_function_case_generation(run_dir: Path) -> None:
+    validate_batch_artifacts(run_dir, "risk", use_cache=True)
     data_dir = run_dir.resolve() / "artifacts" / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     removed: list[str] = []
-    for pattern in ["function_cases_part_*.json", FUNCTION_CASE_MANIFEST]:
+    for pattern in ["function_cases_part_*.json", FUNCTION_CASE_MANIFEST, GENERATION_SESSION, DELIVERY_RECEIPT, *SHEET_DATA_FILES]:
         for path in data_dir.glob(pattern):
             if path.is_file():
                 removed.append(path.name)
                 path.unlink()
+    session = {
+        "generation_session_id": str(uuid.uuid4()),
+        "source_fingerprint": generation_source_fingerprint(run_dir.resolve()),
+        "catalog_source_fingerprint": generation_catalog_fingerprint(run_dir.resolve()),
+        "created_at": datetime.now().astimezone().isoformat(),
+    }
+    atomic_write_text(data_dir / GENERATION_SESSION, json.dumps(session, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"OK: prepared function case generation under {data_dir}; removed {len(removed)} stale file(s).")
 
 
-def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
+def record_no_model_uncertainty(run_dir: Path) -> None:
+    run_dir = run_dir.resolve()
+    validate_batch_artifacts(run_dir, "plan", use_cache=True)
+    with (run_dir / "risk-confirmation.csv").open("r", encoding="utf-8-sig", newline="") as stream:
+        existing_rows = list(csv.DictReader(stream))
+    real_ids = {
+        row.get("风险ID", "").strip()
+        for row in existing_rows
+        if row.get("风险ID", "").strip() not in {"", "RISK-PENDING", "RISK-NONE"}
+    }
+    if real_ids:
+        raise ValueError(f"record-risk-none refuses to overwrite real model uncertainty rows: {sorted(real_ids)}")
+    existing = existing_rows[0] if existing_rows else {}
+    if existing.get("风险ID", "").strip() == "RISK-NONE":
+        validate_batch_artifacts(run_dir, "risk", use_cache=True)
+        print(f"OK: RISK-NONE already recorded: {run_dir}")
+        return
+    write_single_csv_row(
+        run_dir / "risk-confirmation.csv",
+        {
+            "批次ID": existing.get("批次ID", "BATCH-001"),
+            "风险ID": "RISK-NONE",
+            "模型不理解内容/待确认问题": "全量深探后未发现需要用户解释的业务语义或规则歧义",
+            "已完成深探依据": "discovery 与 plan 门禁已通过，全部可交互元素和 CRUD 生效证据已记录",
+            "用户确认结论": "无需用户确认",
+            "处置策略": "按已验证的页面行为和业务资料继续设计用例",
+            "是否阻塞用例设计": "否",
+            "确认状态": "无需用户确认",
+            "备注": "由 record-risk-none 在 plan 门禁通过后写入，不代表用户作出过确认",
+        },
+    )
+    print(f"OK: recorded RISK-NONE without unnecessary user confirmation: {run_dir}")
+
+
+def validation_input_paths(run_dir: Path, phase: str) -> list[Path]:
+    templates_dir = run_dir.parent / "templates"
+    paths = [run_dir / name for name in CSV_REQUIRED_FILES]
+    paths.extend(templates_dir / template for template in CSV_REQUIRED_FILES.values())
+    paths.extend(
+        [
+            Path(__file__),
+            Path(__file__).parent / "validation_cache.py",
+            Path(__file__).parent / "validators" / "batch_ledgers.py",
+            Path(__file__).parent / "validators" / "function_cases.py",
+            Path(__file__).parent / "contracts" / "function_cases.py",
+            Path(__file__).parent / "contracts" / "sheet_data.py",
+            run_dir / "artifacts",
+            run_dir / "artifacts" / "scripts",
+            run_dir / "artifacts" / "data",
+            run_dir / "artifacts" / "screenshots",
+        ]
+    )
+    for ledger_name in ["page-discovery.csv", "risk-confirmation.csv"]:
+        ledger = run_dir / ledger_name
+        if not ledger.exists():
+            continue
+        with ledger.open("r", encoding="utf-8-sig", newline="") as stream:
+            for row in csv.DictReader(stream):
+                raw = (row.get("证据路径", "") or "").strip()
+                if raw:
+                    paths.extend(evidence_path_candidates(run_dir, raw))
+    case_count = 0
+    if phase == "cases":
+        data_dir = run_dir / "artifacts" / "data"
+        paths.extend(data_dir.glob("*.json"))
+        paths.extend(generation_catalog_paths(run_dir))
+    return paths
+
+
+def generation_source_paths(run_dir: Path) -> list[Path]:
+    run_dir = run_dir.resolve()
+    project_root = run_dir.parents[3]
+    templates_dir = run_dir.parent / "templates"
+    paths = [templates_dir / template for template in CSV_REQUIRED_FILES.values()]
+    paths.extend(
+        [
+            Path(__file__),
+            Path(__file__).parent / "validation_cache.py",
+            Path(__file__).parent / "validators" / "batch_ledgers.py",
+            Path(__file__).parent / "validators" / "function_cases.py",
+            Path(__file__).parent / "contracts" / "function_cases.py",
+            Path(__file__).parent / "contracts" / "sheet_data.py",
+        ]
+    )
+    paths.extend(
+        [
+            project_root / "VERSION",
+            project_root / "AGENTS.md",
+            project_root / "CODEBUDDY.md",
+            project_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+            project_root / ".codebuddy" / "rules" / "test-design-rule.md",
+            project_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        ]
+    )
+    rule_dir = project_root / "docs" / "test-design" / "rules"
+    if rule_dir.exists():
+        paths.extend(rule_dir.glob("*.md"))
+        paths.extend(rule_dir.glob("*.json"))
+    for ledger_name in ["page-discovery.csv", "risk-confirmation.csv"]:
+        ledger = run_dir / ledger_name
+        if not ledger.exists():
+            continue
+        with ledger.open("r", encoding="utf-8-sig", newline="") as stream:
+            for row in csv.DictReader(stream):
+                raw = (row.get("证据路径", "") or "").strip()
+                if raw:
+                    paths.extend(evidence_path_candidates(run_dir, raw))
+    return paths
+
+
+def generation_ledger_semantics(run_dir: Path) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for name in CSV_REQUIRED_FILES:
+        path = run_dir / name
+        if not path.exists():
+            result[name] = None
+            continue
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            headers = reader.fieldnames or []
+            included = GENERATION_LEDGER_INCLUDE_FIELDS.get(name)
+            result_fields = GENERATION_LEDGER_RESULT_FIELDS.get(name, set())
+            selected = [field for field in headers if (included is None or field in included) and field not in result_fields]
+            result[name] = [
+                {field: (row.get(field, "") or "").strip() for field in selected}
+                for row in reader
+            ]
+    return result
+
+
+def generation_source_fingerprint(run_dir: Path) -> str:
+    run_dir = run_dir.resolve()
+    digest = hashlib.sha256()
+    digest.update(fingerprint(generation_source_paths(run_dir)).encode("ascii"))
+    semantics = json.dumps(generation_ledger_semantics(run_dir), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest.update(semantics.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def generation_catalog_paths(run_dir: Path) -> list[Path]:
+    project_root = run_dir.resolve().parents[3]
+    catalog = project_root / "docs" / "test-assets" / "catalog"
+    paths = list(catalog.rglob("*.json")) if catalog.exists() else []
+    paths.append(project_root / "docs" / "test-assets" / "product-map.xlsx")
+    return paths
+
+
+def generation_catalog_fingerprint(run_dir: Path) -> str:
+    return fingerprint(generation_catalog_paths(run_dir.resolve()))
+
+
+def generation_session_data(run_dir: Path) -> dict[str, object] | None:
+    path = run_dir.resolve() / "artifacts" / "data" / GENERATION_SESSION
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def generation_session_core_is_current(run_dir: Path) -> bool:
+    data = generation_session_data(run_dir)
+    return bool(
+        data
+        and data.get("generation_session_id")
+        and data.get("source_fingerprint") == generation_source_fingerprint(run_dir.resolve())
+    )
+
+
+def delivery_receipt_matches_generation_session(run_dir: Path, session: dict[str, object]) -> bool:
+    run_dir = run_dir.resolve()
+    status_path = run_dir / "batch-status.csv"
+    receipt_path = run_dir / "artifacts" / "data" / DELIVERY_RECEIPT
+    if not status_path.exists() or not receipt_path.exists():
+        return False
+    try:
+        with status_path.open("r", encoding="utf-8-sig", newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    metadata_matches = bool(
+        len(rows) == 1
+        and rows[0].get("状态", "").strip() == "已完成"
+        and isinstance(receipt, dict)
+        and receipt.get("generation_session_id") == session.get("generation_session_id")
+        and receipt.get("source_fingerprint") == session.get("source_fingerprint")
+        and receipt.get("catalog_source_fingerprint") == session.get("catalog_source_fingerprint")
+    )
+    if not metadata_matches:
+        return False
+    product_map_path = str(receipt.get("product_map_path", "") or "").replace("\\", "/").strip()
+    file_entries = receipt.get("files")
+    if not product_map_path or not isinstance(file_entries, list):
+        return False
+    project_root = run_dir.parents[3]
+    catalog_entries = []
+    for entry in file_entries:
+        if not isinstance(entry, dict):
+            return False
+        relative = str(entry.get("path", "") or "").replace("\\", "/").strip()
+        if relative == product_map_path or relative.startswith("docs/test-assets/catalog/"):
+            catalog_entries.append(entry)
+    if not any(str(entry.get("path", "") or "").replace("\\", "/").strip() == product_map_path for entry in catalog_entries):
+        return False
+    for entry in catalog_entries:
+        try:
+            relative = Path(str(entry["path"]))
+            path = (project_root / relative).resolve()
+            path.relative_to(project_root.resolve())
+            expected_size = int(entry["size"])
+            expected_hash = str(entry["sha256"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if not path.is_file() or path.stat().st_size != expected_size:
+            return False
+        if hashlib.sha256(path.read_bytes()).hexdigest() != expected_hash:
+            return False
+    return True
+
+
+def generation_session_is_current(run_dir: Path) -> bool:
+    data = generation_session_data(run_dir)
+    if not data or not generation_session_core_is_current(run_dir):
+        return False
+    if data.get("catalog_source_fingerprint") == generation_catalog_fingerprint(run_dir.resolve()):
+        return True
+    return delivery_receipt_matches_generation_session(run_dir, data)
+
+
+def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: bool = False) -> None:
     run_dir = run_dir.resolve()
     if not run_dir.exists():
         raise ValueError(f"Batch run directory not found: {run_dir}")
+    if phase not in {"discovery", "plan", "risk", "cases"}:
+        raise ValueError(f"Unsupported batch validation phase: {phase}")
+    input_paths = validation_input_paths(run_dir, phase)
+    current_fingerprint = fingerprint(input_paths)
+    if use_cache and cache_hit(run_dir, phase, current_fingerprint):
+        print(f"OK: batch artifacts reused cached {phase} validation: {run_dir}")
+        return
     templates_dir = run_dir.parent / "templates"
     expected_headers = {
         csv_name: template_headers(templates_dir, template_name)
@@ -501,55 +695,32 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
         expected_headers["risk-confirmation.csv"],
         "risk-confirmation.csv",
     )
+    validate_single_batch_scope(
+        batch_rows,
+        {
+            "page-discovery.csv": discovery_rows,
+            "element-case-plan.csv": plan_rows,
+            "test-data-lifecycle.csv": lifecycle_rows,
+            "risk-confirmation.csv": risk_confirmation_rows,
+        },
+    )
 
     real_discovery_rows = [
         row for row in discovery_rows
         if not is_template_or_empty_row(row, ["页面/入口", "元素名称/文案", "元素类型", "交互方式"])
     ]
-    if phase in {"discovery", "plan", "cases"} and not real_discovery_rows:
+    if phase in {"discovery", "plan", "risk", "cases"} and not real_discovery_rows:
         raise ValueError("page-discovery.csv must contain real page elements before continuing")
 
     interactive_rows = [row for row in real_discovery_rows if is_interactive_discovery_row(row)]
-    if phase in {"discovery", "plan", "cases"} and not interactive_rows:
+    if phase in {"discovery", "plan", "risk", "cases"} and not interactive_rows:
         raise ValueError("page-discovery.csv must contain clickable/input/selectable/testable elements, not only static text")
+    if phase in {"discovery", "plan", "risk", "cases"}:
+        validate_discovery_rows(interactive_rows, lambda value: evidence_path_exists(run_dir, value))
 
     confirmed_risk_rows: list[dict[str, str]] = []
     risk_case_ids: set[str] = set()
-    if phase in {"plan", "cases"}:
-        confirmed_risk_rows = [
-            row for row in risk_confirmation_rows
-            if (row.get("风险ID", "") or "").strip()
-        ]
-        if not confirmed_risk_rows:
-            raise ValueError(
-                "risk-confirmation.csv must record the user's risk confirmation before element planning or case generation"
-            )
-        for index, row in enumerate(confirmed_risk_rows, start=2):
-            risk_id = row.get("风险ID", "").strip()
-            conclusion = row.get("用户确认结论", "").strip()
-            blocks_design = row.get("是否阻塞用例设计", "").strip()
-            if risk_id == "RISK-PENDING" or conclusion in {"", "待用户确认", "待确认"}:
-                raise ValueError(
-                    f"risk-confirmation.csv row {index} is still pending user confirmation; "
-                    "do not start element planning or case generation"
-                )
-            if not (is_yes(blocks_design) or is_no(blocks_design)):
-                raise ValueError(f"risk-confirmation.csv row {index} 是否阻塞用例设计 must be 是/否")
-            if risk_id == "RISK-NONE":
-                if is_yes(blocks_design):
-                    raise ValueError("RISK-NONE cannot block case design")
-                continue
-            required = ["模型不理解内容/待确认问题", "已完成深探依据", "处置策略"]
-            missing = [field for field in required if not row.get(field, "").strip()]
-            if missing:
-                raise ValueError(f"risk-confirmation.csv row {index} is missing {missing}")
-            if row.get("确认状态", "").strip() != "已确认":
-                raise ValueError(f"risk-confirmation.csv row {index} 确认状态 must be 已确认 before continuing")
-            if is_yes(blocks_design):
-                raise ValueError(f"risk-confirmation.csv row {index} is confirmed but still blocks case design")
-            risk_case_ids.update(split_plan_values(row.get("关联用例ID", "")))
-
-    if phase in {"plan", "cases"}:
+    if phase in {"plan", "risk", "cases"}:
         real_plan_rows = [
             row for row in plan_rows
             if not is_template_or_empty_row(row, ["页面/入口", "功能点", "元素名称/文案", "元素类型", "测试设计方向", "计划用例ID"])
@@ -560,7 +731,7 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
         missing_plan = [
             row.get("元素名称/文案", "")
             for row in interactive_rows
-            if row.get("元素名称/文案", "").strip() and not element_is_planned(row.get("元素名称/文案", ""), real_plan_rows)
+            if row.get("元素名称/文案", "").strip() and not element_is_planned(row, real_plan_rows)
         ]
         if missing_plan:
             preview = ", ".join(missing_plan[:10])
@@ -588,36 +759,20 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
                 "DFX扩展后用例数不得低于可交互元素数"
             )
 
-        has_crud_or_config = any(
-            is_yes(row.get("是否涉及CRUD闭环", "")) or is_yes(row.get("是否涉及配置生效", ""))
-            or contains_any(
-                "\n".join([row.get("功能点", ""), row.get("元素名称/文案", ""), row.get("测试设计方向", "")]),
-                ["新增", "创建", "添加", "保存", "提交", "编辑", "修改", "删除", "配置", "生效"],
-            )
-            for row in real_plan_rows
+        has_crud_or_config = validate_operation_plan_rows(real_plan_rows)
+        validate_mutation_discovery_evidence(
+            real_plan_rows,
+            interactive_rows,
+            lambda value: evidence_path_exists(run_dir, value),
         )
         real_lifecycle_rows = [
             row for row in lifecycle_rows
             if not is_template_or_empty_row(row, ["测试数据ID/名称", "创建结果", "查看结果", "编辑结果", "删除确认结果", "清理状态"])
         ]
-        if has_crud_or_config:
-            if not real_lifecycle_rows:
-                raise ValueError("test-data-lifecycle.csv must record AI_TEST/CODEX_TEST CRUD/config lifecycle before writing cases")
-            for index, row in enumerate(real_lifecycle_rows, start=2):
-                combined = "\n".join(row.values())
-                if not contains_any(combined, ["AI_TEST", "CODEX_TEST", "用户提供测试数据"]):
-                    raise ValueError(f"test-data-lifecycle.csv row {index} must bind to AI_TEST/CODEX_TEST or user-provided test data")
-                required_results = ["创建结果", "查看结果", "编辑前值", "编辑后值", "编辑结果"]
-                missing_results = [field for field in required_results if not row.get(field, "").strip()]
-                if missing_results:
-                    raise ValueError(
-                        f"test-data-lifecycle.csv row {index} must prove create/edit success and persisted values; missing {missing_results}"
-                    )
-                if row.get("编辑前值", "").strip() == row.get("编辑后值", "").strip():
-                    raise ValueError(f"test-data-lifecycle.csv row {index} 编辑前值 and 编辑后值 must differ")
-                if contains_any(combined, ["配置", "开关", "状态", "权限", "变量", "模型", "路由", "认证"]):
-                    if not row.get("配置生效验证点", "").strip():
-                        raise ValueError(f"test-data-lifecycle.csv row {index} must record actual configuration effect verification")
+        validate_lifecycle_rows(real_lifecycle_rows, has_crud_or_config, contains_any, real_plan_rows)
+
+    if phase in {"risk", "cases"}:
+        confirmed_risk_rows, risk_case_ids = validate_risk_confirmation(risk_confirmation_rows, split_plan_values)
 
     artifacts_dir = run_dir / "artifacts"
     scripts_dir = artifacts_dir / "scripts"
@@ -632,6 +787,18 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
         raise ValueError("function_cases_part_*.json must be written under artifacts/data, not artifacts root")
 
     if phase == "cases":
+        session = generation_session_data(run_dir)
+        if not session:
+            raise ValueError("generation-session.json is missing or invalid; run prepare-function-case-generation")
+        current_source_fingerprint = generation_source_fingerprint(run_dir)
+        if session.get("source_fingerprint") != current_source_fingerprint:
+            raise ValueError("generation session source fingerprint is stale; rerun prepare-function-case-generation")
+        current_catalog_fingerprint = generation_catalog_fingerprint(run_dir)
+        if (
+            session.get("catalog_source_fingerprint") != current_catalog_fingerprint
+            and not delivery_receipt_matches_generation_session(run_dir, session)
+        ):
+            raise ValueError("generation session catalog source fingerprint is stale; rerun prepare-function-case-generation")
         parts = manifest_parts(data_dir)
         planned_ids = planned_case_ids(plan_rows)
         part_counts = [validate_function_case_part(path, planned_ids) for path in parts]
@@ -647,11 +814,31 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
             )
         case_count = sum(part_counts)
         actual_case_ids: set[str] = set()
+        duplicate_case_ids: set[str] = set()
         for path in parts:
             with path.open("r", encoding="utf-8-sig") as fp:
                 payload = json.load(fp)
             case_rows = payload.get("cases") if isinstance(payload, dict) else payload
-            actual_case_ids.update(str(item.get("用例 ID", "")).strip() for item in case_rows if isinstance(item, dict))
+            for item in case_rows:
+                if not isinstance(item, dict):
+                    continue
+                case_id = str(item.get("用例 ID", "")).strip()
+                if case_id in actual_case_ids:
+                    duplicate_case_ids.add(case_id)
+                actual_case_ids.add(case_id)
+        if duplicate_case_ids:
+            raise ValueError(f"function case IDs must be unique across all manifest shards: {sorted(duplicate_case_ids)[:10]}")
+        missing_planned_case_ids = sorted(planned_case_ids(plan_rows) - actual_case_ids)
+        if missing_planned_case_ids:
+            raise ValueError(f"planned case IDs are missing from current function shards: {missing_planned_case_ids[:10]}")
+        for index, row in enumerate(real_plan_rows, start=2):
+            planned_for_row = set(split_plan_values(row.get("计划用例ID", "")))
+            actual_for_row = set(split_plan_values(row.get("实际用例ID", "")))
+            if actual_for_row != planned_for_row:
+                raise ValueError(
+                    f"element-case-plan.csv row {index} 实际用例ID must exactly match generated 计划用例ID; "
+                    f"planned={sorted(planned_for_row)}, actual={sorted(actual_for_row)}"
+                )
         unknown_risk_case_ids = sorted(risk_case_ids - actual_case_ids)
         if unknown_risk_case_ids:
             raise ValueError(
@@ -671,6 +858,10 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
         with (data_dir / FUNCTION_CASE_MANIFEST).open("r", encoding="utf-8-sig") as fp:
             manifest_data = json.load(fp)
         if isinstance(manifest_data, dict):
+            if manifest_data.get("generation_session_id") != session.get("generation_session_id"):
+                raise ValueError("function_cases_manifest.json generation_session_id must match generation-session.json")
+            if manifest_data.get("source_fingerprint") != session.get("source_fingerprint"):
+                raise ValueError("function_cases_manifest.json source_fingerprint must match current generation session")
             declared_part_size = manifest_data.get("part_size")
             declared_total = manifest_data.get("total_cases")
             if declared_part_size not in {None, MAX_FUNCTION_CASES_PER_PART}:
@@ -684,6 +875,8 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
         missing_sheet_files = [name for name in SHEET_DATA_FILES if not (data_dir / name).exists()]
         if missing_sheet_files:
             raise ValueError(f"artifacts/data is missing sheet-split files: {missing_sheet_files}")
+        for name in SHEET_DATA_FILES:
+            validate_sheet_data_file(data_dir / name)
         if plan_rows:
             declared_total = sum(
                 int(row.get("应生成用例数", "0"))
@@ -694,12 +887,28 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
                 raise ValueError(f"function case shards contain {case_count} cases, fewer than element-case-plan declared {declared_total}")
 
     if batch_rows:
-        first_status = batch_rows[0]
-        if phase in {"plan", "cases"}:
-            all_zero = all((first_status.get(field, "") or "0") == "0" for field in ["页面数", "元素总数", "功能用例数"])
-            if first_status.get("状态") == "待开始" or all_zero:
-                raise ValueError("batch-status.csv is still in the initial state; update page/element/case counts before continuing")
+        for index, status_row in enumerate(batch_rows, start=2):
+            if phase in {"plan", "risk", "cases"}:
+                if status_row.get("状态") == "待开始" or any(
+                    (status_row.get(field, "") or "0") == "0" for field in ["页面数", "元素总数"]
+                ):
+                    raise ValueError(
+                        f"batch-status.csv row {index} is still in the initial state; update page and element counts before continuing"
+                    )
+                batch_id = status_row.get("批次ID", "").strip()
+                scoped = [row for row in interactive_rows if not batch_id or row.get("批次ID", "").strip() == batch_id]
+                expected_pages = len({row.get("页面/入口", "").strip() for row in scoped if row.get("页面/入口", "").strip()})
+                expected_elements = len(scoped)
+                if int(status_row.get("页面数", "0")) != expected_pages or int(status_row.get("元素总数", "0")) != expected_elements:
+                    raise ValueError(
+                        f"batch-status.csv row {index} counts must match discovery facts: "
+                        f"页面数={expected_pages}, 元素总数={expected_elements}"
+                    )
+                if phase == "cases" and int(status_row.get("功能用例数", "0")) != case_count:
+                    raise ValueError(f"batch-status.csv row {index} 功能用例数 must match manifest cases: {case_count}")
 
+    if use_cache:
+        record_success(run_dir, phase, current_fingerprint, input_paths)
     print(f"OK: batch artifacts passed {phase} gate: {run_dir}")
 
 
@@ -759,8 +968,16 @@ def init_batch_run(
                 reader = csv.DictReader(stream)
                 current_headers = reader.fieldnames or []
                 current_rows = list(reader)
-            if current_headers != expected_risk_headers and "是否需要补充深探" in current_headers:
-                backup_path = risk_path.with_suffix(".pre-default-deep-dive.csv")
+            legacy_risk_headers = [
+                "批次ID", "风险ID", "风险/待确认问题", "用户确认结论", "处置策略", "是否需要补充深探", "补充深探目标",
+                "关联页面/入口", "关联元素名称/文案", "补充证据路径", "补充深探状态", "关联用例ID", "备注",
+            ]
+            if current_headers != expected_risk_headers and current_headers != legacy_risk_headers:
+                raise ValueError(f"Cannot automatically migrate unsupported risk-confirmation.csv header: {current_headers}")
+            migrate_structured_batch_ledgers(run_dir, templates_dir)
+            if current_headers == legacy_risk_headers:
+                timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+                backup_path = risk_path.with_name(f"risk-confirmation.pre-default-deep-dive-{timestamp}.csv")
                 shutil.copy2(risk_path, backup_path)
                 migrated_rows: list[dict[str, str]] = []
                 for row in current_rows:
@@ -783,10 +1000,15 @@ def init_batch_run(
                         }
                     )
                     migrated_rows.append(migrated)
-                with risk_path.open("w", encoding="utf-8-sig", newline="") as stream:
-                    writer = csv.DictWriter(stream, fieldnames=expected_risk_headers)
-                    writer.writeheader()
-                    writer.writerows(migrated_rows)
+                temporary = temporary_sibling(risk_path)
+                try:
+                    with temporary.open("w", encoding="utf-8-sig", newline="") as stream:
+                        writer = csv.DictWriter(stream, fieldnames=expected_risk_headers)
+                        writer.writeheader()
+                        writer.writerows(migrated_rows)
+                    os.replace(temporary, risk_path)
+                finally:
+                    temporary.unlink(missing_ok=True)
                 print(f"Migrated legacy risk-confirmation.csv and preserved backup: {backup_path}")
             print(f"Resumed existing batch run without changing ledgers: {run_dir}")
             return run_dir
@@ -866,6 +1088,29 @@ def init_batch_run(
         },
     )
     write_single_csv_row(
+        run_dir / "element-case-plan.csv",
+        {
+            "批次ID": batch_id,
+            "最小标题路径": leaf_path,
+            "操作类别": "其他",
+            "验证要求": "结果分支",
+            "数据策略": "无数据变更",
+            "执行状态": "不适用",
+            "是否必须真实执行": "是",
+            "是否涉及配置生效": "否",
+            "是否涉及CRUD闭环": "否",
+            "备注": "按当前独立叶子批次补充页面元素、结构化操作和计划用例ID",
+        },
+    )
+    write_single_csv_row(
+        run_dir / "test-data-lifecycle.csv",
+        {
+            "批次ID": batch_id,
+            "最小标题路径": leaf_path,
+            "备注": "仅记录当前独立叶子批次中本次创建或用户提供测试数据的逐修改项生命周期",
+        },
+    )
+    write_single_csv_row(
         run_dir / "risk-confirmation.csv",
         {
             "批次ID": batch_id,
@@ -876,7 +1121,7 @@ def init_batch_run(
             "处置策略": "待确认",
             "是否阻塞用例设计": "是",
             "确认状态": "待确认",
-            "备注": "没有风险时改为 RISK-NONE，并记录用户明确确认无新增风险",
+            "备注": "plan 通过后由模型归纳；没有不理解项时运行 record-risk-none，不伪造用户确认",
         },
     )
 

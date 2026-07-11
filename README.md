@@ -45,7 +45,7 @@
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-run `
   --project-root . `
-  --run-id <YYYYMMDD_任务标识> `
+  --run-id <YYYYMMDD_任务标识_BATCH-001> `
   --module-path "一级模块>二级菜单>三级菜单" `
   --batch-id BATCH-001
 ```
@@ -55,14 +55,14 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-deliverables `
   --project-root . `
-  --run-dir docs/test-assets/batch-runs/<任务> `
+  --run-dir docs/test-assets/batch-runs/<任务_BATCH-001> `
   --module-path "一级模块>二级菜单>三级菜单" `
   --batch-id BATCH-001
 ```
 
 如需排查组装问题，可先运行 `assemble-formal-workbook --run-dir <批次目录> --output <临时检查.xlsx>`；禁止在批次目录编写 `gen_excel.py` 之类脚本绕过标准组装器。
 
-已存在同名批次时，初始化命令默认拒绝覆盖。继续原批次时追加 `--resume`；旧批次缺少 `risk-confirmation.csv` 时会自动补齐待确认账本，要求完成风险处置与补充深探后再继续。确需重建时追加 `--force-reinitialize`，工具会先生成带时间戳的完整备份。`complete-deliverables` 只有在组装、正式文件、导入文件、资产同步和最终校验全部通过后才保留 `deliverables/` 输出；任一步失败都会恢复正式工作簿、导入文件、交付副本、批次账本和产品版图。
+一个 run-dir 只允许一个最小标题批次和一行 `batch-status.csv`；下一叶子批次必须使用新的 `<任务>_<BATCH-ID>` 目录。已存在同名批次时，初始化命令默认拒绝覆盖；继续原批次使用 `--resume`，重建使用 `--force-reinitialize`。`complete-deliverables` 只有在组装、资产同步和最终校验全部通过后才保留输出；失败会恢复工作簿、交付副本、账本、产品事实 catalog 和产品版图，成功后写入绑定 generation session 与文件 SHA256 的 `delivery-receipt.json`。
 
 旧资产升级或排障时可使用 `migrate-product-facts`、`validate-product-facts`、`rebuild-product-map`；正常 `sync-product-map` 会自动 upsert 模块 JSON 并重建 Excel 视图。
 
@@ -78,7 +78,9 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
 - 配置项保存类用例必须验证保存后回显和实际生效，不能只写点击保存或提示成功。
 - 生成功能测试用例分片前先运行 `prepare-function-case-generation` 清理旧分片和旧 manifest；功能用例按每 10 条一个 `artifacts/data/function_cases_part_001.json` 三位编号分片生成，并同步 `function_cases_manifest.json`。
 - 功能用例 JSON 只允许标准字段，禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected`、英文模板或泛化占位文本；Excel 数据按 Sheet 分文件输出，避免单个脚本或 JSON 承载过多内容。
-- 页面发现、元素计划、用例分片后分别运行 `validate-batch-artifacts --phase discovery|plan|cases`，门禁通过后再继续下一阶段。
+- 七个 Sheet JSON 必须使用目标 Sheet 的精确表头且至少有一个非空值；错误字段在 cases 门禁直接失败，不延迟到 Excel 组装阶段。
+- 先运行 `pipeline-status` 获取事实派生的下一步，再按 `discovery → plan → risk → cases → delivery` 逐阶段执行；风险只阻塞 risk/cases，不阻塞元素计划。没有模型不理解项时运行 `record-risk-none`，不伪造用户确认。
+- 日常修改运行 `scripts/validate-test-design.ps1 -Mode Fast`；提交、CI 和发布运行 `-Mode Full`。
 - `功能测试用例` 不写性能规格测试或 `DFP性能` 场景；性能、并发、大数据量、资源监控和极端压力进入 `性能测试设计`、风险或自动化建议。
 - 下拉必须实际选择代表项并记录联动；分页必须拆出每页条数、翻页/跳转、边界/禁用态；新增/编辑/删除必须绑定本次创建或用户提供的测试数据。
 - 页面实探必须记录所有可点击、可输入、可选择、可测试元素，并写入 `page-discovery.csv`、页面元素覆盖清单和产品版图。
@@ -105,7 +107,7 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 当前批次生成了 Python/JSON/CSV/Markdown/TXT 中间分片时，执行前先预检：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scripts.ps1 -Path docs/test-assets/batch-runs/<任务>/artifacts/scripts
+powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scripts.ps1 -Path docs/test-assets/batch-runs/<任务_BATCH-001>/artifacts/scripts
 ```
 
 ## 升级

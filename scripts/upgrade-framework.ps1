@@ -104,6 +104,31 @@ function Get-RelativePath {
   return $full.Substring($base.Length)
 }
 
+function Merge-LocalOverrideBlock {
+  param(
+    [string]$CurrentPath,
+    [string]$IncomingPath,
+    [string]$RelativePath
+  )
+  if (-not (Test-Path -LiteralPath $CurrentPath) -or -not (Test-Path -LiteralPath $IncomingPath)) {
+    return
+  }
+  $begin = "<!-- LOCAL-OVERRIDES:BEGIN -->"
+  $end = "<!-- LOCAL-OVERRIDES:END -->"
+  $current = [System.IO.File]::ReadAllText($CurrentPath)
+  $incoming = [System.IO.File]::ReadAllText($IncomingPath)
+  if (-not ($current.Contains($begin) -and $current.Contains($end))) {
+    throw "Existing $RelativePath has no LOCAL-OVERRIDES block. Upgrade stopped before overwrite; migrate local instructions into the marker block and retry."
+  }
+  if (-not ($incoming.Contains($begin) -and $incoming.Contains($end))) {
+    throw "Incoming $RelativePath has no LOCAL-OVERRIDES block; refusing to overwrite local instructions."
+  }
+  $pattern = "(?s)(?<=${begin}).*?(?=${end})"
+  $localBody = [System.Text.RegularExpressions.Regex]::Match($current, $pattern).Value
+  $merged = [System.Text.RegularExpressions.Regex]::Replace($incoming, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($match) $localBody }, 1)
+  [System.IO.File]::WriteAllText($IncomingPath, $merged, [System.Text.UTF8Encoding]::new($false))
+}
+
 function Restore-UpgradeSnapshot {
   param(
     [string]$RepositoryRoot,
@@ -216,6 +241,14 @@ try {
   }
 
   try {
+    $entryOverridePaths = @(
+      "AGENTS.md",
+      "CODEBUDDY.md",
+      ".codebuddy\skills\test-design\SKILL.md"
+    )
+    foreach ($relative in $entryOverridePaths) {
+      Merge-LocalOverrideBlock -CurrentPath (Join-Path $repoRoot $relative) -IncomingPath (Join-Path $extractRoot $relative) -RelativePath $relative
+    }
     foreach ($item in $packageFiles) {
       $target = Join-Path $repoRoot $item.Relative
       New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
@@ -229,7 +262,7 @@ try {
       }
     }
 
-    & powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\validate-test-design.ps1")
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\validate-test-design.ps1") -Mode Fast
     if ($LASTEXITCODE -ne 0) {
       throw "Framework validation failed with exit code $LASTEXITCODE."
     }

@@ -5,6 +5,7 @@ import csv
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -18,15 +19,51 @@ from openpyxl import load_workbook
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+FRAMEWORK_VERSION = next(
+    line.split("=", 1)[1].strip()
+    for line in (REPO_ROOT / "VERSION").read_text(encoding="utf-8-sig").splitlines()
+    if line.startswith("framework_version=")
+)
 MODULE_PATH = REPO_ROOT / "scripts" / "test_design_excel_tools.py"
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from test_design.contracts.sheet_data import SHEET_DATA_HEADERS
+
 SPEC = importlib.util.spec_from_file_location("test_design_excel_tools", MODULE_PATH)
 assert SPEC and SPEC.loader
 TOOLS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(TOOLS)
+SYNC_MODULE_PATH = REPO_ROOT / "scripts" / "sync-rule-entrypoints.py"
+SYNC_SPEC = importlib.util.spec_from_file_location("sync_rule_entrypoints", SYNC_MODULE_PATH)
+assert SYNC_SPEC and SYNC_SPEC.loader
+SYNC_TOOLS = importlib.util.module_from_spec(SYNC_SPEC)
+SYNC_SPEC.loader.exec_module(SYNC_TOOLS)
+RUN_VALIDATION_PATH = REPO_ROOT / "scripts" / "run-validation.py"
+RUN_VALIDATION_SPEC = importlib.util.spec_from_file_location("run_validation", RUN_VALIDATION_PATH)
+assert RUN_VALIDATION_SPEC and RUN_VALIDATION_SPEC.loader
+RUN_VALIDATION = importlib.util.module_from_spec(RUN_VALIDATION_SPEC)
+RUN_VALIDATION_SPEC.loader.exec_module(RUN_VALIDATION)
 
 
 class ArchitectureSafetyTests(unittest.TestCase):
+    def test_full_validation_accepts_platform_only_upgrade_skips_on_linux(self) -> None:
+        upgrade_test = mock.Mock()
+        upgrade_test.id.return_value = "suite.test_upgrade_failure_restores_framework_and_protected_assets"
+        result = mock.Mock(skipped=[(upgrade_test, "PowerShell integration runs on Windows")])
+        self.assertEqual([], RUN_VALIDATION.skipped_required_upgrade_tests(result, "posix"))
+        self.assertEqual([upgrade_test.id()], RUN_VALIDATION.skipped_required_upgrade_tests(result, "nt"))
+
+    def test_entry_contract_rejects_incomplete_runtime_graph(self) -> None:
+        with self.assertRaisesRegex(ValueError, "exactly codex and codebuddy"):
+            SYNC_TOOLS.validate_runtime_graphs({}, ".codebuddy/rules/test-design-rule.md", ".codebuddy/.rules/test-design-rule.mdc")
+
+    def test_generated_block_rewrite_preserves_local_override(self) -> None:
+        begin = "<!-- TEST-DESIGN-GENERATED:BEGIN -->"
+        end = "<!-- TEST-DESIGN-GENERATED:END -->"
+        source = f"head\n{begin}\nold\n{end}\n<!-- LOCAL-OVERRIDES:BEGIN -->\nLOCAL_KEEP\n<!-- LOCAL-OVERRIDES:END -->\n"
+        rewritten = SYNC_TOOLS.replace_generated_block(source, begin, end, "new")
+        self.assertIn("LOCAL_KEEP", rewritten)
+        self.assertIn(f"{begin}\nnew\n{end}", rewritten)
+
     def test_formal_assembler_populates_all_sheets_and_removes_template_examples(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
@@ -84,6 +121,8 @@ class ArchitectureSafetyTests(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         self.assertNotEqual(0, result.returncode)
         self.assertIn("formal-template example marker", result.stderr + result.stdout)
@@ -92,6 +131,203 @@ class ArchitectureSafetyTests(unittest.TestCase):
         source = REPO_ROOT / "docs" / "test-assets" / "batch-runs" / "templates"
         target = root / "docs" / "test-assets" / "batch-runs" / "templates"
         shutil.copytree(source, target)
+
+    def write_csv_rows(self, path: Path, rows: list[dict[str, str]]) -> None:
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            headers = next(csv.reader(stream))
+        with path.open("w", encoding="utf-8-sig", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=headers)
+            writer.writeheader()
+            for values in rows:
+                row = {header: "" for header in headers}
+                row.update(values)
+                writer.writerow(row)
+
+    def write_valid_sheet_files(self, data_dir: Path) -> None:
+        for filename, headers in SHEET_DATA_HEADERS.items():
+            row = {header: "正式数据" for header in headers}
+            (data_dir / filename).write_text(json.dumps([row], ensure_ascii=False), encoding="utf-8")
+
+    def make_valid_plan_run(self, project_root: Path, run_id: str = "risk-probe") -> Path:
+        run_dir = TOOLS.init_batch_run(project_root, run_id, "产品>模块>页面", "BATCH-001", "产品")
+        self.write_csv_rows(
+            run_dir / "page-discovery.csv",
+            [
+                {
+                    "批次ID": "BATCH-001",
+                    "最小标题路径": "模块>页面",
+                    "页面/入口": "风险页面",
+                    "元素名称/文案": "危险操作按钮",
+                    "元素类型": "按钮",
+                    "交互方式": "点击",
+                    "完整点击路径": "系统>模块>页面>危险操作按钮",
+                    "预期/观察行为": "打开确认弹窗",
+                    "适用DFX维度": "DFT功能",
+                    "适用DFX场景": "正向流程",
+                }
+            ],
+        )
+        self.write_csv_rows(
+            run_dir / "element-case-plan.csv",
+            [
+                {
+                    "批次ID": "BATCH-001",
+                    "最小标题路径": "模块>页面",
+                    "页面/入口": "风险页面",
+                    "功能点": "危险操作",
+                    "元素名称/文案": "危险操作按钮",
+                    "元素类型": "按钮",
+                    "交互方式": "点击",
+                    "适用DFX维度": "DFT功能",
+                    "适用DFX场景": "正向流程",
+                    "测试设计方向": "打开并关闭确认弹窗",
+                    "应生成用例数": "3",
+                    "计划用例ID": "TC-RISK-001,TC-RISK-002,TC-RISK-003",
+                    "操作类别": "查看",
+                    "验证要求": "结果分支",
+                    "数据策略": "无数据变更",
+                    "执行状态": "已完成",
+                    "是否必须真实执行": "是",
+                    "是否涉及配置生效": "否",
+                    "是否涉及CRUD闭环": "否",
+                }
+            ],
+        )
+        status_path = run_dir / "batch-status.csv"
+        with status_path.open("r", encoding="utf-8-sig", newline="") as stream:
+            status = next(csv.DictReader(stream))
+        status.update({"状态": "执行中", "页面数": "1", "元素总数": "1", "已覆盖元素数": "1"})
+        self.write_csv_rows(status_path, [status])
+        return run_dir
+
+    def function_case(self, case_id: str) -> dict[str, str]:
+        return {
+            "用例 ID": case_id,
+            "Story ID/需求 ID": "REQ-001",
+            "模块": "模块>页面",
+            "功能点": "危险操作",
+            "用例标题": f"危险操作-{case_id}确认弹窗",
+            "优先级": "P1",
+            "测试类型": "功能测试",
+            "DFX维度": "DFT功能",
+            "DFX场景": "正向流程",
+            "前置条件": "1. 已获得测试账号\n2. 系统服务可用",
+            "测试数据": "无数据变更",
+            "操作步骤": "1. 打开系统登录入口\n2. 登录后进入模块菜单\n3. 打开风险页面\n4. 点击危险操作按钮并关闭弹窗",
+            "预期结果": "1. 登录后显示模块导航\n2. 风险页面加载完成\n3. 确认弹窗关闭且数据不变",
+            "实际结果": "",
+            "执行状态": "未执行",
+            "是否适合自动化": "否",
+            "关联风险": "",
+            "备注": "",
+        }
+
+    def test_discovery_delete_requires_tagged_data_and_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = TOOLS.init_batch_run(project_root, "delete-evidence", "产品>模块>页面", "BATCH-001", "产品")
+            row = {
+                "批次ID": "BATCH-001",
+                "最小标题路径": "模块>页面",
+                "页面/入口": "列表页面",
+                "元素名称/文案": "删除按钮",
+                "元素类型": "按钮",
+                "交互方式": "点击删除并确认",
+                "完整点击路径": "系统>模块>列表页面>删除按钮>确认",
+                "预期/观察行为": "删除成功且记录不再显示",
+                "结果分支/后续状态": "列表刷新并持久化删除结果",
+                "适用DFX维度": "DFT功能",
+                "适用DFX场景": "正向流程",
+            }
+            self.write_csv_rows(run_dir / "page-discovery.csv", [row])
+            with self.assertRaisesRegex(ValueError, "tagged test data"):
+                TOOLS.validate_batch_artifacts(run_dir, "discovery")
+
+            row["测试数据来源"] = "本次创建 CODEX_TEST_DELETE_001"
+            self.write_csv_rows(run_dir / "page-discovery.csv", [row])
+            with self.assertRaisesRegex(ValueError, "existing evidence"):
+                TOOLS.validate_batch_artifacts(run_dir, "discovery")
+
+            evidence = run_dir / "artifacts" / "screenshots" / "delete-success.txt"
+            evidence.write_text("CODEX_TEST_DELETE_001 删除成功并从列表消失", encoding="utf-8")
+            row["证据路径"] = "artifacts/screenshots/delete-success.txt"
+            self.write_csv_rows(run_dir / "page-discovery.csv", [row])
+            TOOLS.validate_batch_artifacts(run_dir, "discovery")
+
+    def test_icon_interaction_and_structured_mutation_cannot_escape_plan_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "icon-mutation")
+            discovery_path = run_dir / "page-discovery.csv"
+            with discovery_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                discovery = next(csv.DictReader(stream))
+            discovery.update(
+                {
+                    "元素名称/文案": "缓存动作图标",
+                    "元素类型": "图标",
+                    "交互方式": "单击",
+                    "完整点击路径": "系统>模块>风险页面>缓存动作图标",
+                    "预期/观察行为": "操作成功并持久化",
+                    "结果分支/后续状态": "关联页面状态更新",
+                }
+            )
+            self.write_csv_rows(discovery_path, [discovery])
+
+            plan_path = run_dir / "element-case-plan.csv"
+            with plan_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                plan = next(csv.DictReader(stream))
+            ids = [f"TC-ICON-{index:03d}" for index in range(1, 6)]
+            plan.update(
+                {
+                    "功能点": "缓存动作",
+                    "元素名称/文案": "缓存动作图标",
+                    "元素类型": "图标",
+                    "交互方式": "单击",
+                    "测试设计方向": "验证状态更新、回显和实际生效",
+                    "应生成用例数": "5",
+                    "计划用例ID": ",".join(ids),
+                    "操作类别": "状态变更",
+                    "验证要求": "回显,持久化,实际生效",
+                    "数据策略": "本次创建测试数据",
+                    "执行状态": "已完成",
+                    "是否涉及CRUD闭环": "是",
+                }
+            )
+            self.write_csv_rows(plan_path, [plan])
+            lifecycle = {
+                "批次ID": "BATCH-001",
+                "最小标题路径": "模块>页面",
+                "关联页面/入口": "风险页面",
+                "修改项/元素": "缓存动作图标",
+                "测试数据ID/名称": "CODEX_TEST_ICON_001",
+                "数据类型": "状态变更测试数据",
+                "创建入口": "风险页面",
+                "创建结果": "创建成功",
+                "查看结果": "详情回显成功",
+                "编辑前值": "状态A",
+                "编辑后值": "状态B",
+                "编辑结果": "状态更新成功",
+                "保存后回显": "重新进入仍显示状态B",
+                "实际生效结果": "关联页面按状态B生效",
+                "清理状态": "待清理",
+            }
+            self.write_csv_rows(run_dir / "test-data-lifecycle.csv", [lifecycle])
+            TOOLS.validate_batch_artifacts(run_dir, "discovery")
+            with self.assertRaisesRegex(ValueError, "mutation discovery must use tagged test data"):
+                TOOLS.validate_batch_artifacts(run_dir, "plan")
+
+            evidence = run_dir / "artifacts/screenshots/icon-state.txt"
+            evidence.write_text("CODEX_TEST_ICON_001 状态更新成功并生效", encoding="utf-8")
+            discovery.update(
+                {
+                    "测试数据来源": "CODEX_TEST_ICON_001",
+                    "证据路径": "artifacts/screenshots/icon-state.txt",
+                }
+            )
+            self.write_csv_rows(discovery_path, [discovery])
+            TOOLS.validate_batch_artifacts(run_dir, "plan")
 
     def test_batch_init_requires_explicit_resume_and_preserves_ledgers(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -134,6 +370,39 @@ class ArchitectureSafetyTests(unittest.TestCase):
             self.assertEqual("0", reset["页面数"])
             self.assertEqual(1, len(list(run_dir.parent.glob("probe_backup_*"))))
 
+            custom = TOOLS.init_batch_run(project_root, "custom-id", "产品>模块>页面", "BATCH-007")
+            for filename in ["batch-status.csv", "page-discovery.csv", "element-case-plan.csv", "test-data-lifecycle.csv", "risk-confirmation.csv"]:
+                with (custom / filename).open("r", encoding="utf-8-sig", newline="") as stream:
+                    self.assertEqual("BATCH-007", next(csv.DictReader(stream))["批次ID"])
+
+    def test_batch_run_rejects_multiple_batch_rows_and_cross_batch_ledgers(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "single-batch-scope")
+            status_path = run_dir / "batch-status.csv"
+            with status_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                status = next(csv.DictReader(stream))
+            second = dict(status)
+            second.update({"批次ID": "BATCH-002", "最小标题路径": "模块>另一个页面"})
+            self.write_csv_rows(status_path, [status, second])
+            with self.assertRaisesRegex(ValueError, "exactly one batch-status.csv row"):
+                TOOLS.validate_batch_artifacts(run_dir, "discovery")
+
+            self.write_csv_rows(status_path, [status])
+            discovery_path = run_dir / "page-discovery.csv"
+            with discovery_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                discovery = next(csv.DictReader(stream))
+            discovery["批次ID"] = "BATCH-002"
+            self.write_csv_rows(discovery_path, [discovery])
+            with self.assertRaisesRegex(ValueError, "do not mix multiple leaf batches"):
+                TOOLS.validate_batch_artifacts(run_dir, "discovery")
+
+            discovery.update({"批次ID": "BATCH-001", "最小标题路径": "模块>另一个页面"})
+            self.write_csv_rows(discovery_path, [discovery])
+            with self.assertRaisesRegex(ValueError, "does not match the run leaf"):
+                TOOLS.validate_batch_artifacts(run_dir, "discovery")
+
     def test_resume_migrates_legacy_risk_driven_deep_dive_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             project_root = Path(value)
@@ -156,38 +425,562 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 row = next(csv.DictReader(stream))
             self.assertEqual("旧问题", row["模型不理解内容/待确认问题"])
             self.assertEqual("待确认", row["确认状态"])
-            self.assertTrue(risk_path.with_suffix(".pre-default-deep-dive.csv").exists())
+            self.assertEqual(1, len(list(run_dir.glob("risk-confirmation.pre-default-deep-dive-*.csv"))))
+
+    def test_resume_migrates_structured_plan_and_lifecycle_ledgers_with_backups(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = TOOLS.init_batch_run(project_root, "legacy-structured", "产品>模块>页面", "BATCH-001")
+            plan_path = run_dir / "element-case-plan.csv"
+            lifecycle_path = run_dir / "test-data-lifecycle.csv"
+            removed_plan = {"操作类别", "验证要求", "数据策略", "执行状态"}
+            removed_lifecycle = {"关联页面/入口", "修改项/元素", "保存后回显", "实际生效结果"}
+            with plan_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                old_plan_headers = [header for header in (reader.fieldnames or []) if header not in removed_plan]
+                old_plan = next(reader)
+            with plan_path.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=old_plan_headers)
+                writer.writeheader()
+                writer.writerow({header: old_plan.get(header, "") for header in old_plan_headers})
+            with lifecycle_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                old_lifecycle_headers = [header for header in (reader.fieldnames or []) if header not in removed_lifecycle]
+                old_lifecycle = next(reader)
+            with lifecycle_path.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=old_lifecycle_headers)
+                writer.writeheader()
+                writer.writerow({header: old_lifecycle.get(header, "") for header in old_lifecycle_headers})
+
+            TOOLS.init_batch_run(project_root, "legacy-structured", "产品>模块>页面", "BATCH-001", resume=True)
+
+            with plan_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                migrated_plan = next(csv.DictReader(stream))
+            self.assertIn(migrated_plan["操作类别"], {"查看", "其他"})
+            self.assertEqual("待执行", migrated_plan["执行状态"])
+            self.assertEqual(1, len(list(run_dir.glob("element-case-plan.pre-structured-ledger-*.csv"))))
+            self.assertEqual(1, len(list(run_dir.glob("test-data-lifecycle.pre-structured-ledger-*.csv"))))
+
+    def test_resume_rejects_unknown_damaged_ledger_header(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = TOOLS.init_batch_run(project_root, "damaged-header", "产品>模块>页面", "BATCH-001")
+            plan_path = run_dir / "element-case-plan.csv"
+            with plan_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                headers = [header for header in (reader.fieldnames or []) if header != "功能点"]
+                row = next(reader)
+            with plan_path.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=headers)
+                writer.writeheader()
+                writer.writerow({header: row.get(header, "") for header in headers})
+            with self.assertRaisesRegex(ValueError, "unsupported element-case-plan.csv header"):
+                TOOLS.init_batch_run(project_root, "damaged-header", "产品>模块>页面", "BATCH-001", resume=True)
 
     def test_plan_gate_requires_confirmed_model_uncertainty(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             project_root = Path(value)
             self.create_project_root(project_root)
-            run_dir = TOOLS.init_batch_run(project_root, "risk-probe", "产品>模块>页面", "BATCH-001")
+            run_dir = self.make_valid_plan_run(project_root)
+
+            TOOLS.validate_batch_artifacts(run_dir, "plan")
+            with self.assertRaisesRegex(ValueError, "risk-confirmation.csv is not ready"):
+                TOOLS.validate_batch_artifacts(run_dir, "risk")
+
+    def test_risk_none_is_system_recorded_and_prepare_cleans_all_stale_case_data(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "risk-none")
+            data_dir = run_dir / "artifacts" / "data"
+            stale_names = [
+                "function_cases_part_001.json", "function_cases_manifest.json", "overview.json", "requirements.json",
+                "scenarios.json", "performance.json", "risks.json", "automation.json", "page_elements.json",
+            ]
+            for name in stale_names:
+                (data_dir / name).write_text("{}", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "risk-confirmation.csv is not ready"):
+                TOOLS.prepare_function_case_generation(run_dir)
+            self.assertTrue(all((data_dir / name).exists() for name in stale_names))
+
+            TOOLS.record_no_model_uncertainty(run_dir)
+            with (run_dir / "risk-confirmation.csv").open("r", encoding="utf-8-sig", newline="") as stream:
+                row = next(csv.DictReader(stream))
+            self.assertEqual("RISK-NONE", row["风险ID"])
+            self.assertEqual("无需用户确认", row["确认状态"])
+            TOOLS.validate_batch_artifacts(run_dir, "risk")
+            TOOLS.prepare_function_case_generation(run_dir)
+            self.assertTrue(all(not (data_dir / name).exists() for name in stale_names))
+
+    def test_pipeline_status_derives_risk_assessment_without_manual_status(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "pipeline")
+            status = TOOLS.derive_pipeline_status(run_dir)
+            self.assertEqual("RISK_ASSESSMENT_REQUIRED", status["state"])
+            self.assertIn("record-risk-none", status["command"])
+            TOOLS.record_no_model_uncertainty(run_dir)
+            status = TOOLS.derive_pipeline_status(run_dir)
+            self.assertEqual("CASE_PREPARATION_REQUIRED", status["state"])
+            TOOLS.prepare_function_case_generation(run_dir)
+            status = TOOLS.derive_pipeline_status(run_dir)
+            self.assertEqual("CASE_GENERATION_REQUIRED", status["state"])
+
+    def test_plan_uses_page_scoped_element_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "page-scoped")
+            discovery_path = run_dir / "page-discovery.csv"
+            with discovery_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                first = next(csv.DictReader(stream))
+            second = dict(first)
+            second["页面/入口"] = "另一个页面"
+            self.write_csv_rows(discovery_path, [first, second])
+            with self.assertRaisesRegex(ValueError, "missing interactive page elements"):
+                TOOLS.validate_batch_artifacts(run_dir, "plan")
+
+    def test_plan_cache_invalidates_when_structured_plan_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "cache")
+            TOOLS.validate_batch_artifacts(run_dir, "plan", use_cache=True)
+            plan_path = run_dir / "element-case-plan.csv"
+            with plan_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                row = next(csv.DictReader(stream))
+            row["执行状态"] = "待执行"
+            self.write_csv_rows(plan_path, [row])
+            with self.assertRaisesRegex(ValueError, "执行状态=已完成"):
+                TOOLS.validate_batch_artifacts(run_dir, "plan", use_cache=True)
+
+    def test_discovery_cache_tracks_project_relative_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = TOOLS.init_batch_run(project_root, "evidence", "产品>模块>页面", "BATCH-001", "产品")
+            evidence = run_dir / "artifacts" / "screenshots" / "proof.txt"
+            evidence.write_text("proof", encoding="utf-8")
+            relative_evidence = evidence.relative_to(project_root).as_posix()
+            self.write_csv_rows(
+                run_dir / "page-discovery.csv",
+                [
+                    {
+                        "批次ID": "BATCH-001",
+                        "最小标题路径": "模块>页面",
+                        "页面/入口": "编辑页面",
+                        "元素名称/文案": "保存按钮",
+                        "元素类型": "按钮",
+                        "交互方式": "点击",
+                        "适用DFX维度": "DFT功能",
+                        "适用DFX场景": "正向流程",
+                        "结果分支/后续状态": "保存成功并返回详情",
+                        "完整点击路径": "系统>模块>编辑页面>保存按钮",
+                        "预期/观察行为": "保存成功并持久化回显",
+                        "测试数据来源": "AI_TEST_EVIDENCE_001",
+                        "证据路径": relative_evidence,
+                    }
+                ],
+            )
+            TOOLS.validate_batch_artifacts(run_dir, "discovery", use_cache=True)
+            TOOLS.validate_batch_artifacts(run_dir, "discovery", use_cache=True)
+            evidence.unlink()
+            with self.assertRaisesRegex(ValueError, "reference existing evidence"):
+                TOOLS.validate_batch_artifacts(run_dir, "discovery", use_cache=True)
+
+    def test_risk_none_cannot_be_mixed_with_real_uncertainty(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "risk-exclusive")
+            TOOLS.record_no_model_uncertainty(run_dir)
+            risk_path = run_dir / "risk-confirmation.csv"
+            with risk_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                none_row = next(csv.DictReader(stream))
+            real_row = dict(none_row)
+            real_row.update(
+                {
+                    "风险ID": "RISK-001",
+                    "模型不理解内容/待确认问题": "审批是否异步",
+                    "用户确认结论": "是",
+                    "确认状态": "已确认",
+                }
+            )
+            self.write_csv_rows(risk_path, [none_row, real_row])
+            with self.assertRaisesRegex(ValueError, "RISK-NONE must be the only"):
+                TOOLS.validate_batch_artifacts(run_dir, "risk")
+
+    def test_risk_none_requires_explicit_non_user_confirmation_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "risk-none-semantics")
+            TOOLS.record_no_model_uncertainty(run_dir)
+            risk_path = run_dir / "risk-confirmation.csv"
+            with risk_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                row = next(csv.DictReader(stream))
+            row["用户确认结论"] = "待用户确认"
+            self.write_csv_rows(risk_path, [row])
+            with self.assertRaisesRegex(ValueError, "用户确认结论=无需用户确认"):
+                TOOLS.validate_batch_artifacts(run_dir, "risk")
+
+            row["用户确认结论"] = "无需用户确认"
+            row["确认状态"] = "已确认"
+            self.write_csv_rows(risk_path, [row])
+            with self.assertRaisesRegex(ValueError, "确认状态=无需用户确认"):
+                TOOLS.validate_batch_artifacts(run_dir, "risk")
+
+    def test_record_risk_none_refuses_to_overwrite_real_uncertainty(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "risk-overwrite")
+            risk_path = run_dir / "risk-confirmation.csv"
+            real = {
+                "批次ID": "BATCH-001",
+                "风险ID": "RISK-001",
+                "模型不理解内容/待确认问题": "审批是否异步",
+                "已完成深探依据": "页面未展示审批规则",
+                "用户确认结论": "待用户确认",
+                "处置策略": "待确认",
+                "是否阻塞用例设计": "是",
+                "确认状态": "待确认",
+            }
+            self.write_csv_rows(risk_path, [real])
+            with self.assertRaisesRegex(ValueError, "refuses to overwrite"):
+                TOOLS.record_no_model_uncertainty(run_dir)
+            with risk_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                self.assertEqual("RISK-001", next(csv.DictReader(stream))["风险ID"])
+
+    def test_pipeline_rejects_confirmed_but_incomplete_risk_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "risk-incomplete")
+            self.write_csv_rows(
+                run_dir / "risk-confirmation.csv",
+                [
+                    {
+                        "批次ID": "BATCH-001",
+                        "风险ID": "RISK-001",
+                        "用户确认结论": "异步审批",
+                        "是否阻塞用例设计": "否",
+                        "确认状态": "已确认",
+                    }
+                ],
+            )
+            status = TOOLS.derive_pipeline_status(run_dir)
+            self.assertEqual("RISK_LEDGER_REPAIR_REQUIRED", status["state"])
+
+    def test_generation_session_becomes_stale_when_plan_semantics_change(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "stale-session")
+            skill = project_root / ".codebuddy/skills/test-design/SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text("skill-version-1", encoding="utf-8")
+            catalog_index = project_root / "docs/test-assets/catalog/index.json"
+            catalog_index.parent.mkdir(parents=True)
+            catalog_index.write_text('{"version":1}', encoding="utf-8")
+            TOOLS.record_no_model_uncertainty(run_dir)
+            TOOLS.prepare_function_case_generation(run_dir)
+            plan_path = run_dir / "element-case-plan.csv"
+            with plan_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                plan = next(csv.DictReader(stream))
+            plan["测试设计方向"] += "并验证审计记录"
+            self.write_csv_rows(plan_path, [plan])
+            status = TOOLS.derive_pipeline_status(run_dir)
+            self.assertEqual("CASE_PREPARATION_REQUIRED", status["state"])
+
+            TOOLS.prepare_function_case_generation(run_dir)
+            skill.write_text("skill-version-2", encoding="utf-8")
+            self.assertFalse(TOOLS.generation_session_is_current(run_dir))
+
+            TOOLS.prepare_function_case_generation(run_dir)
+            catalog_index.write_text('{"version":2}', encoding="utf-8")
+            self.assertFalse(TOOLS.generation_session_is_current(run_dir))
+
+    def test_generation_result_backfills_keep_session_current_through_complete_status(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "result-backfill")
+            product_map = project_root / "docs/test-assets/product-map.xlsx"
+            product_map.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO_ROOT / "docs/test-assets/product-map.xlsx", product_map)
+            ids = ["TC-RISK-001", "TC-RISK-002", "TC-RISK-003"]
+            TOOLS.record_no_model_uncertainty(run_dir)
+            TOOLS.prepare_function_case_generation(run_dir)
+
+            plan_path = run_dir / "element-case-plan.csv"
+            with plan_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                plan = next(csv.DictReader(stream))
+            plan["实际用例ID"] = ",".join(ids)
+            self.write_csv_rows(plan_path, [plan])
 
             discovery_path = run_dir / "page-discovery.csv"
             with discovery_path.open("r", encoding="utf-8-sig", newline="") as stream:
-                reader = csv.DictReader(stream)
-                headers = reader.fieldnames or []
-            discovery = {header: "" for header in headers}
-            discovery.update(
+                discovery = next(csv.DictReader(stream))
+            discovery.update({"是否已生成用例": "是", "关联用例ID": ",".join(ids), "覆盖状态": "已覆盖"})
+            self.write_csv_rows(discovery_path, [discovery])
+
+            lifecycle_path = run_dir / "test-data-lifecycle.csv"
+            with lifecycle_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                lifecycle = next(csv.DictReader(stream))
+            lifecycle["创建步骤关联用例"] = ids[0]
+            self.write_csv_rows(lifecycle_path, [lifecycle])
+
+            status_path = run_dir / "batch-status.csv"
+            with status_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                status = next(csv.DictReader(stream))
+            status["功能用例数"] = "3"
+            self.write_csv_rows(status_path, [status])
+
+            data_dir = run_dir / "artifacts" / "data"
+            session = json.loads((data_dir / "generation-session.json").read_text(encoding="utf-8"))
+            (data_dir / "function_cases_part_001.json").write_text(
+                json.dumps([self.function_case(case_id) for case_id in ids], ensure_ascii=False), encoding="utf-8"
+            )
+            (data_dir / "function_cases_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "part_size": 10,
+                        "total_cases": 3,
+                        "parts": ["function_cases_part_001.json"],
+                        "generation_session_id": session["generation_session_id"],
+                        "source_fingerprint": session["source_fingerprint"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            self.write_valid_sheet_files(data_dir)
+            TOOLS.validate_batch_artifacts(run_dir, "cases")
+
+            formal_rel = Path("docs/test-assets/modules/模块_页面_测试设计.xlsx")
+            import_rel = Path("docs/test-assets/imports/模块_页面_导入用例.xlsx")
+            published = [
+                project_root / formal_rel,
+                project_root / import_rel,
+                project_root / "docs/test-design/current" / formal_rel.name,
+                project_root / "docs/test-design/deliverables" / formal_rel.name,
+                project_root / "docs/test-design/deliverables" / import_rel.name,
+            ]
+            formal_template = REPO_ROOT / "docs/test-design/codebuddy-test-design-template.xlsx"
+            import_template = REPO_ROOT / "docs/test-design/测试用例模板.xlsx"
+            for index, path in enumerate(published):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(import_template if index in {1, 4} else formal_template, path)
+            synced_map = load_workbook(product_map)
+            synced_map["产品模块地图"]["A2"] = "交付阶段同步后的产品事实"
+            synced_map.save(product_map)
+            TOOLS.write_delivery_receipt(
+                project_root,
+                status_path,
+                published,
+                product_map,
+                discovery_path,
+                "模块>页面",
+                None,
+            )
+            status.update(
                 {
-                    "批次ID": "BATCH-001",
-                    "最小标题路径": "模块>页面",
-                    "页面/入口": "风险页面",
-                    "元素名称/文案": "危险操作按钮",
-                    "元素类型": "按钮",
-                    "交互方式": "点击",
-                    "完整点击路径": "系统>模块>页面>危险操作按钮",
-                    "预期/观察行为": "打开确认弹窗",
+                    "状态": "已完成",
+                    "归档路径": formal_rel.as_posix(),
+                    "导入文件路径": import_rel.as_posix(),
+                    "导入文件已生成": "是",
+                    "产品版图已更新": "是",
+                    "覆盖质量自检": "通过",
                 }
             )
-            with discovery_path.open("w", encoding="utf-8-sig", newline="") as stream:
-                writer = csv.DictWriter(stream, fieldnames=headers)
-                writer.writeheader()
-                writer.writerow(discovery)
+            self.write_csv_rows(status_path, [status])
+            self.assertEqual("COMPLETE", TOOLS.derive_pipeline_status(run_dir)["state"])
 
-            with self.assertRaisesRegex(ValueError, "pending user confirmation"):
+            delivered_map_bytes = product_map.read_bytes()
+            externally_changed_map = load_workbook(product_map)
+            externally_changed_map["产品模块地图"]["A2"] = "交付后出现的新产品事实"
+            externally_changed_map.save(product_map)
+            self.assertFalse(TOOLS.generation_session_is_current(run_dir))
+            with self.assertRaisesRegex(ValueError, "catalog source fingerprint is stale"):
+                TOOLS.validate_batch_artifacts(run_dir, "cases", use_cache=True)
+            self.assertEqual("CASE_PREPARATION_REQUIRED", TOOLS.derive_pipeline_status(run_dir)["state"])
+            product_map.write_bytes(delivered_map_bytes)
+            self.assertEqual("COMPLETE", TOOLS.derive_pipeline_status(run_dir)["state"])
+
+            published[0].write_bytes(b"tampered")
+            tampered = TOOLS.derive_pipeline_status(run_dir)
+            self.assertEqual("DELIVERY_REQUIRED", tampered["state"])
+            self.assertIn("changed since validation", tampered["reasons"][0])
+
+    def test_pipeline_does_not_trust_manual_complete_flags_without_files(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "false-complete")
+            TOOLS.record_no_model_uncertainty(run_dir)
+            (run_dir / "artifacts" / "data" / "function_cases_manifest.json").write_text("{}", encoding="utf-8")
+            status_path = run_dir / "batch-status.csv"
+            with status_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                status_row = next(csv.DictReader(stream))
+            status_row.update({"状态": "已完成", "导入文件已生成": "是", "产品版图已更新": "是", "覆盖质量自检": "通过"})
+            self.write_csv_rows(status_path, [status_row])
+            with mock.patch("test_design.pipeline.generation_session_is_current", return_value=True), mock.patch(
+                "test_design.pipeline.validate_batch_artifacts", return_value=None
+            ):
+                status = TOOLS.derive_pipeline_status(run_dir)
+            self.assertEqual("DELIVERY_REQUIRED", status["state"])
+
+    def test_lifecycle_requires_evidence_for_each_editable_item(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "lifecycle")
+            plan_path = run_dir / "element-case-plan.csv"
+            with plan_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                plan = next(csv.DictReader(stream))
+            plan.update(
+                {
+                    "操作类别": "编辑",
+                    "验证要求": "回显,持久化,实际生效",
+                    "数据策略": "本次创建测试数据",
+                    "是否涉及CRUD闭环": "是",
+                    "应生成用例数": "5",
+                    "计划用例ID": ",".join(f"TC-EDIT-{index:03d}" for index in range(1, 6)),
+                }
+            )
+            self.write_csv_rows(plan_path, [plan])
+            discovery_path = run_dir / "page-discovery.csv"
+            with discovery_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                discovery = next(csv.DictReader(stream))
+            evidence = run_dir / "artifacts/screenshots/edit-success.txt"
+            evidence.write_text("AI_TEST_EDIT_001 修改后回显并实际生效", encoding="utf-8")
+            discovery.update(
+                {
+                    "测试数据来源": "AI_TEST_EDIT_001",
+                    "预期/观察行为": "编辑成功并持久化回显",
+                    "结果分支/后续状态": "依赖功能按编辑后值实际生效",
+                    "证据路径": "artifacts/screenshots/edit-success.txt",
+                }
+            )
+            self.write_csv_rows(discovery_path, [discovery])
+            lifecycle_path = run_dir / "test-data-lifecycle.csv"
+            lifecycle = {
+                "批次ID": "BATCH-001",
+                "最小标题路径": "模块>页面",
+                "关联页面/入口": "错误页面",
+                "修改项/元素": "危险操作按钮",
+                "测试数据ID/名称": "AI_TEST_EDIT_001",
+                "数据类型": "编辑测试数据",
+                "创建入口": "风险页面",
+                "创建结果": "创建成功",
+                "查看结果": "详情回显成功",
+                "编辑前值": "关闭",
+                "编辑后值": "开启",
+                "编辑结果": "保存成功",
+                "保存后回显": "重新进入页面显示开启",
+                "实际生效结果": "关联功能已按开启状态执行",
+                "配置生效验证点": "重新进入页面检查回显并调用关联功能验证生效",
+                "清理状态": "待清理",
+            }
+            self.write_csv_rows(lifecycle_path, [lifecycle])
+            with self.assertRaisesRegex(ValueError, "record every mutating item separately"):
                 TOOLS.validate_batch_artifacts(run_dir, "plan")
+            lifecycle["关联页面/入口"] = "风险页面"
+            self.write_csv_rows(lifecycle_path, [lifecycle])
+            TOOLS.validate_batch_artifacts(run_dir, "plan")
+
+    def test_cases_gate_rejects_duplicate_ids_across_shards(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "duplicate-cases")
+            plan_path = run_dir / "element-case-plan.csv"
+            with plan_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                plan = next(csv.DictReader(stream))
+            ids = [f"TC-RISK-{index:03d}" for index in range(1, 11)]
+            plan.update({"应生成用例数": "10", "计划用例ID": ",".join(ids), "实际用例ID": ",".join(ids)})
+            self.write_csv_rows(plan_path, [plan])
+            TOOLS.record_no_model_uncertainty(run_dir)
+            TOOLS.prepare_function_case_generation(run_dir)
+            data_dir = run_dir / "artifacts" / "data"
+            session = json.loads((data_dir / "generation-session.json").read_text(encoding="utf-8"))
+            (data_dir / "function_cases_part_001.json").write_text(
+                json.dumps([self.function_case(case_id) for case_id in ids], ensure_ascii=False), encoding="utf-8"
+            )
+            (data_dir / "function_cases_part_002.json").write_text(
+                json.dumps([self.function_case(ids[0])], ensure_ascii=False), encoding="utf-8"
+            )
+            (data_dir / "function_cases_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "part_size": 10,
+                        "total_cases": 11,
+                        "parts": ["function_cases_part_001.json", "function_cases_part_002.json"],
+                        "generation_session_id": session["generation_session_id"],
+                        "source_fingerprint": session["source_fingerprint"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            self.write_valid_sheet_files(data_dir)
+            with self.assertRaisesRegex(ValueError, "unique across all manifest shards"):
+                TOOLS.validate_batch_artifacts(run_dir, "cases")
+
+    def test_cases_gate_rejects_empty_sheet_json_before_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "empty-sheet")
+            ids = ["TC-RISK-001", "TC-RISK-002", "TC-RISK-003"]
+            plan_path = run_dir / "element-case-plan.csv"
+            with plan_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                plan = next(csv.DictReader(stream))
+            plan["实际用例ID"] = ",".join(ids)
+            self.write_csv_rows(plan_path, [plan])
+            status_path = run_dir / "batch-status.csv"
+            with status_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                status = next(csv.DictReader(stream))
+            status["功能用例数"] = "3"
+            self.write_csv_rows(status_path, [status])
+            TOOLS.record_no_model_uncertainty(run_dir)
+            TOOLS.prepare_function_case_generation(run_dir)
+            data_dir = run_dir / "artifacts" / "data"
+            session = json.loads((data_dir / "generation-session.json").read_text(encoding="utf-8"))
+            (data_dir / "function_cases_part_001.json").write_text(
+                json.dumps([self.function_case(case_id) for case_id in ids], ensure_ascii=False), encoding="utf-8"
+            )
+            manifest_payload = {
+                "part_size": 10,
+                "total_cases": 3,
+                "parts": ["function_cases_part_001.json"],
+                "generation_session_id": session["generation_session_id"],
+                "source_fingerprint": session["source_fingerprint"],
+            }
+            manifest_path = data_dir / "function_cases_manifest.json"
+            manifest_path.write_text(
+                json.dumps(["function_cases_part_001.json"], ensure_ascii=False), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "must be a JSON object"):
+                TOOLS.validate_batch_artifacts(run_dir, "cases")
+            manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False), encoding="utf-8")
+            self.write_valid_sheet_files(data_dir)
+            (data_dir / "overview.json").write_text('[{"错误字段":"正式数据"}]', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "exact target Sheet headers"):
+                TOOLS.validate_batch_artifacts(run_dir, "cases")
+            empty_overview = {header: "" for header in SHEET_DATA_HEADERS["overview.json"]}
+            (data_dir / "overview.json").write_text(json.dumps([empty_overview], ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "at least one non-empty"):
+                TOOLS.validate_batch_artifacts(run_dir, "cases")
+            self.write_valid_sheet_files(data_dir)
+            (data_dir / "risks.json").write_text("[]", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "non-empty row list"):
+                TOOLS.validate_batch_artifacts(run_dir, "cases")
 
             risk_path = run_dir / "risk-confirmation.csv"
             with risk_path.open("r", encoding="utf-8-sig", newline="") as stream:
@@ -206,14 +999,15 @@ class ArchitectureSafetyTests(unittest.TestCase):
                     "关联页面/入口": "风险页面",
                     "关联元素名称/文案": "危险操作按钮",
                     "确认状态": "待确认",
+                    "关联用例ID": "TC-RISK-001",
                 }
             )
             with risk_path.open("w", encoding="utf-8-sig", newline="") as stream:
                 writer = csv.DictWriter(stream, fieldnames=risk_headers)
                 writer.writeheader()
                 writer.writerow(risk)
-            with self.assertRaisesRegex(ValueError, "确认状态 must be 已确认"):
-                TOOLS.validate_batch_artifacts(run_dir, "plan")
+            with self.assertRaisesRegex(ValueError, "risk-confirmation.csv is not ready"):
+                TOOLS.validate_batch_artifacts(run_dir, "risk")
 
     def test_delivery_rollback_restores_existing_and_removes_new_files(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -266,6 +1060,73 @@ class ArchitectureSafetyTests(unittest.TestCase):
             lock_path = project_root / ".test-design-locks" / "delivery.lock"
             with TOOLS.exclusive_process_lock(lock_path):
                 self.assertTrue(lock_path.exists())
+
+    def test_complete_delivery_rejects_module_path_outside_run_leaf(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            self.create_project_root(project_root)
+            run_dir = self.make_valid_plan_run(project_root, "delivery-scope")
+            working = project_root / "working"
+            working.mkdir()
+            formal = working / "formal.xlsx"
+            import_template = working / "import-template.xlsx"
+            shutil.copy2(REPO_ROOT / "docs/test-design/codebuddy-test-design-template.xlsx", formal)
+            shutil.copy2(REPO_ROOT / "docs/test-design/测试用例模板.xlsx", import_template)
+            with self.assertRaisesRegex(ValueError, "do not deliver one leaf batch under another module path"):
+                TOOLS.complete_deliverables(
+                    project_root,
+                    formal,
+                    import_template,
+                    "另一个模块>页面",
+                    batch_status=run_dir / "batch-status.csv",
+                    batch_id="BATCH-001",
+                )
+            self.assertFalse((project_root / "docs/test-design/deliverables/另一个模块_页面_测试设计.xlsx").exists())
+
+    def test_complete_delivery_rolls_back_product_catalog_after_post_sync_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            project_root = Path(value)
+            working = project_root / "working"
+            working.mkdir(parents=True)
+            formal = working / "formal.xlsx"
+            import_template = working / "import-template.xlsx"
+            product_map = project_root / "docs/test-assets/product-map.xlsx"
+            product_map.parent.mkdir(parents=True)
+            discovery = working / "page-discovery.csv"
+            shutil.copy2(REPO_ROOT / "docs/test-design/codebuddy-test-design-template.xlsx", formal)
+            shutil.copy2(REPO_ROOT / "docs/test-design/测试用例模板.xlsx", import_template)
+            shutil.copy2(REPO_ROOT / "docs/test-assets/product-map.xlsx", product_map)
+            before_product_map = product_map.read_bytes()
+            template = REPO_ROOT / "docs/test-assets/batch-runs/templates/page-discovery-template.csv"
+            shutil.copy2(template, discovery)
+            self.write_csv_rows(
+                discovery,
+                [
+                    {
+                        "批次ID": "BATCH-001",
+                        "最小标题路径": "模块>页面",
+                        "页面/入口": "页面",
+                        "元素名称/文案": "查询按钮",
+                        "元素类型": "按钮",
+                        "交互方式": "点击",
+                        "覆盖状态": "已覆盖",
+                    }
+                ],
+            )
+            catalog_paths = TOOLS.product_map_mutable_paths(product_map, "产品>模块>页面")
+            with mock.patch.object(TOOLS, "run_python_script", side_effect=RuntimeError("post-sync validation failed")):
+                with self.assertRaisesRegex(RuntimeError, "post-sync validation failed"):
+                    TOOLS.complete_deliverables(
+                        project_root,
+                        formal,
+                        import_template,
+                        "产品>模块>页面",
+                        product_map=product_map,
+                        page_discovery=discovery,
+                    )
+            self.assertEqual(before_product_map, product_map.read_bytes())
+            self.assertTrue(all(not path.exists() for path in catalog_paths if path != product_map))
+            self.assertFalse((project_root / "docs/test-assets/modules/产品_模块_页面_测试设计.xlsx").exists())
 
     def test_product_map_sync_uses_current_schema_and_real_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -464,11 +1325,12 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(0, package_result.returncode, package_result.stderr)
-            valid_package = sandbox / "dist-test" / "framework-upgrade-2.0.0.zip"
+            valid_package = sandbox / "dist-test" / f"framework-upgrade-{FRAMEWORK_VERSION}.zip"
             extracted = root / "broken-package"
             with zipfile.ZipFile(valid_package) as archive:
                 archive.extractall(extracted)
-            (extracted / "README.md").write_text("BROKEN UPGRADE PACKAGE\n", encoding="utf-8")
+            canonical_rule = Path(".codebuddy") / "rules" / "test-design-rule.md"
+            (extracted / canonical_rule).write_text("BROKEN UPGRADE PACKAGE\n", encoding="utf-8")
             probe_file = extracted / "tests" / "new-file-probe.txt"
             probe_file.parent.mkdir(parents=True, exist_ok=True)
             probe_file.write_text("must be removed by rollback", encoding="utf-8")
@@ -478,7 +1340,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
                     if path.is_file():
                         archive.write(path, path.relative_to(extracted))
 
-            readme_before = (sandbox / "README.md").read_bytes()
+            rule_before = (sandbox / canonical_rule).read_bytes()
             product_map_before = (sandbox / "docs" / "test-assets" / "product-map.xlsx").read_bytes()
             upgrade_result = subprocess.run(
                 [
@@ -498,7 +1360,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
             )
             self.assertNotEqual(0, upgrade_result.returncode)
             self.assertIn("restoring framework and protected assets", upgrade_result.stderr + upgrade_result.stdout)
-            self.assertEqual(readme_before, (sandbox / "README.md").read_bytes())
+            self.assertEqual(rule_before, (sandbox / canonical_rule).read_bytes())
             self.assertEqual(product_map_before, (sandbox / "docs" / "test-assets" / "product-map.xlsx").read_bytes())
             self.assertFalse((sandbox / "tests" / "new-file-probe.txt").exists())
 
@@ -530,7 +1392,39 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(0, package_result.returncode, package_result.stderr)
-            package = sandbox / "dist-test" / "framework-upgrade-2.0.0.zip"
+            package = sandbox / "dist-test" / f"framework-upgrade-{FRAMEWORK_VERSION}.zip"
+
+            agents_path = sandbox / "AGENTS.md"
+            agents_text = agents_path.read_text(encoding="utf-8")
+            legacy_entry = "# Legacy local instructions\n\n- MUST_NOT_BE_OVERWRITTEN\n"
+            agents_path.write_text(legacy_entry, encoding="utf-8")
+            marker_result = subprocess.run(
+                [
+                    "powershell",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(sandbox / "scripts" / "upgrade-framework.ps1"),
+                    "-PackagePath",
+                    str(package),
+                ],
+                cwd=sandbox,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(0, marker_result.returncode)
+            self.assertIn("no LOCAL-OVERRIDES block", marker_result.stderr + marker_result.stdout)
+            self.assertEqual(legacy_entry, agents_path.read_text(encoding="utf-8"))
+            agents_path.write_text(agents_text, encoding="utf-8")
+            local_override = "\n- LOCAL_OVERRIDE_MUST_SURVIVE\n"
+            agents_text = re.sub(
+                r"(?s)(?<=<!-- LOCAL-OVERRIDES:BEGIN -->).*?(?=<!-- LOCAL-OVERRIDES:END -->)",
+                local_override,
+                agents_text,
+            )
+            agents_path.write_text(agents_text, encoding="utf-8")
 
             (sandbox / "VERSION").write_text(
                 "framework_version=1.2.0\nasset_schema_version=1.0.0\n",
@@ -582,6 +1476,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
             legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
             migrated = legacy["facts"]["产品模块地图"]
             self.assertEqual("迁移产品", migrated[0]["data"]["产品/系统"])
+            self.assertIn("LOCAL_OVERRIDE_MUST_SURVIVE", agents_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

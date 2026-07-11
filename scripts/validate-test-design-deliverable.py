@@ -7,10 +7,18 @@ import posixpath
 import re
 import sys
 import zipfile
+from functools import lru_cache
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from test_design.fact_store import validate_catalog
+from test_design.contracts.function_cases import (
+    FUNCTION_CASE_FORBIDDEN_FIELDS,
+    FUNCTION_CASE_PART_RE,
+    FUNCTION_CASE_REQUIRED_FIELDS,
+    MAX_FUNCTION_CASES_PER_PART,
+)
+from test_design.validators.batch_ledgers import validate_lifecycle_rows, validate_operation_plan_rows
 
 NS = {
     "x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -182,6 +190,17 @@ MUTATION_COMMIT_MARKERS = [
     "删除成功",
     "编辑成功",
     "修改成功",
+    "配置成功",
+    "启用成功",
+    "停用成功",
+    "发布成功",
+    "下线成功",
+    "审批成功",
+    "重置成功",
+    "撤销成功",
+    "归档成功",
+    "清空成功",
+    "解绑成功",
     "列表刷新",
     "落库",
     "状态变更",
@@ -271,6 +290,10 @@ ELEMENT_CASE_PLAN_EXPECTED_HEADERS = [
     "应生成用例数",
     "计划用例ID",
     "实际用例ID",
+    "操作类别",
+    "验证要求",
+    "数据策略",
+    "执行状态",
     "是否必须真实执行",
     "是否涉及配置生效",
     "是否涉及CRUD闭环",
@@ -281,6 +304,8 @@ ELEMENT_CASE_PLAN_EXPECTED_HEADERS = [
 TEST_DATA_LIFECYCLE_EXPECTED_HEADERS = [
     "批次ID",
     "最小标题路径",
+    "关联页面/入口",
+    "修改项/元素",
     "测试数据ID/名称",
     "数据类型",
     "创建入口",
@@ -290,6 +315,8 @@ TEST_DATA_LIFECYCLE_EXPECTED_HEADERS = [
     "编辑前值",
     "编辑后值",
     "编辑结果",
+    "保存后回显",
+    "实际生效结果",
     "配置生效验证点",
     "删除取消结果",
     "删除确认结果",
@@ -592,6 +619,7 @@ def validate_table_ranges(path: Path, sheet_names: list[str] | None = None) -> N
                 )
 
 
+@lru_cache(maxsize=None)
 def sheet_rows(path: Path, sheet_name: str) -> list[list[str]]:
     with zipfile.ZipFile(path) as zf:
         paths = workbook_sheet_paths(zf)
@@ -611,6 +639,7 @@ def sheet_rows(path: Path, sheet_name: str) -> list[list[str]]:
     return rows
 
 
+@lru_cache(maxsize=None)
 def sheet_cell_rows(path: Path, sheet_name: str) -> list[list[tuple[str, str, int]]]:
     with zipfile.ZipFile(path) as zf:
         paths = workbook_sheet_paths(zf)
@@ -634,6 +663,7 @@ def sheet_cell_rows(path: Path, sheet_name: str) -> list[list[tuple[str, str, in
     return rows
 
 
+@lru_cache(maxsize=None)
 def wrapped_style_ids(path: Path) -> set[int]:
     with zipfile.ZipFile(path) as zf:
         try:
@@ -902,7 +932,10 @@ def assert_mutation_case_evidence(row: dict[str, str], label: str) -> None:
             row.get("备注", ""),
         ]
     )
-    if not any(marker in combined for marker in ["新增", "创建", "添加", "新建", "保存", "提交", "编辑", "修改", "删除"]):
+    if not any(
+        marker in combined
+        for marker in ["新增", "创建", "添加", "新建", "保存", "提交", "编辑", "修改", "删除", "移除", "清空", "解绑", "配置", "启用", "停用", "发布", "下线", "审批", "重置", "撤销", "归档", "状态变更"]
+    ):
         return
     commits_change = contains_any_marker(combined, MUTATION_COMMIT_MARKERS)
     if not commits_change and contains_any_marker(combined, NON_MUTATING_BLOCK_MARKERS + SAFE_EXISTING_DATA_MARKERS):
@@ -1001,6 +1034,7 @@ def require_headers(rows: list[list[str]], required: list[str], sheet_name: str)
         fail(f"{sheet_name} is missing headers: {missing}")
 
 
+@lru_cache(maxsize=None)
 def first_sheet_rows(path: Path) -> list[list[str]]:
     with zipfile.ZipFile(path) as zf:
         paths = workbook_sheet_paths(zf)
@@ -1021,6 +1055,7 @@ def first_sheet_rows(path: Path) -> list[list[str]]:
     return rows
 
 
+@lru_cache(maxsize=None)
 def first_worksheet_xml(path: Path) -> str:
     with zipfile.ZipFile(path) as zf:
         paths = workbook_sheet_paths(zf)
@@ -1575,7 +1610,7 @@ def validate_batch_run_directory_from_page_discovery(page_discovery: Path) -> Pa
     stale_workbooks = sorted((run_dir / "artifacts").rglob("*.xlsx"))
     if stale_workbooks:
         fail(
-            "Batch artifacts must not keep generated workbook copies after finalize-deliverables. "
+            "Batch artifacts must not keep generated workbook copies after complete-deliverables. "
             f"Use current/deliverables/modules/imports as the workbook destinations: {stale_workbooks[0]}"
         )
     return run_dir / "batch-status.csv"
@@ -1703,35 +1738,13 @@ def validate_sheet_split_artifacts(run_dir: Path, workbook_function_case_count: 
     manifest_parts = manifest_data.get("parts") if isinstance(manifest_data, dict) else manifest_data
     if not isinstance(manifest_parts, list) or not manifest_parts:
         fail("function_cases_manifest.json must contain a non-empty parts list")
-    part_name_re = re.compile(r"^function_cases_part_\d{3}\.json$")
-    bad_part_names = [str(name) for name in manifest_parts if not part_name_re.match(str(name))]
+    bad_part_names = [str(name) for name in manifest_parts if not FUNCTION_CASE_PART_RE.match(str(name))]
     if bad_part_names:
         fail(f"function_cases_manifest.json contains invalid shard names: {bad_part_names[:10]}")
     function_parts = [data_dir / str(name) for name in manifest_parts]
     stale_parts = sorted(path.name for path in data_dir.glob("function_cases_part_*.json") if path.name not in set(map(str, manifest_parts)))
     if stale_parts:
         fail(f"artifacts/data contains stale function case shards not listed in function_cases_manifest.json: {stale_parts[:10]}")
-    required_fields = [
-        "用例 ID",
-        "Story ID/需求 ID",
-        "模块",
-        "功能点",
-        "用例标题",
-        "优先级",
-        "测试类型",
-        "DFX维度",
-        "DFX场景",
-        "前置条件",
-        "测试数据",
-        "操作步骤",
-        "预期结果",
-        "实际结果",
-        "执行状态",
-        "是否适合自动化",
-        "关联风险",
-        "备注",
-    ]
-    forbidden_fields = {"用例编号", "用侊 ID", "用侊标题", "场景类型", "正向/反向", "steps", "expected", "title", "case_id", "id"}
     actual_function_case_count = 0
     for part_index, part in enumerate(function_parts):
         try:
@@ -1741,22 +1754,22 @@ def validate_sheet_split_artifacts(run_dir: Path, workbook_function_case_count: 
         cases = data.get("cases") if isinstance(data, dict) else data
         if not isinstance(cases, list):
             fail(f"{part} must contain a list or an object with cases list")
-        if len(cases) > 10:
-            fail(f"{part} contains more than 10 function cases: {len(cases)}")
-        if part_index < len(function_parts) - 1 and len(cases) != 10:
-            fail(f"{part} is not the final shard and must contain exactly 10 function cases: {len(cases)}")
+        if len(cases) > MAX_FUNCTION_CASES_PER_PART:
+            fail(f"{part} contains more than {MAX_FUNCTION_CASES_PER_PART} function cases: {len(cases)}")
+        if part_index < len(function_parts) - 1 and len(cases) != MAX_FUNCTION_CASES_PER_PART:
+            fail(f"{part} is not the final shard and must contain exactly {MAX_FUNCTION_CASES_PER_PART} function cases: {len(cases)}")
         actual_function_case_count += len(cases)
         for case_index, case in enumerate(cases, start=1):
             if not isinstance(case, dict):
                 fail(f"{part.name} case {case_index} must be an object")
             keys = set(case)
-            forbidden = sorted(keys & forbidden_fields)
+            forbidden = sorted(keys & FUNCTION_CASE_FORBIDDEN_FIELDS)
             if forbidden:
                 fail(f"{part.name} case {case_index} contains forbidden/deprecated fields: {forbidden}")
-            missing = [field for field in required_fields if field not in case]
+            missing = [field for field in FUNCTION_CASE_REQUIRED_FIELDS if field not in case]
             if missing:
                 fail(f"{part.name} case {case_index} is missing required fields: {missing}")
-            extra = sorted(keys - set(required_fields))
+            extra = sorted(keys - set(FUNCTION_CASE_REQUIRED_FIELDS))
             if extra:
                 fail(f"{part.name} case {case_index} contains non-standard fields: {extra}")
             case_id = str(case.get("用例 ID", "") or "").strip()
@@ -1767,8 +1780,8 @@ def validate_sheet_split_artifacts(run_dir: Path, workbook_function_case_count: 
             if not title.startswith(f"{function_point}-"):
                 fail(f"{part.name} case {case_index} 用例标题 must use 功能点-当前标题 format")
     if isinstance(manifest_data, dict):
-        if manifest_data.get("part_size") not in {None, 10}:
-            fail(f"function_cases_manifest.json part_size must be 10: {manifest_data.get('part_size')}")
+        if manifest_data.get("part_size") not in {None, MAX_FUNCTION_CASES_PER_PART}:
+            fail(f"function_cases_manifest.json part_size must be {MAX_FUNCTION_CASES_PER_PART}: {manifest_data.get('part_size')}")
         if manifest_data.get("total_cases") not in {None, actual_function_case_count}:
             fail(
                 "function_cases_manifest.json total_cases must match actual shard rows: "
@@ -1809,6 +1822,8 @@ def validate_element_case_plan_and_lifecycle(
     lifecycle_rows = [row for row in lifecycle_rows_all if not is_template_or_empty_row(row)]
     if not plan_rows:
         fail("element-case-plan.csv must contain real element-to-case planning rows")
+    has_mutation = validate_operation_plan_rows(plan_rows)
+    validate_lifecycle_rows(lifecycle_rows, has_mutation, contains_any_marker, plan_rows)
 
     plan_keys = {
         normalized_key(row.get("页面/入口", ""), row.get("元素名称/文案", ""))

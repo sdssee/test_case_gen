@@ -332,7 +332,7 @@
 - `变更影响分析`
 - `变更记录`
 
-生成或补充测试用例前，应先读取产品版图。如果用户指定依赖模块，应读取产品版图中登记的依赖模块归档测试设计。正式生成前，应向用户展示产品理解摘要，包括当前模块、依赖模块、业务对象、业务链路、可复用历史用例、预计新增范围、风险项和待确认问题。正式写测试用例前，必须先让用户确认风险项与待确认问题，并综合评估 DFX 12 维度 × 4 场景覆盖；DFX 覆盖评估必须明确适用、不适用、待确认和需补充证据的维度。确认、补充、排除或调整结果以及 DFX 覆盖评估结论必须动态调整测试范围、测试数据、用例优先级、前置条件、操作步骤、预期结果、风险等级和 `风险与待确认问题` Sheet。
+生成或补充测试用例前，应先读取产品事实与版图；用户指定依赖模块时读取其归档测试设计。正式生成前展示产品理解摘要、预计新增范围、风险项和待确认问题。只把全量深探后模型仍不理解的内容交给用户确认，没有则记录 `RISK-NONE`；同时完成 DFX 12 维度 × 4 场景覆盖评估。确认和 DFX 结论必须动态调整测试范围、数据、优先级、前置条件、步骤、预期结果、风险等级和 `风险与待确认问题` Sheet。
 
 单模块任务正式写用例前，也要先做模块级粗遍历，识别菜单入口、页面清单、核心功能点、业务对象、状态流转和跨模块依赖。具体写测试用例时，要在对应页面或功能点内做深遍历，覆盖所有可点击、可输入、可测试元素。
 
@@ -367,9 +367,9 @@
 
 如确需生成当前批次 Python 临时脚本，写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取，禁止手工拼接包含中文弯引号、智能引号或未转义双引号的字符串字面量。执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过单文件大小、JSON 语法、Python 语法编译和高风险引号扫描后才能执行。
 
-当范围超过一个最小标题时，必须在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本，包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`。只要发生页面实探或生成 `page-discovery.csv`，即使当前任务只有一个最小标题路径，也必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录。该账本是内部执行状态，不作为默认客户交付件；生成正式 Excel 和导入文件时，应以 `batch-status.csv` 的最小标题路径、覆盖数量、用例数量和覆盖质量自检结果判断能否进入下一批或最终汇总。`batch-status.csv` 必须记录最小标题路径、页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数和数据一致性用例数、导入文件路径和导入文件已生成。
+当范围超过一个最小标题时，先建立批次队列，并为每个最小标题分别运行 `init-batch-run` 建立独立 run-dir。每个目录的 `batch-status.csv` 只能有一行，manifest、Sheet JSON、生命周期和 receipt 不得跨批次混装。通过 `pipeline-status` 按 `discovery → plan → risk → cases → delivery` 派生下一步。
 
-截图、临时脚本、页面证据和过程材料只能写入当前任务的 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享的 `docs/test-assets/batch-runs/artifacts/` 根目录 artifacts。
+截图、临时脚本、页面证据和过程材料只能写入当前独立批次 run-dir 的 `artifacts/`，不得写入共享根目录或其他批次目录。
 
 `batch-status.csv` 和 `page-discovery.csv` 必须从 `docs/test-assets/batch-runs/templates/` 复制标准模板或按完全相同表头生成，禁止自定义精简表头。写入 `page-discovery.csv` 时必须使用 CSV writer 或等价结构化写入方式，保证每一行列数与表头一致，防止字段错位；不得手工拼接逗号分隔字符串。
 

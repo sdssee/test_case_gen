@@ -26,7 +26,7 @@ docs/test-assets/
 ```text
 docs/test-assets/modules/<项目或需求编号>/<模块序号>_<模块名>_测试设计.xlsx
 docs/test-assets/imports/<项目或需求编号>/<模块序号>_<模块名>_测试系统导入.xlsx
-docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/
+docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>_<BATCH-ID>/
 docs/test-design/deliverables/<项目或需求编号>/<模块序号>_<模块名>_客户交付.xlsx
 ```
 
@@ -59,7 +59,7 @@ docs/test-assets/product-map.xlsx
 4. 不得仅凭 AI 对话记忆判断已有模块能力。
 5. 当用户要求为某个模块生成测试设计时，正式写用例前必须先做模块级粗遍历，快速识别菜单入口、页面清单、核心功能点、主要业务对象、状态流转和跨模块依赖。
 6. 正式生成前向用户展示产品理解摘要或模块理解摘要，包括当前模块、依赖模块、业务对象、业务链路、可复用历史用例、预计新增范围、风险项和待确认问题。
-7. 正式写测试用例前，必须先把风险项与待确认问题发给用户确认，并综合评估 DFX 12 维度 × 4 场景覆盖；用户确认、补充、排除或调整以及 DFX 覆盖评估结论，必须动态调整测试范围、测试数据、用例优先级、前置条件、操作步骤、预期结果、风险等级和待确认问题 Sheet。用户未回复且任务允许继续时，按“待确认假设”生成，并在风险与待确认问题中记录假设来源和后续复核建议。
+7. 正式写测试用例前先整理风险项与待确认问题，只把默认全量深探后模型仍不理解的内容发给用户确认，并综合评估 DFX 12 维度 × 4 场景覆盖；没有真实不理解项时记录 `RISK-NONE`。确认与 DFX 结论必须动态调整测试范围、数据、优先级、步骤、预期结果和风险等级。
 
 ## 大范围测试设计分批策略
 
@@ -86,7 +86,7 @@ docs/test-assets/product-map.xlsx
 - 每批预计交付物和回存路径
 - 跨模块汇总方式和待确认问题
 
-当范围超过一个最小标题时，必须在 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/` 创建或更新批次运行状态账本。只要发生页面实探或生成 `page-discovery.csv`，即使当前任务只有一个最小标题路径，也必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录。账本必须包含 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`，并优先基于 `docs/test-assets/batch-runs/templates/` 复制生成。`batch-plan.md` 承载分批设计计划，`batch-status.csv` 承载每批状态、最小标题路径、覆盖数量、用例数量和覆盖质量自检，`page-discovery.csv` 承载页面实探证据并记录最小标题路径，`batch-review.md` 承载最终汇总、跨模块汇总、回归范围、风险与待确认问题，`artifacts/` 保存页面遍历笔记、截图或中间核对材料。
+当范围超过一个最小标题时，先建立任务级队列，再为每个最小标题创建独立的 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>_<BATCH-ID>/`。每个 run-dir 只允许一行 `batch-status.csv`、一个最小标题和一套 manifest/Sheet 产物；下一批必须初始化新目录。只要发生页面实探，也必须先执行 `init-batch-run` 并保留标准账本与 artifacts。
 
 `batch-status.csv` 和 `page-discovery.csv` 必须复制标准模板或保持与模板完全一致的表头，禁止自定义精简表头、增删列或在末尾追加汇总行。`page-discovery.csv` 必须使用 CSV writer 或等价结构化写入方式生成，每一行列数必须与表头一致，避免页面元素、选项取值、联动变化、预期观察和关联用例 ID 字段错位。
 

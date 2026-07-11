@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import csv
+import json
 import re
 import sys
 import zipfile
+from functools import lru_cache
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -93,6 +95,7 @@ def fail(message: str) -> None:
     raise AssertionError(message)
 
 
+@lru_cache(maxsize=None)
 def workbook_sheets(path: Path) -> list[str]:
     with zipfile.ZipFile(path) as zf:
         root = ET.fromstring(zf.read("xl/workbook.xml"))
@@ -136,6 +139,7 @@ def cell_text(cell: ET.Element, shared: list[str]) -> str:
     return value.text
 
 
+@lru_cache(maxsize=None)
 def first_row_values(path: Path, sheet_index: int = 1) -> list[str]:
     with zipfile.ZipFile(path) as zf:
         shared = shared_strings(zf)
@@ -146,6 +150,7 @@ def first_row_values(path: Path, sheet_index: int = 1) -> list[str]:
     return [cell_text(cell, shared) for cell in row.findall("x:c", NS)]
 
 
+@lru_cache(maxsize=None)
 def cell_value(path: Path, sheet_index: int, cell_ref: str) -> str:
     with zipfile.ZipFile(path) as zf:
         shared = shared_strings(zf)
@@ -156,11 +161,13 @@ def cell_value(path: Path, sheet_index: int, cell_ref: str) -> str:
     return cell_text(cell, shared)
 
 
+@lru_cache(maxsize=None)
 def worksheet_xml(path: Path, sheet_index: int = 1) -> str:
     with zipfile.ZipFile(path) as zf:
         return zf.read(f"xl/worksheets/sheet{sheet_index}.xml").decode("utf-8")
 
 
+@lru_cache(maxsize=None)
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -177,6 +184,14 @@ def is_lightweight_entry(path: Path) -> bool:
             ".codebuddy/rules/test-design-rule.md",
         ]
     )
+
+
+def is_summary_reference(path: Path) -> bool:
+    normalized = str(path).replace("\\", "/")
+    return any(
+        normalized.endswith(suffix)
+        for suffix in ["/docs/ARCHITECTURE.md", "/docs/test-design/excel-template-spec.md", "/docs/test-assets/README.md"]
+    ) or (path.name in {"README.md", "README_IMPORT.md"} and (path.parent / "scripts").is_dir())
 
 
 def lightweight_entry_reference_text(path: Path) -> str:
@@ -197,10 +212,29 @@ def lightweight_entry_reference_text(path: Path) -> str:
 
 def assert_contains(path: Path, markers: list[str]) -> None:
     text = read_text(path)
-    reference_text = lightweight_entry_reference_text(path) if is_lightweight_entry(path) else ""
+    reference_text = lightweight_entry_reference_text(path) if is_lightweight_entry(path) or is_summary_reference(path) else ""
     for marker in markers:
         if marker not in text and marker not in reference_text:
             fail(f"{path.relative_to(path.parents[1])} is missing required marker: {marker}")
+
+
+def validate_entry_contract_v2(repo_root: Path, contract_path: Path) -> None:
+    contract = json.loads(read_text(contract_path))
+    if contract.get("version") != 2:
+        fail("entry-contract.json must use version 2")
+    required = contract.get("required_gate_ids", [])
+    targets = [contract["canonical_rule"], *contract["rule_mirrors"], *contract["generated_entries"]]
+    for relative in targets:
+        text = read_text(repo_root / relative)
+        missing = [gate_id for gate_id in required if f"[{gate_id}]" not in text]
+        if missing:
+            fail(f"{relative} is missing stable Gate IDs: {missing}")
+    canonical_text = read_text(repo_root / contract["canonical_rule"])
+    gate_lines = {line.split("]", 1)[0][3:]: line for line in canonical_text.splitlines() if line.startswith("- [TD-GATE-")}
+    for gate_id, markers in contract.get("gate_semantics", {}).items():
+        missing = [marker for marker in markers if marker not in gate_lines.get(gate_id, "")]
+        if missing:
+            fail(f"Canonical Gate {gate_id} lost required semantics: {missing}")
 
 
 def assert_contains_across(paths: list[Path], markers: list[str], label: str) -> None:
@@ -297,7 +331,7 @@ def validate_no_generated_batch_scripts_in_framework_scripts(repo_root: Path) ->
         fail(
             "Generated batch helper scripts must not stay in framework scripts/: "
             f"{relative}. Put current-batch scripts under "
-            "docs/test-assets/batch-runs/<task>/artifacts/scripts/ and remove them after use."
+            "docs/test-assets/batch-runs/<task>_<batch-id>/artifacts/scripts/ and remove them after use."
         )
 
 
@@ -305,7 +339,7 @@ def validate_no_root_batch_artifacts_dir(repo_root: Path) -> None:
     root_artifacts = repo_root / "docs" / "test-assets" / "batch-runs" / "artifacts"
     if root_artifacts.exists():
         fail(
-            "Batch artifacts must live under docs/test-assets/batch-runs/<task>/artifacts/, "
+            "Batch artifacts must live under docs/test-assets/batch-runs/<task>_<batch-id>/artifacts/, "
             "not the shared batch-runs/artifacts directory."
         )
 
@@ -343,6 +377,13 @@ def main() -> int:
     requirements_file = repo_root / "requirements.txt"
     project_file = repo_root / "pyproject.toml"
     architecture_tests = repo_root / "tests" / "test_architecture_safety.py"
+    validation_runner = repo_root / "scripts" / "run-validation.py"
+    pipeline_module = domain_dir / "pipeline.py"
+    validation_cache_module = domain_dir / "validation_cache.py"
+    ledger_validator_module = domain_dir / "validators" / "batch_ledgers.py"
+    function_case_validator = domain_dir / "validators" / "function_cases.py"
+    function_case_contract = domain_dir / "contracts" / "function_cases.py"
+    sheet_data_contract = domain_dir / "contracts" / "sheet_data.py"
     rule_docs = [
         rules_dir / "README.md",
         rules_dir / "case-design.md",
@@ -397,12 +438,20 @@ def main() -> int:
         requirements_file,
         project_file,
         architecture_tests,
+        validation_runner,
+        pipeline_module,
+        validation_cache_module,
+        ledger_validator_module,
+        function_case_validator,
+        function_case_contract,
+        sheet_data_contract,
         *rule_docs,
     ]:
         if not path.exists():
             fail(f"Missing upgrade mechanism file: {path}")
     for path in lightweight_entries:
         assert_max_chars(path, ENTRY_FILE_CHAR_LIMIT)
+    validate_entry_contract_v2(repo_root, entry_contract)
     assert_max_chars(repo_root / "README.md", ENTRY_FILE_CHAR_LIMIT)
     assert_contains(requirements_file, ["openpyxl==3.1.5"])
     assert_contains(project_file, ["requires-python", "openpyxl==3.1.5"])
@@ -432,6 +481,21 @@ def main() -> int:
             "test_deliverable_validator_rejects_unmodified_formal_template",
             "test_plan_gate_requires_confirmed_model_uncertainty",
             "test_resume_migrates_legacy_risk_driven_deep_dive_ledger",
+            "test_resume_migrates_structured_plan_and_lifecycle_ledgers_with_backups",
+            "test_pipeline_status_derives_risk_assessment_without_manual_status",
+            "test_risk_none_is_system_recorded_and_prepare_cleans_all_stale_case_data",
+            "test_plan_uses_page_scoped_element_identity",
+            "test_lifecycle_requires_evidence_for_each_editable_item",
+            "test_cases_gate_rejects_duplicate_ids_across_shards",
+            "test_plan_cache_invalidates_when_structured_plan_changes",
+            "test_discovery_cache_tracks_project_relative_evidence",
+            "test_record_risk_none_refuses_to_overwrite_real_uncertainty",
+            "test_pipeline_rejects_confirmed_but_incomplete_risk_ledger",
+            "test_generation_session_becomes_stale_when_plan_semantics_change",
+            "test_pipeline_does_not_trust_manual_complete_flags_without_files",
+            "test_cases_gate_rejects_empty_sheet_json_before_delivery",
+            "test_entry_contract_rejects_incomplete_runtime_graph",
+            "test_generated_block_rewrite_preserves_local_override",
         ],
     )
 
@@ -445,10 +509,11 @@ def main() -> int:
     assert_contains(fact_store_module, [f'FACT_SCHEMA_VERSION = "{versions["asset_schema_version"]}"', "stable_fact_id", "project_catalog_to_workbook"])
     assert_contains(fact_schema, [f'"const": "{versions["asset_schema_version"]}"', "FACT-[0-9a-f]{20}"])
     assert_contains(asset_migration, ["migrate-product-facts", "validate-product-facts", versions["asset_schema_version"]])
-    assert_contains(ci_workflow, ["actions/checkout@v6", "actions/setup-python@v6", "sync-rule-entrypoints.py", "unittest discover", "new-framework-upgrade-package.ps1"])
-    assert_contains(entry_contract, ["canonical_rule", "rule_mirrors", "scripts/run-test-design.ps1"])
-    assert_contains(entry_sync_script, ["--write", "Rule mirror drifted", "entry-contract.json"])
-    assert_contains(upgrade_script, ["Restore-UpgradeSnapshot", "restoring framework and protected assets", "frameworkSnapshot", '".github/"'])
+    assert_contains(ci_workflow, ["actions/checkout@v6", "actions/setup-python@v6", "run-validation.py", "--mode full"])
+    assert_contains(entry_contract, ["\"version\": 2", "required_gate_ids", "runtime_graphs", "scripts/run-test-design.ps1"])
+    assert_contains(entry_sync_script, ["--write", "Rule mirror drifted", "entry-contract.json", "replace_generated_block"])
+    assert_contains(validation_runner, ["--mode", "fast", "full", "SLOW_TEST_MARKERS"])
+    assert_contains(upgrade_script, ["Restore-UpgradeSnapshot", "restoring framework and protected assets", "frameworkSnapshot", '".github/"', "Merge-LocalOverrideBlock", "-Mode Fast"])
     assert_contains(formal_assembler_module, ["assemble_formal_workbook", "SHEET_DATA_SOURCES", "exact target Sheet headers", "template data"])
 
     for dirname in ["current", "deliverables"]:
@@ -1099,7 +1164,7 @@ def main() -> int:
     expected_element_case_plan_header = (
         "批次ID,最小标题路径,页面/入口,功能点,元素名称/文案,元素类型,交互方式,业务路径,数据状态,"
         "适用DFX维度,适用DFX场景,测试设计方向,应生成用例数,计划用例ID,实际用例ID,"
-        "是否必须真实执行,是否涉及配置生效,是否涉及CRUD闭环,未生成原因,备注"
+        "操作类别,验证要求,数据策略,执行状态,是否必须真实执行,是否涉及配置生效,是否涉及CRUD闭环,未生成原因,备注"
     )
     if read_text(element_case_plan_template).splitlines()[0] != expected_element_case_plan_header:
         fail("element-case-plan-template.csv header changed unexpectedly")
@@ -1108,8 +1173,8 @@ def main() -> int:
     if len(element_case_plan_rows) < 2 or len(element_case_plan_rows[1]) != len(element_case_plan_rows[0]):
         fail("element-case-plan-template.csv sample row must have the same column count as its header")
     expected_test_data_lifecycle_header = (
-        "批次ID,最小标题路径,测试数据ID/名称,数据类型,创建入口,创建步骤关联用例,创建结果,查看结果,"
-        "编辑前值,编辑后值,编辑结果,配置生效验证点,删除取消结果,删除确认结果,清理状态,保留原因,备注"
+        "批次ID,最小标题路径,关联页面/入口,修改项/元素,测试数据ID/名称,数据类型,创建入口,创建步骤关联用例,创建结果,查看结果,"
+        "编辑前值,编辑后值,编辑结果,保存后回显,实际生效结果,配置生效验证点,删除取消结果,删除确认结果,清理状态,保留原因,备注"
     )
     if read_text(test_data_lifecycle_template).splitlines()[0] != expected_test_data_lifecycle_header:
         fail("test-data-lifecycle-template.csv header changed unexpectedly")
@@ -1262,7 +1327,7 @@ def main() -> int:
     ]:
         assert_contains(path, dfx_pre_eval_markers)
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "excel-deliverable.md", ["Excel Table", "/xl/tables/table*.xml", "修复提示"])
-    assert_contains(repo_root / "docs" / "test-design" / "rules" / "batch-run.md", ["batch-runs/<task>/artifacts", "根目录 artifacts"])
+    assert_contains(repo_root / "docs" / "test-design" / "rules" / "batch-run.md", ["当前独立批次目录", "禁止写入共享根目录"])
     assert_contains(
         deliverable_validator,
         [
@@ -1323,11 +1388,12 @@ def main() -> int:
             "complete-deliverables",
             "fix-formal-styles",
             "init-batch-run",
-            "finalize-deliverables",
             "sync-product-map",
             "migrate-product-facts",
             "validate-product-facts",
             "rebuild-product-map",
+            "record-risk-none",
+            "pipeline-status",
             "header_map",
             "IMPORT_AUTO_FIELDS",
             "remove_workbook_tables_and_refresh_filters",
@@ -1338,6 +1404,7 @@ def main() -> int:
             "apply_template_workbook_format",
             "sync_product_map",
             "complete_deliverables",
+            "validate_delivery_scope",
             "deliverable_names",
             "canonical_module_parts",
         ],
@@ -1348,11 +1415,20 @@ def main() -> int:
             "element-case-plan-template.csv",
             "test-data-lifecycle-template.csv",
             "minimum_cases_for_plan_row",
-            "FUNCTION_CASE_REQUIRED_FIELDS",
+            "validate_function_case_part",
             "function_cases_part_001.json",
             "function_cases_manifest.json",
         ],
     )
+    assert_contains(
+        ledger_validator_module,
+        ["OPERATION_CATEGORIES", "REQUIRED_VERIFICATION", "validate_single_batch_scope", "validate_discovery_rows", "validate_operation_plan_rows", "validate_mutation_discovery_evidence", "validate_lifecycle_rows", "risk_confirmation_state"],
+    )
+    assert_contains(pipeline_module, ["derive_pipeline_status", "DISCOVERY_REQUIRED", "PLAN_REQUIRED", "RISK_ASSESSMENT_REQUIRED", "CASE_PREPARATION_REQUIRED", "DELIVERY_REQUIRED", "COMPLETE"])
+    assert_contains(validation_cache_module, ["CACHE_VERSION", "fingerprint", "checked_at", "input_count", "atomic_write_text"])
+    assert_contains(function_case_contract, ["MAX_FUNCTION_CASES_PER_PART", "FUNCTION_CASE_REQUIRED_FIELDS", "FUNCTION_CASE_FORBIDDEN_FIELDS", "FUNCTION_CASE_PART_RE"])
+    assert_contains(function_case_validator, ["validate_function_case_schema", "validate_function_case_part", "validate_sheet_data_file", "PLACEHOLDER_CASE_IDS", "ENGLISH_TEMPLATE_MARKERS"])
+    assert_contains(sheet_data_contract, ["SHEET_DATA_HEADERS", "overview.json", "requirements.json", "page_elements.json", "项目/模块", "元素 ID"])
     assert_contains(excel_module, ["wrap_text=True", "auto_filter.ref", "extend_validation_ranges", "write_mapped_row", "性能测试设计"])
     assert_contains(paths_module, ["deliverable_names", "canonical_module_parts", "safe_filename"])
     assert_contains(product_map_sync_module, ["save_module_document", "project_catalog_to_workbook", "facts_by_sheet"])
@@ -1426,11 +1502,11 @@ def main() -> int:
     )
     assert_contains(
         batch_module,
-        ["validate_batch_artifacts", "prepare_function_case_generation", "minimum_cases_for_plan_row", "元素类型", "适用DFX维度", "应生成用例数", "artifacts/data", "function_cases_part_001.json", "function_cases_manifest.json", "FUNCTION_CASE_REQUIRED_FIELDS", "risk-confirmation.csv", "确认状态"],
+        ["validate_batch_artifacts", "prepare_function_case_generation", "generation_source_fingerprint", "generation_catalog_fingerprint", ".codebuddy", "catalog", "minimum_cases_for_plan_row", "元素类型", "适用DFX维度", "应生成用例数", "artifacts/data", "function_cases_part_001.json", "function_cases_manifest.json", "validate_function_case_part", "risk-confirmation.csv", "确认状态"],
     )
     assert_contains(excel_tools, ["validate-batch-artifacts", "prepare-function-case-generation", "assemble-formal-workbook", "--run-dir"])
     function_json_schema_markers = ["用例编号", "用侊 ID", "用侊标题", "场景类型", "steps", "expected", "操作步骤", "预期结果"]
-    assert_contains(repo_root / "scripts" / "validate-generated-python-scripts.py", function_json_schema_markers)
+    assert_contains(function_case_contract, function_json_schema_markers)
     for path in [
         repo_root / "CODEBUDDY.md",
         repo_root / "AGENTS.md",

@@ -782,6 +782,21 @@ def assert_numbered(text: str, label: str) -> None:
             fail(f"{label} must use numbered lines like '1. ...': {line}")
 
 
+def assert_expected_does_not_repeat_steps(steps: str, expected: str, label: str) -> None:
+    normalize = lambda text: [
+        re.sub(r"^\d+\.\s*", "", line.strip())
+        for line in text.splitlines()
+        if line.strip()
+    ]
+    step_lines = normalize(steps)
+    expected_lines = normalize(expected)
+    if step_lines[:3] and step_lines[:3] == expected_lines[:3]:
+        fail(
+            f"{label} repeats navigation/actions from 操作步骤; "
+            "write observable page, message, data, and state outcomes"
+        )
+
+
 def assert_complete_operation_steps(text: str, label: str) -> None:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if len(lines) < 2:
@@ -1026,6 +1041,17 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
     assert_no_sensitive_values(workbook, EXPECTED_SHEETS)
     validate_table_ranges(workbook, EXPECTED_SHEETS)
     validate_formal_workbook_styles(workbook)
+    formal_template_markers = ["TC-LOGIN-001", "STORY-001", "SCN-LOGIN-001", "PT-LOGIN-001", "EL-LOGIN-001", "示例项目"]
+    for sheet_name in EXPECTED_SHEETS:
+        rows = sheet_rows(workbook, sheet_name)
+        for row_index, row in enumerate(rows[1:], start=2):
+            combined = "\n".join(str(value or "") for value in row)
+            marker = next((item for item in formal_template_markers if item in combined), None)
+            if marker:
+                fail(
+                    f"{sheet_name} row {row_index} still contains formal-template example marker {marker}; "
+                    "assemble the workbook from current batch data before delivery"
+                )
 
     scenario_rows_raw = sheet_rows(workbook, "测试场景矩阵")
     assert_no_deprecated_scenario_headers(scenario_rows_raw, "测试场景矩阵")
@@ -1083,6 +1109,11 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
         assert_numbered(row.get("操作步骤", ""), f"功能测试用例 row {index} 操作步骤")
         assert_complete_operation_steps(row.get("操作步骤", ""), f"功能测试用例 row {index} 操作步骤")
         assert_numbered(row.get("预期结果", ""), f"功能测试用例 row {index} 预期结果")
+        assert_expected_does_not_repeat_steps(
+            row.get("操作步骤", ""),
+            row.get("预期结果", ""),
+            f"功能测试用例 row {index} 预期结果",
+        )
         assert_mutation_case_evidence(row, f"功能测试用例 row {index}")
         assert_pagination_jump_has_data(row, f"功能测试用例 row {index}")
         assert_transient_flow_closed(
@@ -1642,7 +1673,7 @@ def validate_batch_plan(batch_status: Path, batch_rows: list[dict[str, str]]) ->
             )
 
 
-def validate_sheet_split_artifacts(run_dir: Path) -> None:
+def validate_sheet_split_artifacts(run_dir: Path, workbook_function_case_count: int | None = None) -> None:
     import json
 
     data_dir = run_dir / "artifacts" / "data"
@@ -1700,7 +1731,8 @@ def validate_sheet_split_artifacts(run_dir: Path) -> None:
         "备注",
     ]
     forbidden_fields = {"用例编号", "用侊 ID", "用侊标题", "场景类型", "正向/反向", "steps", "expected", "title", "case_id", "id"}
-    for part in function_parts:
+    actual_function_case_count = 0
+    for part_index, part in enumerate(function_parts):
         try:
             data = json.loads(part.read_text(encoding="utf-8-sig"))
         except Exception as exc:
@@ -1710,6 +1742,9 @@ def validate_sheet_split_artifacts(run_dir: Path) -> None:
             fail(f"{part} must contain a list or an object with cases list")
         if len(cases) > 10:
             fail(f"{part} contains more than 10 function cases: {len(cases)}")
+        if part_index < len(function_parts) - 1 and len(cases) != 10:
+            fail(f"{part} is not the final shard and must contain exactly 10 function cases: {len(cases)}")
+        actual_function_case_count += len(cases)
         for case_index, case in enumerate(cases, start=1):
             if not isinstance(case, dict):
                 fail(f"{part.name} case {case_index} must be an object")
@@ -1730,9 +1765,27 @@ def validate_sheet_split_artifacts(run_dir: Path) -> None:
             title = str(case.get("用例标题", "") or "").strip()
             if not title.startswith(f"{function_point}-"):
                 fail(f"{part.name} case {case_index} 用例标题 must use 功能点-当前标题 format")
+    if isinstance(manifest_data, dict):
+        if manifest_data.get("part_size") not in {None, 10}:
+            fail(f"function_cases_manifest.json part_size must be 10: {manifest_data.get('part_size')}")
+        if manifest_data.get("total_cases") not in {None, actual_function_case_count}:
+            fail(
+                "function_cases_manifest.json total_cases must match actual shard rows: "
+                f"{manifest_data.get('total_cases')} != {actual_function_case_count}"
+            )
+    if workbook_function_case_count is not None and workbook_function_case_count != actual_function_case_count:
+        fail(
+            "功能测试用例 Sheet row count must match manifest-listed function case shards: "
+            f"{workbook_function_case_count} != {actual_function_case_count}"
+        )
     if scripts_dir.exists():
-        if not any((scripts_dir / name).exists() for name in ["assemble_workbook.py", "build_function_cases.py"]):
-            fail("artifacts/scripts must include assemble_workbook.py or build_function_cases.py for sheet-split generation")
+        for script in scripts_dir.glob("*.py"):
+            text = script.read_text(encoding="utf-8-sig", errors="ignore")
+            if "load_workbook" in text and re.search(r"\.save\s*\(", text):
+                fail(
+                    f"Batch script must not assemble/save formal Excel directly: {script}. "
+                    "Use scripts/run-test-design.ps1 assemble-formal-workbook or complete-deliverables --run-dir."
+                )
 
 
 def validate_element_case_plan_and_lifecycle(
@@ -1917,7 +1970,7 @@ def validate_product_map_sync(
     assert isinstance(function_case_count, int)
     assert isinstance(function_rows, list)
     run_dir = page_discovery.resolve().parent
-    validate_sheet_split_artifacts(run_dir)
+    validate_sheet_split_artifacts(run_dir, function_case_count)
     validate_element_case_plan_and_lifecycle(run_dir, discovery_rows, case_ids, function_rows)
 
     workbook_elements = {

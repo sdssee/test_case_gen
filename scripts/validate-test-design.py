@@ -330,6 +330,7 @@ def main() -> int:
     paths_module = domain_dir / "paths.py"
     fact_store_module = domain_dir / "fact_store.py"
     product_map_sync_module = domain_dir / "product_map_sync.py"
+    formal_assembler_module = domain_dir / "formal_assembler.py"
     fact_schema = repo_root / "docs" / "test-design" / "schemas" / "product-facts.schema.json"
     asset_migration = repo_root / "scripts" / "migrations" / "1.0.0_to_2.0.0.ps1"
     ci_workflow = repo_root / ".github" / "workflows" / "validate.yml"
@@ -384,6 +385,7 @@ def main() -> int:
         paths_module,
         fact_store_module,
         product_map_sync_module,
+        formal_assembler_module,
         fact_schema,
         asset_migration,
         ci_workflow,
@@ -426,6 +428,8 @@ def main() -> int:
             "test_product_fact_migration_preserves_existing_real_excel_rows",
             "test_upgrade_failure_restores_framework_and_protected_assets",
             "test_upgrade_migrates_asset_schema_1_to_2_without_losing_excel_facts",
+            "test_formal_assembler_populates_all_sheets_and_removes_template_examples",
+            "test_deliverable_validator_rejects_unmodified_formal_template",
         ],
     )
 
@@ -443,6 +447,7 @@ def main() -> int:
     assert_contains(entry_contract, ["canonical_rule", "rule_mirrors", "scripts/run-test-design.ps1"])
     assert_contains(entry_sync_script, ["--write", "Rule mirror drifted", "entry-contract.json"])
     assert_contains(upgrade_script, ["Restore-UpgradeSnapshot", "restoring framework and protected assets", "frameworkSnapshot", '".github/"'])
+    assert_contains(formal_assembler_module, ["assemble_formal_workbook", "SHEET_DATA_SOURCES", "exact target Sheet headers", "template data"])
 
     for dirname in ["current", "deliverables"]:
         path = repo_root / "docs" / "test-design" / dirname
@@ -1408,7 +1413,7 @@ def main() -> int:
         batch_module,
         ["validate_batch_artifacts", "prepare_function_case_generation", "minimum_cases_for_plan_row", "元素类型", "适用DFX维度", "应生成用例数", "artifacts/data", "function_cases_part_001.json", "function_cases_manifest.json", "FUNCTION_CASE_REQUIRED_FIELDS"],
     )
-    assert_contains(excel_tools, ["validate-batch-artifacts", "prepare-function-case-generation"])
+    assert_contains(excel_tools, ["validate-batch-artifacts", "prepare-function-case-generation", "assemble-formal-workbook", "--run-dir"])
     function_json_schema_markers = ["用例编号", "用侊 ID", "用侊标题", "场景类型", "steps", "expected", "操作步骤", "预期结果"]
     assert_contains(repo_root / "scripts" / "validate-generated-python-scripts.py", function_json_schema_markers)
     for path in [

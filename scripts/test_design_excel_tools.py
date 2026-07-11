@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from test_design.io_utils import (
@@ -52,6 +53,7 @@ from test_design.paths import (
     module_names,
     relative_project_path,
 )
+from test_design.formal_assembler import assemble_formal_workbook
 
 
 IMPORT_AUTO_FIELDS = {"测试用例系统编号", "作者"}
@@ -336,6 +338,19 @@ def complete_deliverables(
         if page_discovery:
             validator_args.extend(["--page-discovery", str(page_discovery)])
         run_python_script(script_dir / "validate-test-design-deliverable.py", validator_args)
+        published = [
+            project_root / "docs" / "test-design" / "current" / formal_name,
+            project_root / "docs" / "test-design" / "deliverables" / formal_name,
+            project_root / "docs" / "test-design" / "deliverables" / import_name,
+            project_root / "docs" / "test-assets" / "modules" / formal_name,
+            project_root / "docs" / "test-assets" / "imports" / import_name,
+        ]
+        missing_published = [str(path) for path in published if not path.exists() or path.stat().st_size == 0]
+        if missing_published:
+            raise ValueError(f"Delivery reported success but published files are missing or empty: {missing_published}")
+        print("OK: delivery outputs published and validated:")
+        for path in published:
+            print(f"- {relative_project_path(project_root, path)}")
 
 
 def generate_import_workbook(
@@ -493,6 +508,12 @@ def main() -> int:
     prepare_cases = sub.add_parser("prepare-function-case-generation", help="Remove stale function case shards and manifest before generating new JSON shards.")
     prepare_cases.add_argument("--run-dir", required=True, type=Path)
 
+    assemble = sub.add_parser("assemble-formal-workbook", help="Assemble all 8 formal-design Sheets from one batch run and the standard template.")
+    assemble.add_argument("--run-dir", required=True, type=Path)
+    assemble.add_argument("--template", type=Path)
+    assemble.add_argument("--output", required=True, type=Path)
+    assemble.add_argument("--project-root", type=Path, default=Path("."))
+
     finalize = sub.add_parser("finalize-deliverables", help="Copy validated workbooks to current/deliverables/internal archives and update batch-status paths.")
     finalize.add_argument("--project-root", required=True, type=Path)
     finalize.add_argument("--formal-workbook", required=True, type=Path)
@@ -505,9 +526,11 @@ def main() -> int:
     finalize.add_argument("--product-name")
 
     complete = sub.add_parser("complete-deliverables", help="One-shot precheck, style, import generation, finalize, and delivery validation.")
-    complete.add_argument("--project-root", required=True, type=Path)
-    complete.add_argument("--formal-workbook", required=True, type=Path)
-    complete.add_argument("--import-template", required=True, type=Path)
+    complete.add_argument("--project-root", type=Path, default=Path("."))
+    complete.add_argument("--run-dir", type=Path, help="Batch run to validate and assemble when --formal-workbook is omitted.")
+    complete.add_argument("--formal-workbook", type=Path)
+    complete.add_argument("--formal-template", type=Path)
+    complete.add_argument("--import-template", type=Path)
     complete.add_argument("--module-path", required=True)
     complete.add_argument("--import-workbook", type=Path)
     complete.add_argument("--batch-status", type=Path)
@@ -556,6 +579,11 @@ def main() -> int:
         validate_batch_artifacts(args.run_dir, args.phase)
     elif args.command == "prepare-function-case-generation":
         prepare_function_case_generation(args.run_dir)
+    elif args.command == "assemble-formal-workbook":
+        project_root = args.project_root.resolve()
+        template = args.template or (project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx")
+        counts = assemble_formal_workbook(args.run_dir, template, args.output)
+        print(f"OK: assembled formal workbook: {args.output} ({sum(counts.values())} total data rows)")
     elif args.command == "finalize-deliverables":
         if args.page_discovery and not args.batch_status:
             raise SystemExit(
@@ -574,24 +602,43 @@ def main() -> int:
             args.product_name,
         )
     elif args.command == "complete-deliverables":
-        if args.page_discovery and not args.batch_status:
+        project_root = args.project_root.resolve()
+        run_dir = args.run_dir.resolve() if args.run_dir else None
+        batch_status = args.batch_status or (run_dir / "batch-status.csv" if run_dir else None)
+        page_discovery = args.page_discovery or (run_dir / "page-discovery.csv" if run_dir else None)
+        scripts_path = args.scripts_path or (run_dir / "artifacts" / "scripts" if run_dir else None)
+        product_map = args.product_map or (project_root / "docs" / "test-assets" / "product-map.xlsx" if run_dir else None)
+        import_template = args.import_template or (project_root / "docs" / "test-design" / "测试用例模板.xlsx")
+        formal_template = args.formal_template or (project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx")
+        if page_discovery and not batch_status:
             raise SystemExit(
                 "ERROR: --batch-status is required when --page-discovery is provided. "
                 "Run init-batch-run first and keep batch-plan.md, batch-status.csv, batch-review.md, and page-discovery.csv together."
             )
-        complete_deliverables(
-            args.project_root,
-            args.formal_workbook,
-            args.import_template,
-            args.module_path,
-            args.import_workbook,
-            args.batch_status,
-            args.batch_id,
-            args.product_map,
-            args.page_discovery,
-            args.product_name,
-            args.scripts_path,
-        )
+        if args.formal_workbook:
+            complete_deliverables(
+                project_root, args.formal_workbook, import_template, args.module_path,
+                args.import_workbook, batch_status, args.batch_id, product_map,
+                page_discovery, args.product_name, scripts_path,
+            )
+        elif run_dir:
+            if scripts_path and scripts_path.exists():
+                run_python_script(
+                    Path(__file__).resolve().parent / "validate-generated-python-scripts.py",
+                    ["--path", str(scripts_path)],
+                )
+            validate_batch_artifacts(run_dir, "cases")
+            with tempfile.TemporaryDirectory(prefix="test-design-formal-") as value:
+                assembled = Path(value) / "formal.xlsx"
+                counts = assemble_formal_workbook(run_dir, formal_template, assembled)
+                complete_deliverables(
+                    project_root, assembled, import_template, args.module_path,
+                    args.import_workbook, batch_status, args.batch_id, product_map,
+                    page_discovery, args.product_name, scripts_path,
+                )
+                print(f"OK: assembled and delivered {counts.get(FORMAL_FUNCTION_SHEET, 0)} function case(s) from {run_dir}")
+        else:
+            raise SystemExit("ERROR: complete-deliverables requires --formal-workbook or --run-dir")
     elif args.command == "sync-product-map":
         sync_product_map(
             args.product_map,

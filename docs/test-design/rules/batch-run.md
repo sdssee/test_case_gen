@@ -48,7 +48,7 @@
 
 当前批次覆盖质量自检通过后，才能进入下一批。所有批次完成后只做最终汇总、跨模块汇总、回归范围、风险清单和客户总览，不得重新生成各批完整用例。
 
-批次交付收口必须使用统一工具 `scripts/run-test-design.ps1 complete-deliverables` 一站式完成中间文件预检、正式 Excel 格式修复、导入文件生成、交付复制、产品版图同步和交付件校验。收口工具必须先校验正式工作簿和导入文件，再更新正式目录、批次账本与产品版图；任何校验或同步失败时必须恢复本次调用前的文件状态。禁止手工在 `current/`、`deliverables/`、`docs/test-assets/modules/`、`docs/test-assets/imports/` 之间反复复制，禁止把正常批次拆成多轮修复和校验脚本。`batch-status.csv` 中已通过批次的 `归档路径` 必须指向 `docs/test-assets/modules/` 下的内部模块归档，`导入文件路径` 必须指向 `docs/test-assets/imports/` 下的导入归档。需要同步产品版图时传入 `--product-map`、`--page-discovery` 和 `--batch-status`，由工具调用 `sync-product-map`。
+批次交付收口必须使用统一工具 `scripts/run-test-design.ps1 complete-deliverables --run-dir <batch-run-dir>`，由框架从 manifest 与按 Sheet JSON 组装 8 Sheet 正式 Excel，再一站式完成格式修复、导入文件生成、交付复制、产品版图同步和交付件校验。禁止编写批次级 `gen_excel.py` 或使用 openpyxl 直接保存正式 Excel。收口工具必须先校验正式工作簿和导入文件，再更新正式目录、批次账本与产品版图；任何校验或同步失败时必须恢复本次调用前的文件状态。禁止手工在 `current/`、`deliverables/`、`docs/test-assets/modules/`、`docs/test-assets/imports/` 之间反复复制，禁止把正常批次拆成多轮修复和校验脚本。`batch-status.csv` 中已通过批次的 `归档路径` 必须指向 `docs/test-assets/modules/` 下的内部模块归档，`导入文件路径` 必须指向 `docs/test-assets/imports/` 下的导入归档。
 
 交付文件名必须只使用菜单/模块路径，例如 `一级模块_二级菜单_三级菜单_测试设计.xlsx` 和 `一级模块_二级菜单_三级菜单_导入用例.xlsx`。不得把运行文件夹名、批次目录名或产品名拼入文件名；如果 `module-path` 中包含产品名，必须同时传入 `--product-name` 由统一工具自动去除，避免 `文件夹名_产品名_模块名_测试设计.xlsx` 与 `一级菜单_二级菜单_三级菜单_测试设计.xlsx` 形成重复交付。
 

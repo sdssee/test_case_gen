@@ -27,6 +27,67 @@ SPEC.loader.exec_module(TOOLS)
 
 
 class ArchitectureSafetyTests(unittest.TestCase):
+    def test_formal_assembler_populates_all_sheets_and_removes_template_examples(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            run_dir = root / "run"
+            data_dir = run_dir / "artifacts" / "data"
+            data_dir.mkdir(parents=True)
+            template = REPO_ROOT / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
+            workbook = load_workbook(template, data_only=False)
+            sources = {
+                "测试设计总览": "overview.json",
+                "需求用户故事拆解": "requirements.json",
+                "测试场景矩阵": "scenarios.json",
+                "性能测试设计": "performance.json",
+                "风险与待确认问题": "risks.json",
+                "自动化建议": "automation.json",
+                "页面元素覆盖清单": "page_elements.json",
+            }
+            for sheet_name, filename in sources.items():
+                headers = [cell.value for cell in workbook[sheet_name][1] if cell.value]
+                row = {str(header): f"ASSEMBLED-{index + 1}" for index, header in enumerate(headers)}
+                (data_dir / filename).write_text(json.dumps([row], ensure_ascii=False), encoding="utf-8")
+
+            function_headers = [cell.value for cell in workbook["功能测试用例"][1] if cell.value]
+            function_row = {str(header): f"ASSEMBLED-{index + 1}" for index, header in enumerate(function_headers)}
+            function_row["用例 ID"] = "TC-ASSEMBLED-001"
+            function_row["Story ID/需求 ID"] = "REQ-ASSEMBLED-001"
+            function_row["用例标题"] = "组装验证-正式用例"
+            part_name = "function_cases_part_001.json"
+            (data_dir / part_name).write_text(json.dumps([function_row], ensure_ascii=False), encoding="utf-8")
+            (data_dir / "function_cases_manifest.json").write_text(
+                json.dumps({"part_size": 10, "total_cases": 1, "parts": [part_name]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            output = root / "assembled.xlsx"
+            counts = TOOLS.assemble_formal_workbook(run_dir, template, output)
+            self.assertEqual(1, counts["功能测试用例"])
+            assembled = load_workbook(output, data_only=True)
+            self.assertEqual("TC-ASSEMBLED-001", assembled["功能测试用例"]["A2"].value)
+            for sheet in assembled.worksheets:
+                combined = "".join(str(cell.value or "") for row in sheet.iter_rows(min_row=2) for cell in row)
+                self.assertNotIn("TC-LOGIN-001", combined)
+                self.assertNotIn("示例项目", combined)
+
+    def test_deliverable_validator_rejects_unmodified_formal_template(self) -> None:
+        template = REPO_ROOT / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts" / "validate-test-design-deliverable.py"),
+                "--workbook",
+                str(template),
+            ],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("formal-template example marker", result.stderr + result.stdout)
+
     def create_project_root(self, root: Path) -> None:
         source = REPO_ROOT / "docs" / "test-assets" / "batch-runs" / "templates"
         target = root / "docs" / "test-assets" / "batch-runs" / "templates"

@@ -50,21 +50,19 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-
   --batch-id BATCH-001
 ```
 
-生成正式测试设计后，优先使用一站式收口命令：
+完成批次 JSON 分片后，优先使用真正的一站式组装与收口命令。该命令会从 manifest 和 7 个 Sheet JSON 生成 8 Sheet 正式工作簿，并同时写入 `current/`、`deliverables/`、内部归档和独立导入文件：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-deliverables `
   --project-root . `
-  --formal-workbook docs/test-design/current/<测试设计.xlsx> `
-  --import-template docs/test-design/测试用例模板.xlsx `
+  --run-dir docs/test-assets/batch-runs/<任务> `
   --module-path "一级模块>二级菜单>三级菜单" `
-  --batch-status docs/test-assets/batch-runs/<任务>/batch-status.csv `
-  --page-discovery docs/test-assets/batch-runs/<任务>/page-discovery.csv `
-  --product-map docs/test-assets/product-map.xlsx `
-  --scripts-path docs/test-assets/batch-runs/<任务>/artifacts/scripts
+  --batch-id BATCH-001
 ```
 
-已存在同名批次时，初始化命令默认拒绝覆盖。继续原批次时追加 `--resume`；确需重建时追加 `--force-reinitialize`，工具会先生成带时间戳的完整备份。`complete-deliverables` 会先预校验正式文件，失败时恢复正式工作簿、导入文件、交付副本、批次账本和产品版图。
+如需排查组装问题，可先运行 `assemble-formal-workbook --run-dir <批次目录> --output <临时检查.xlsx>`；禁止在批次目录编写 `gen_excel.py` 之类脚本绕过标准组装器。
+
+已存在同名批次时，初始化命令默认拒绝覆盖。继续原批次时追加 `--resume`；确需重建时追加 `--force-reinitialize`，工具会先生成带时间戳的完整备份。`complete-deliverables` 只有在组装、正式文件、导入文件、资产同步和最终校验全部通过后才保留 `deliverables/` 输出；任一步失败都会恢复正式工作簿、导入文件、交付副本、批次账本和产品版图。
 
 旧资产升级或排障时可使用 `migrate-product-facts`、`validate-product-facts`、`rebuild-product-map`；正常 `sync-product-map` 会自动 upsert 模块 JSON 并重建 Excel 视图。
 

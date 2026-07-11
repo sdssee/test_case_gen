@@ -15,7 +15,7 @@
 | 内部测试资产事实 | `docs/test-assets/catalog/`、`docs/test-assets/product-map.xlsx`、`docs/test-assets/modules/`、`docs/test-assets/imports/`、`docs/test-assets/batch-runs/` | catalog 保存按模块 JSON 权威事实，product-map.xlsx 是可重建查询视图，其余目录保存归档、导入副本和批次状态。 |
 | 升级机制 | `VERSION`、`UPGRADE_MANIFEST.md`、`docs/UPGRADE.md`、`scripts/new-framework-upgrade-package.ps1`、`scripts/upgrade-framework.ps1` | 支持外网生成框架升级包、内网受控应用升级包，并保护内网业务资产。 |
 | 自动化校验 | `scripts/validate-test-design.py`、`scripts/validate-test-design.ps1`、`scripts/validate-test-design-deliverable.py`、`scripts/validate-test-design-deliverable.ps1` | 防止模板结构、导入模板下拉框、升级边界和关键规则发生漂移，并校验已生成交付件的覆盖关系、批次状态与产品版图同步。 |
-| 领域实现 | `scripts/test_design/`、`scripts/test_design_excel_tools.py` | 兼容 CLI 只负责编排；batch、excel_utils、io_utils、paths、fact_store、product_map_sync 分别承载批次、Excel、事务、路径和事实领域逻辑。 |
+| 领域实现 | `scripts/test_design/`、`scripts/test_design_excel_tools.py` | 兼容 CLI 只负责编排；batch、formal_assembler、excel_utils、io_utils、paths、fact_store、product_map_sync 分别承载批次、8 Sheet 组装、Excel、事务、路径和事实领域逻辑。 |
 | 运行时与事务保护 | `pyproject.toml`、`requirements.txt`、`scripts/run-test-design.ps1`、`tests/`、`.github/workflows/validate.yml` | 固定运行时契约，执行跨平台 CI，并验证批次幂等性、事实迁移、并发锁、交付回滚和升级回滚。 |
 
 规则归属和精简边界见 `docs/RULE_OWNERSHIP.md`。修改规则时，应先判断规则类型和权威源，再更新摘要引用和校验脚本。
@@ -47,7 +47,7 @@
 20. 模块级粗遍历、菜单轮廓、页面清单和功能地图不是临时分析结果，必须沉淀到 `catalog/modules/*.json`，再投影到 `product-map.xlsx` 的产品模块地图、页面元素地图、业务对象地图、业务链路地图、模块能力索引、跨模块依赖关系、用例资产索引、可复用测试数据、变更影响分析和变更记录；投影不得保留 `示例产品`、`示例模块`、`示例页面` 等模板行。
 21. 外网到内网升级以脚本升级为主、手动确认兜底；普通框架升级不得覆盖 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。标识：PROTECTED_ASSET_DIRS。
 22. `VERSION` 中的 `framework_version` 表示框架版本，`asset_schema_version` 表示内部事实结构版本。2.0.0 起 `catalog/modules/*.json` 是权威事实源，`product-map.xlsx` 是投影视图；历史归档 Excel 继续作为快照保留。结构升级必须通过迁移脚本先保留旧 Excel 真实行，再生成 catalog。
-23. `init-batch-run` 对已存在批次默认拒绝覆盖，`--resume` 只读恢复账本，`--force-reinitialize` 必须先备份再重建；`complete-deliverables` 必须先获取 `.test-design-locks/delivery.lock` 项目级排他锁，再预校验并对正式工作簿、导入文件、交付副本、批次账本和产品版图提供失败回滚。Excel、CSV 和 Markdown 的单文件写入使用同目录临时文件加原子替换。
+23. `init-batch-run` 对已存在批次默认拒绝覆盖，`--resume` 只读恢复账本，`--force-reinitialize` 必须先备份再重建；`complete-deliverables --run-dir` 必须先校验批次，再由 `formal_assembler` 从 manifest 与按 Sheet JSON 组装正式工作簿，获取 `.test-design-locks/delivery.lock` 项目级排他锁，并对正式工作簿、导入文件、`current/`、`deliverables/`、内部归档、批次账本和产品版图提供失败回滚。批次脚本不得直接保存正式 Excel。
 24. 正式测试设计、测试系统导入文件、批次账本、页面实探记录、临时脚本和 `product-map.xlsx` 都不得保留疑似真实密钥、Token、密码或内部敏感凭据；必须使用 `<valid_api_key>`、`<test_token>`、`<test_service_url>` 等占位符。
 25. 每次修改规范或模板后必须运行稳定性自检。
 26. Rule 镜像和轻量入口引用由 `docs/test-design/rules/entry-contract.json` 与 `scripts/sync-rule-entrypoints.py` 校验；修改权威 Rule 后使用 `--write` 更新镜像，禁止分别编辑两份 Rule。

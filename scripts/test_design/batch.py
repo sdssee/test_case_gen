@@ -334,6 +334,15 @@ def validate_case_steps_and_expected(case: dict[str, str], label: str) -> None:
     validate_numbered_sequence(steps, f"{label} 操作步骤", 4)
     validate_numbered_sequence(expected, f"{label} 预期结果", 3)
 
+    step_lines = numbered_lines(steps)
+    expected_lines = numbered_lines(expected)
+    strip_number = lambda line: re.sub(r"^\d+\.\s*", "", line).strip()
+    if [strip_number(line) for line in step_lines[:3]] == [strip_number(line) for line in expected_lines[:3]]:
+        raise ValueError(
+            f"{label} 预期结果 repeats navigation/actions from 操作步骤; "
+            "write observable page, data, message, and state outcomes instead"
+        )
+
     first_steps = "\n".join(numbered_lines(steps)[:3])
     entry_markers = ["登录", "打开系统", "访问系统", "进入系统", "打开平台", "访问平台", "进入平台", "<product_login_url>"]
     navigation_markers = ["一级", "二级", "三级", "菜单", "模块", "导航", "路径", ">", "页面"]
@@ -348,6 +357,15 @@ def validate_case_steps_and_expected(case: dict[str, str], label: str) -> None:
         raise ValueError(f"{label} 操作步骤 contains generic generated wording; write concrete page operations")
     if any(marker in expected for marker in ["behaves as expected", "passes", "符合预期", "正常显示"]) and len(numbered_lines(expected)) <= 3:
         raise ValueError(f"{label} 预期结果 is too generic; write observable page/data/state outcomes")
+
+    mutation_markers = ["点击「确定」", "点击“确定”", "点击「确认」", "点击“确认”", "保存", "提交", "批量确认", "屏蔽成功"]
+    mutation_success_markers = ["成功", "已确认", "已屏蔽", "保存后", "提交后", "状态更新", "数据更新"]
+    if contains_any(steps, mutation_markers) and contains_any(expected, mutation_success_markers):
+        test_data_context = "\n".join([precondition, str(case.get("测试数据", "") or ""), steps])
+        if not contains_any(test_data_context, ["AI_TEST", "CODEX_TEST", "用户提供测试数据"]):
+            raise ValueError(
+                f"{label} changes data/state but is not bound to AI_TEST/CODEX_TEST or user-provided test data"
+            )
 
 
 def validate_function_case_schema(case: dict[str, object], label: str, planned_ids: set[str] | None = None) -> None:
@@ -550,7 +568,31 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases") -> None:
     if phase == "cases":
         parts = manifest_parts(data_dir)
         planned_ids = planned_case_ids(plan_rows)
-        case_count = sum(validate_function_case_part(path, planned_ids) for path in parts)
+        part_counts = [validate_function_case_part(path, planned_ids) for path in parts]
+        invalid_nonfinal = [
+            f"{path.name}={count}"
+            for path, count in zip(parts[:-1], part_counts[:-1])
+            if count != MAX_FUNCTION_CASES_PER_PART
+        ]
+        if invalid_nonfinal:
+            raise ValueError(
+                "Every function case shard except the final shard must contain exactly "
+                f"{MAX_FUNCTION_CASES_PER_PART} cases: {invalid_nonfinal}"
+            )
+        case_count = sum(part_counts)
+        with (data_dir / FUNCTION_CASE_MANIFEST).open("r", encoding="utf-8-sig") as fp:
+            manifest_data = json.load(fp)
+        if isinstance(manifest_data, dict):
+            declared_part_size = manifest_data.get("part_size")
+            declared_total = manifest_data.get("total_cases")
+            if declared_part_size not in {None, MAX_FUNCTION_CASES_PER_PART}:
+                raise ValueError(
+                    f"{FUNCTION_CASE_MANIFEST} part_size must be {MAX_FUNCTION_CASES_PER_PART}, got {declared_part_size}"
+                )
+            if declared_total is not None and declared_total != case_count:
+                raise ValueError(
+                    f"{FUNCTION_CASE_MANIFEST} total_cases={declared_total} does not match actual shard total {case_count}"
+                )
         missing_sheet_files = [name for name in SHEET_DATA_FILES if not (data_dir / name).exists()]
         if missing_sheet_files:
             raise ValueError(f"artifacts/data is missing sheet-split files: {missing_sheet_files}")

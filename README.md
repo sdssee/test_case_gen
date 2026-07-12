@@ -47,6 +47,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-
   --project-root . `
   --run-id <YYYYMMDD_任务标识_BATCH-001> `
   --module-path "一级模块>二级菜单>三级菜单" `
+  --product-name "产品/系统名称" `
   --batch-id BATCH-001
 ```
 
@@ -57,12 +58,13 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
   --project-root . `
   --run-dir docs/test-assets/batch-runs/<任务_BATCH-001> `
   --module-path "一级模块>二级菜单>三级菜单" `
+  --product-name "产品/系统名称" `
   --batch-id BATCH-001
 ```
 
 如需排查组装问题，可先运行 `assemble-formal-workbook --run-dir <批次目录> --output <临时检查.xlsx>`；禁止在批次目录编写 `gen_excel.py` 之类脚本绕过标准组装器。
 
-一个 run-dir 只允许一个最小标题批次和一行 `batch-status.csv`；下一叶子批次必须使用新的 `<任务>_<BATCH-ID>` 目录。已存在同名批次时，初始化命令默认拒绝覆盖；继续原批次使用 `--resume`，重建使用 `--force-reinitialize`。`complete-deliverables` 只有在组装、资产同步和最终校验全部通过后才保留输出；失败会恢复工作簿、交付副本、账本、产品事实 catalog 和产品版图，成功后写入绑定 generation session 与文件 SHA256 的 `delivery-receipt.json`。
+一个 run-dir 只允许一个最小标题批次和一行 `batch-status.csv`；下一叶子批次必须使用新的 `<任务>_<BATCH-ID>` 目录。初始化时显式传入 `--product-name`，工具会写入 `batch-scope.json`，后续收口即使省略参数也复用同一产品，传入冲突产品则拒绝，避免把一级模块误写成产品名。已存在同名批次时，初始化命令默认拒绝覆盖；继续原批次使用 `--resume`，重建使用 `--force-reinitialize`。`complete-deliverables` 只有在组装、资产同步和最终校验全部通过后才保留输出；它会自动回填 `batch-review.md` 完成行，失败会恢复工作簿、交付副本、账本、产品事实 catalog 和产品版图，成功后写入绑定 generation session 与文件 SHA256 的 `delivery-receipt.json`。
 
 旧资产升级或排障时可使用 `migrate-product-facts`、`validate-product-facts`、`rebuild-product-map`；正常 `sync-product-map` 会自动 upsert 模块 JSON 并重建 Excel 视图。
 
@@ -82,7 +84,8 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
 - 先运行 `pipeline-status` 获取事实派生的下一步，再按 `discovery → plan → risk → cases → delivery` 逐阶段执行；风险只阻塞 risk/cases，不阻塞元素计划。没有模型不理解项时运行 `record-risk-none`，不伪造用户确认。
 - 日常修改运行 `scripts/validate-test-design.ps1 -Mode Fast`；提交、CI 和发布运行 `-Mode Full`。
 - `功能测试用例` 不写性能规格测试或 `DFP性能` 场景；性能、并发、大数据量、资源监控和极端压力进入 `性能测试设计`、风险或自动化建议。
-- 下拉必须实际选择代表项并记录联动；分页必须拆出每页条数、翻页/跳转、边界/禁用态；新增/编辑/删除必须绑定本次创建或用户提供的测试数据。
+- 选择类控件不得只展开；有限集合的每个可选项必须实际选择，真实禁用项必须尝试并记录阻塞证据，全部写入 `selection-option-observations.csv`；动态集合记录覆盖策略和联动；分页必须拆出每页条数、翻页/跳转、边界/禁用态；新增/编辑/删除必须绑定本次创建或用户提供的测试数据。
+- 页面可验证问题必须由模型自行操作，未完成时退回 discovery；不同用例不得复用相同操作步骤与预期结果，标题参数必须在步骤和预期中落地。
 - 页面实探必须记录所有可点击、可输入、可选择、可测试元素，并写入 `page-discovery.csv`、页面元素覆盖清单和产品版图。
 - 已有数据只能查看和只读深探；敏感操作只允许作用于本次创建且带测试标识的数据。
 - 客户交付件放在 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。

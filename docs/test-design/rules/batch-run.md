@@ -17,6 +17,7 @@
 - `batch-status.csv`
 - `batch-review.md`
 - `page-discovery.csv`
+- `selection-option-observations.csv`
 - `element-case-plan.csv`
 - `test-data-lifecycle.csv`
 - `risk-confirmation.csv`
@@ -26,6 +27,7 @@
 只要发生页面实探或生成 `page-discovery.csv`，即使当前任务只有一个最小标题路径，也必须先执行 `scripts/run-test-design.ps1 init-batch-run` 初始化批次目录，禁止临时手写旧版 `page-discovery.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 表头或跳过 `batch-status.csv`。同名批次默认禁止重复初始化；继续已有批次必须使用 `--resume`，强制重建必须使用 `--force-reinitialize`，并保留工具自动生成的时间戳备份。
 所有截图、临时脚本、页面证据和过程材料必须保存到当前独立批次目录的 `artifacts/` 下，禁止写入共享根目录或其他批次目录，避免证据、会话和分片混淆。
 `init-batch-run` 会创建 `artifacts/scripts/`、`artifacts/data/` 和 `artifacts/screenshots/`；功能用例分片、Sheet JSON 和页面证据必须写入这些目录，禁止把 `function_cases_part_*.json`、页面发现副本或元素计划副本直接写到 `artifacts/` 根目录。
+初始化时必须显式传入真实 `--product-name`；工具将产品、批次 ID 和唯一叶子模块写入 `batch-scope.json`。`--resume` 只可用同一范围恢复；`complete-deliverables` 自动复用该产品并拒绝冲突参数，防止把一级模块误当产品同步到 catalog 和 `product-map.xlsx`。
 
 ## 每批质量门禁
 
@@ -42,10 +44,10 @@
 
 阶段性门禁必须按顺序执行：
 
-1. 页面发现后运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery`，校验 `page-discovery.csv` 表头、列数、真实可交互元素和 `batch-status.csv` 状态。
-2. 先默认完成全部页面、元素、交互路径和 CRUD 生效闭环并通过 plan 门禁；随后仅把模型仍无法理解的业务语义、规则歧义或页面无法观察项写入 `risk-confirmation.csv`。真实确认项由用户确认后更新为 `已确认/否`；没有模型不理解项时由模型运行 `record-risk-none` 写入唯一的 `RISK-NONE/无需用户确认/否`，不得伪造用户确认。
+1. 页面发现后运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery`，校验 `page-discovery.csv` 表头、列数、真实可交互元素、`batch-status.csv` 状态和 `selection-option-observations.csv`。选择控件为有限集合时必须每个选项一行且每个可选项实际选择；真实禁用项必须尝试并记录具体阻塞状态与独立证据；动态集合必须逐行记录已选项并提供明确覆盖策略。
+2. 先默认完成全部页面、元素、交互路径和 CRUD 生效闭环并通过 plan 门禁；随后仅把模型仍无法理解的业务语义、规则歧义或页面无法观察项写入 `risk-confirmation.csv`。真实风险必须声明页面可验证性、实际页面验证动作与结果、不可验证或外部依赖原因和证据；“仅查看/未逐项点击/权限未知”不算外部阻塞，可页面验证或验证未完成时必须退回 discovery。真实确认项由用户确认后更新为 `已确认/否`；没有模型不理解项时由模型运行 `record-risk-none` 写入唯一的 `RISK-NONE/无需用户确认/否`，不得伪造用户确认。
 3. 功能用例分片生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <batch-run-dir>`，清理旧分片和旧 manifest，确保本轮只保留当前批次有效 JSON。
-4. 功能用例分片、Sheet JSON 和正式 Excel 生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase cases`，先校验 `function_cases_manifest.json`、三位编号分片、标准字段、步骤/预期完整性和每片最多 10 条，再校验 Sheet 分文件、计划用例数量和实际分片数量一致。
+4. 功能用例分片、Sheet JSON 和正式 Excel 生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase cases`，先校验 `function_cases_manifest.json`、三位编号分片、标准字段、跨分片重复步骤/预期、标题参数落地、选项值落地、计划功能点一致和每片最多 10 条，再校验 Sheet 分文件、计划用例数量和实际分片数量一致。
 5. 严格按 `discovery → plan → risk → cases → delivery` 累积门禁执行；任一阶段失败时回到当前阶段补充页面深探、元素计划、逐修改项生命周期、模型不理解项确认或用例分片，禁止降低预算、删除元素或跳过 DFX 绕过门禁。
 6. `element-case-plan.csv` 必须填写 `操作类别`、`验证要求`、`数据策略`、`执行状态`。创建、编辑、删除、配置、状态变更必须使用本次创建或用户提供测试数据并标记实际执行完成；编辑/配置/状态变更的每个修改项必须在 `test-data-lifecycle.csv` 独立一行记录保存后回显和实际生效结果。
 7. 生成用例前运行 `prepare-function-case-generation`；该命令先通过 risk 门禁，再清理旧分片、manifest 和七个 Sheet JSON，并生成绑定当前 discovery/plan/lifecycle/risk 哈希的 `generation-session.json`。manifest 必须携带同一 session ID 和 source fingerprint，避免新旧轮次混装或上游变化后继续复用旧用例。
@@ -58,10 +60,10 @@
 
 ## 文件格式门禁
 
-- `batch-status.csv`、`page-discovery.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 和 `risk-confirmation.csv` 必须复制标准模板或按完全相同表头生成，禁止自定义精简表头。
+- `batch-scope.json`、`batch-status.csv`、`page-discovery.csv`、`selection-option-observations.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 和 `risk-confirmation.csv` 必须由初始化工具生成或复制标准模板，禁止自定义精简表头或改写产品/批次范围。
 - `page-discovery.csv`、`element-case-plan.csv` 和 `test-data-lifecycle.csv` 必须使用 CSV writer 或等价结构化方式写入，保证每行列数与表头一致，防止字段错位。
 - `batch-plan.md` 不得仍标记已完成批次为执行中或待开始；页面清单数量必须与 `batch-status.csv` 页面数一致。
-- `batch-review.md` 必须引用已完成批次的批次 ID、归档路径和导入文件路径。
+- `complete-deliverables` 必须把已完成批次的状态、覆盖数量、归档路径、导入路径、质量自检和遗留问题自动回填到 `batch-review.md` 的唯一完成行；空模板行、重复批次行或与 `batch-status.csv` 不一致的评审行必须拒绝交付。
 
 ## 中间文件限制
 

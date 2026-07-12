@@ -716,6 +716,7 @@ def main() -> int:
     batch_status_template = batch_templates_dir / "batch-status-template.csv"
     batch_review_template = batch_templates_dir / "batch-review-template.md"
     page_discovery_template = batch_templates_dir / "page-discovery-template.csv"
+    selection_option_observations_template = batch_templates_dir / "selection-option-observations-template.csv"
     element_case_plan_template = batch_templates_dir / "element-case-plan-template.csv"
     test_data_lifecycle_template = batch_templates_dir / "test-data-lifecycle-template.csv"
     risk_confirmation_template = batch_templates_dir / "risk-confirmation-template.csv"
@@ -725,6 +726,7 @@ def main() -> int:
         batch_status_template,
         batch_review_template,
         page_discovery_template,
+        selection_option_observations_template,
         element_case_plan_template,
         test_data_lifecycle_template,
         risk_confirmation_template,
@@ -1004,7 +1006,9 @@ def main() -> int:
     selection_control_markers = [
         "选择类控件",
         "不得只展开查看选项",
-        "代表性选项",
+        "有限集合",
+        "每个选项",
+        "selection-option-observations.csv",
         "选项取值/输入值",
         "联动/依赖变化",
     ]
@@ -1161,6 +1165,20 @@ def main() -> int:
         page_discovery_rows = list(csv.reader(fp))
     if len(page_discovery_rows) < 2 or len(page_discovery_rows[1]) != len(page_discovery_rows[0]):
         fail("page-discovery-template.csv sample row must have the same column count as its header")
+    expected_selection_option_observations_header = (
+        "批次ID,最小标题路径,页面/入口,元素名称/文案,元素类型,选项值,选项序号,可用选项总数,选项集合类型,"
+        "是否实际选择,选择前状态,选择后页面变化,联动/依赖变化,结果分支/后续状态,恢复/清空结果,覆盖策略,"
+        "证据路径,证据定位,阻塞原因,关联用例ID,备注"
+    )
+    if read_text(selection_option_observations_template).splitlines()[0] != expected_selection_option_observations_header:
+        fail("selection-option-observations-template.csv header changed unexpectedly")
+    with selection_option_observations_template.open("r", encoding="utf-8-sig", newline="") as fp:
+        selection_option_observations_rows = list(csv.reader(fp))
+    if (
+        len(selection_option_observations_rows) < 2
+        or len(selection_option_observations_rows[1]) != len(selection_option_observations_rows[0])
+    ):
+        fail("selection-option-observations-template.csv sample row must have the same column count as its header")
     expected_element_case_plan_header = (
         "批次ID,最小标题路径,页面/入口,功能点,元素名称/文案,元素类型,交互方式,业务路径,数据状态,"
         "适用DFX维度,适用DFX场景,测试设计方向,应生成用例数,计划用例ID,实际用例ID,"
@@ -1183,8 +1201,9 @@ def main() -> int:
     if len(test_data_lifecycle_rows) < 2 or len(test_data_lifecycle_rows[1]) != len(test_data_lifecycle_rows[0]):
         fail("test-data-lifecycle-template.csv sample row must have the same column count as its header")
     expected_risk_confirmation_header = (
-        "批次ID,风险ID,模型不理解内容/待确认问题,已完成深探依据,用户确认结论,处置策略,是否阻塞用例设计,"
-        "关联页面/入口,关联元素名称/文案,证据路径,确认状态,关联用例ID,备注"
+        "批次ID,风险ID,模型不理解内容/待确认问题,已完成深探依据,页面可验证性,页面验证动作,页面验证结果,"
+        "不可验证/外部依赖原因,用户确认结论,处置策略,是否阻塞用例设计,关联页面/入口,"
+        "关联元素名称/文案,证据路径,确认状态,关联用例ID,备注"
     )
     if read_text(risk_confirmation_template).splitlines()[0] != expected_risk_confirmation_header:
         fail("risk-confirmation-template.csv header changed unexpectedly")

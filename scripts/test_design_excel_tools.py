@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -194,6 +195,15 @@ def update_batch_status_paths(
 
 
 def sync_batch_markdown_paths(batch_status: Path, changes: list[dict[str, str]]) -> None:
+    def markdown_cell(value: object) -> str:
+        return " ".join(str(value or "").split()).replace("|", "｜")
+
+    with batch_status.open("r", encoding="utf-8-sig", newline="") as stream:
+        status_by_id = {
+            row.get("批次ID", "").strip(): row
+            for row in csv.DictReader(stream)
+            if row.get("批次ID", "").strip()
+        }
     for markdown_name in ["batch-plan.md", "batch-review.md"]:
         markdown_path = batch_status.resolve().parent / markdown_name
         if not markdown_path.exists():
@@ -205,6 +215,48 @@ def sync_batch_markdown_paths(batch_status: Path, changes: list[dict[str, str]])
                 new_value = change.get(new_key, "")
                 if old_value and new_value:
                     text = text.replace(old_value, new_value)
+            if markdown_name == "batch-review.md":
+                batch_id = change["批次ID"]
+                status = status_by_id.get(batch_id)
+                if status:
+                    issue = status.get("待确认问题", "").strip() or "无"
+                    completion_line = "| " + " | ".join(
+                        markdown_cell(value)
+                        for value in [
+                            batch_id,
+                            status.get("状态", ""),
+                            status.get("页面数", ""),
+                            status.get("元素总数", ""),
+                            status.get("已覆盖元素数", ""),
+                            status.get("功能用例数", ""),
+                            status.get("性能场景数", ""),
+                            status.get("归档路径", ""),
+                            status.get("导入文件路径", ""),
+                            status.get("覆盖质量自检", ""),
+                            issue,
+                        ]
+                    ) + " |"
+                    pattern = re.compile(rf"^\|\s*{re.escape(batch_id)}\s*\|.*$", re.MULTILINE)
+                    if pattern.search(text):
+                        text = pattern.sub(lambda _match: completion_line, text, count=1)
+                    else:
+                        lines = text.splitlines()
+                        section_index = next(
+                            (index for index, line in enumerate(lines) if line.strip() == "## 批次完成情况"),
+                            -1,
+                        )
+                        separator_index = next(
+                            (
+                                index
+                                for index in range(section_index + 1, len(lines))
+                                if lines[index].lstrip().startswith("| ---")
+                            ),
+                            -1,
+                        )
+                        if separator_index < 0:
+                            raise ValueError("batch-review.md is missing the standard completion table")
+                        lines.insert(separator_index + 1, completion_line)
+                        text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
             if change["归档路径"] not in text or change["导入文件路径"] not in text:
                 text += (
                     "\n\n## 交付收口路径\n"
@@ -223,7 +275,9 @@ def cleanup_batch_artifacts(batch_status: Path | None) -> None:
 
 
 from test_design.batch import (
+    BATCH_SCOPE,
     DELIVERY_RECEIPT,
+    batch_scope_data,
     generation_session_data,
     generation_session_core_is_current,
     generation_session_is_current,
@@ -244,7 +298,7 @@ def validate_delivery_scope(
     batch_id: str | None,
     module_path: str,
     product_name: str | None,
-) -> None:
+) -> str | None:
     with batch_status.open("r", encoding="utf-8-sig", newline="") as stream:
         rows = list(csv.DictReader(stream))
     if len(rows) != 1:
@@ -253,14 +307,30 @@ def validate_delivery_scope(
     ledger_batch_id = row.get("批次ID", "").strip()
     if batch_id and batch_id != ledger_batch_id:
         raise ValueError(f"--batch-id {batch_id!r} does not match batch-status.csv {ledger_batch_id!r}")
-    _, modules = split_module_parts(module_path, product_name)
+    scope = batch_scope_data(batch_status.resolve().parent)
+    if scope is None:
+        raise ValueError(f"Delivery requires a valid {BATCH_SCOPE}; resume the batch with its original --product-name")
+    if str(scope.get("batch_id", "")).strip() != ledger_batch_id:
+        raise ValueError(f"{BATCH_SCOPE} batch_id does not match batch-status.csv")
+    scoped_product = str(scope.get("product_name", "")).strip()
+    if not scoped_product:
+        raise ValueError(f"{BATCH_SCOPE} must preserve a non-empty product_name")
+    if product_name and product_name.strip() != scoped_product:
+        raise ValueError(
+            f"--product-name {product_name!r} does not match the batch scope product {scoped_product!r}"
+        )
+    resolved_product = scoped_product or product_name
+    _, modules = split_module_parts(module_path, resolved_product)
     requested_leaf = ">".join(modules) or module_path.strip()
     ledger_leaf = row.get("最小标题路径", "").strip()
-    if requested_leaf != ledger_leaf:
+    scoped_leaf = str(scope.get("module_path", "")).strip()
+    if requested_leaf != ledger_leaf or scoped_leaf != ledger_leaf:
         raise ValueError(
-            f"--module-path resolves to leaf {requested_leaf!r}, but batch-status.csv is scoped to {ledger_leaf!r}; "
+            f"--module-path resolves to leaf {requested_leaf!r}, {BATCH_SCOPE} preserves {scoped_leaf!r}, "
+            f"but batch-status.csv is scoped to {ledger_leaf!r}; "
             "do not deliver one leaf batch under another module path"
         )
+    return resolved_product
 
 
 def write_delivery_receipt(
@@ -374,7 +444,7 @@ def complete_deliverables(
 ) -> None:
     project_root = project_root.resolve()
     if batch_status:
-        validate_delivery_scope(batch_status.resolve(), batch_id, module_path, product_name)
+        product_name = validate_delivery_scope(batch_status.resolve(), batch_id, module_path, product_name)
     script_dir = Path(__file__).resolve().parent
     _, _, import_name = deliverable_names(module_path, product_name)
     target_import = import_workbook or (project_root / "docs" / "test-assets" / "imports" / import_name)
@@ -605,7 +675,11 @@ def main() -> int:
     init.add_argument("--run-id", required=True)
     init.add_argument("--module-path", required=True)
     init.add_argument("--batch-id", default="BATCH-001")
-    init.add_argument("--product-name")
+    init.add_argument(
+        "--product-name",
+        required=True,
+        help="Explicit product/system name persisted in batch-scope.json and reused by delivery.",
+    )
     init_mode = init.add_mutually_exclusive_group()
     init_mode.add_argument("--resume", action="store_true", help="Reuse an existing batch run without changing its ledgers.")
     init_mode.add_argument(

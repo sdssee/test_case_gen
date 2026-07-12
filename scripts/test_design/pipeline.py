@@ -10,13 +10,15 @@ from pathlib import Path
 from .batch import (
     DELIVERY_RECEIPT,
     FUNCTION_CASE_MANIFEST,
+    evidence_path_exists,
     generation_session_data,
     generation_session_is_current,
     read_csv_exact,
     template_headers,
     validate_batch_artifacts,
 )
-from .validators.batch_ledgers import risk_confirmation_state
+from .validators.batch_ledgers import risk_confirmation_state, risk_page_verification_state
+from .fact_store import validate_catalog
 
 
 def _failure(stage: str, action: str, reason: str, command: str = "") -> dict[str, object]:
@@ -91,6 +93,7 @@ def validate_delivery_receipt(
             raise ValueError(f"{DELIVERY_RECEIPT} product_map_path escapes project root") from exc
         if product_map_path not in recorded or product_map_path.suffix.lower() != ".xlsx":
             raise ValueError(f"{DELIVERY_RECEIPT} product_map_path is not a validated XLSX file")
+        validate_catalog(product_map_path, require_existing=True)
 
 
 def derive_pipeline_status(run_dir: Path) -> dict[str, object]:
@@ -116,6 +119,23 @@ def derive_pipeline_status(run_dir: Path) -> dict[str, object]:
             template_headers(templates_dir, "risk-confirmation-template.csv"),
             "risk-confirmation.csv",
         )
+        discovery_rows = read_csv_exact(
+            run_dir / "page-discovery.csv",
+            template_headers(templates_dir, "page-discovery-template.csv"),
+            "page-discovery.csv",
+        )
+        page_verification_state, page_verification_reasons = risk_page_verification_state(
+            rows,
+            discovery_rows,
+            lambda value: evidence_path_exists(run_dir, value),
+        )
+        if page_verification_state != "ready":
+            return _failure(
+                "DISCOVERY_REQUIRED",
+                "继续页面实探，先自行验证所有可由页面观察的问题",
+                "; ".join(page_verification_reasons),
+                f"scripts/run-test-design.ps1 validate-batch-artifacts --run-dir \"{run_dir}\" --phase discovery",
+            )
         risk_state, reasons = risk_confirmation_state(rows)
     except Exception as exc:
         return _failure("RISK_ASSESSMENT_REQUIRED", "修复风险确认账本", str(exc))

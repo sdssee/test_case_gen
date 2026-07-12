@@ -13,6 +13,7 @@ from ..contracts.function_cases import (
     MAX_FUNCTION_CASES_PER_PART,
 )
 from ..contracts.sheet_data import SHEET_DATA_HEADERS
+from .case_collection import validate_case_collection, validate_page_size_grounding
 
 
 PLACEHOLDER_CASE_IDS = {"", "TC-A2A-XXX", "TC-XXX", "TODO", "TBD"}
@@ -95,13 +96,21 @@ def validate_function_case_schema(case: dict[str, object], label: str, planned_i
     if normalized["测试类型"] == "性能规格测试" or normalized["DFX维度"] == "DFP性能":
         raise ValueError(f"{label} must not put performance scenarios into function case shards")
     validate_case_steps_and_expected(normalized, label)
+    validate_page_size_grounding(normalized, label=label)
+
+
+def _case_rows(payload: object, label: str) -> list[dict[str, object]]:
+    rows = payload.get("cases") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        raise ValueError(f"{label} must contain a list or an object with a cases list")
+    return rows
 
 
 def validate_function_case_part(path: Path, planned_ids: set[str] | None = None) -> int:
     if not FUNCTION_CASE_PART_RE.match(path.name):
         raise ValueError(f"{path} must use function_cases_part_001.json naming")
     data = json.loads(path.read_text(encoding="utf-8-sig"))
-    cases = data.get("cases") if isinstance(data, dict) else data
+    cases = _case_rows(data, str(path))
     if not isinstance(cases, list) or len(cases) > MAX_FUNCTION_CASES_PER_PART:
         raise ValueError(f"{path} must contain at most {MAX_FUNCTION_CASES_PER_PART} cases")
     seen_ids: set[str] = set()
@@ -111,6 +120,7 @@ def validate_function_case_part(path: Path, planned_ids: set[str] | None = None)
         if case_id in seen_ids:
             raise ValueError(f"{path.name} has duplicate 用例 ID: {case_id}")
         seen_ids.add(case_id)
+    validate_case_collection(cases, label=path.name)
     return len(cases)
 
 

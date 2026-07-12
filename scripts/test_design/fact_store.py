@@ -319,9 +319,65 @@ def project_catalog_to_workbook(product_map: Path) -> None:
 def validate_catalog(product_map: Path, require_existing: bool = False) -> dict[str, int]:
     documents = load_documents(product_map, require_existing=require_existing)
     counts = {sheet_name: 0 for sheet_name in PRODUCT_MAP_SHEETS}
-    for _, document in documents:
+    seen_module_keys: dict[str, Path] = {}
+    products_by_module_path: dict[str, set[str]] = {}
+    seen_fact_ids: dict[str, Path] = {}
+    for path, document in documents:
+        module_key = str(document.get("module_key", "")).strip()
+        product = str(document.get("product", "")).strip()
+        module_path = str(document.get("module_path", "")).strip()
+        previous_module = seen_module_keys.get(module_key)
+        if previous_module is not None:
+            raise ValueError(
+                f"Product fact catalog contains duplicate module_key {module_key!r}: {previous_module} and {path}"
+            )
+        seen_module_keys[module_key] = path
+        if path.name != "_legacy.json":
+            expected_name = module_document_name(module_key)
+            if path.name != expected_name:
+                raise ValueError(
+                    f"Product fact module document filename is not canonical for {module_key!r}: "
+                    f"{path.name} != {expected_name}"
+                )
+            expected_key = (
+                module_path
+                if module_path == product or module_path.startswith(f"{product}>")
+                else f"{product}>{module_path}"
+            )
+            if module_key != expected_key:
+                raise ValueError(
+                    f"Product fact module_key must bind product and module_path: {module_key!r} != {expected_key!r}"
+                )
+            fact_total = sum(len(document["facts"].get(sheet_name, [])) for sheet_name in PRODUCT_MAP_SHEETS)
+            if fact_total == 0:
+                raise ValueError(f"Product fact module document must not be empty: {path}")
+            products_by_module_path.setdefault(module_path, set()).add(product)
         for sheet_name in PRODUCT_MAP_SHEETS:
-            counts[sheet_name] += len(document["facts"].get(sheet_name, []))
+            records = document["facts"].get(sheet_name, [])
+            counts[sheet_name] += len(records)
+            for record in records:
+                fact_id = str(record.get("id", ""))
+                previous_fact = seen_fact_ids.get(fact_id)
+                if previous_fact is not None:
+                    raise ValueError(
+                        f"Product fact catalog contains duplicate fact id {fact_id}: {previous_fact} and {path}"
+                    )
+                seen_fact_ids[fact_id] = path
+                fact_product = str(record.get("data", {}).get("产品/系统", "")).strip()
+                if fact_product and product and fact_product != product:
+                    raise ValueError(
+                        f"Product fact {fact_id} 产品/系统={fact_product!r} does not match document product={product!r}"
+                    )
+    conflicting_paths = {
+        module_path: sorted(products)
+        for module_path, products in products_by_module_path.items()
+        if len(products) > 1 and module_path.split(">", 1)[0] in products
+    }
+    if conflicting_paths:
+        raise ValueError(
+            "Product fact catalog maps the same module_path to conflicting products and one product is actually "
+            f"the path's first-level module: {conflicting_paths}"
+        )
     index_path = catalog_dir(product_map) / "index.json"
     if require_existing and not index_path.exists():
         raise ValueError(f"Product fact catalog index is missing: {index_path}")

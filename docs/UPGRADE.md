@@ -41,7 +41,7 @@
 `VERSION` 中包含两个版本：
 
 ```text
-framework_version=2.1.0
+framework_version=2.2.0
 asset_schema_version=2.0.0
 ```
 
@@ -60,9 +60,11 @@ powershell -ExecutionPolicy Bypass -File scripts\new-framework-upgrade-package.p
 
 `docs/test-assets/batch-runs/README.md` 和 `docs/test-assets/batch-runs/templates/` 是框架模板资产，允许随普通框架升级进入升级包；真实批次运行目录和历史业务资产仍受保护，不得覆盖。
 
-框架升级只更新批次模板，不批量改写历史运行目录；对需要继续执行的旧批次，使用 `init-batch-run --resume` 做单批兼容迁移。迁移前自动保留 `.pre-structured-ledger.csv` 或旧风险账本备份，新增结构化字段保持待复核状态，不伪造已执行事实。
+框架升级只更新批次模板，不批量改写历史运行目录；对需要继续执行的旧批次，使用 `init-batch-run --resume --product-name "<原产品名>"` 做单批兼容迁移并补齐 `batch-scope.json`。迁移前自动保留 `.pre-structured-ledger.csv` 或旧风险账本备份，新增结构化字段保持待复核状态，不伪造已执行事实。
 
 2.1.0 起一个 run-dir 只能包含一个最小标题批次。旧目录若在 `batch-status.csv` 中保存多行批次，必须先按批次复制并拆分 ledgers、证据和产物到独立目录；框架会拒绝混装，不会猜测性自动拆分历史事实。
+
+2.2.0 起有限选择集合必须补录 `selection-option-observations.csv` 的每个选项事实；旧批次恢复时工具只补齐模板和 scope，不会伪造逐项点击、页面变化或证据。原用例分片若存在重复正文、标题参数未落地、计划功能点串位或临时选择误判为持久化变更，必须回到 discovery/plan 后重新 prepare 和生成。
 
 ## 内网应用升级包
 
@@ -101,7 +103,8 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
   --project-root . `
   --formal-workbook docs/test-design/current/<测试设计.xlsx> `
   --import-template docs/test-design/测试用例模板.xlsx `
-  --module-path "一级模块>二级菜单>三级菜单"
+  --module-path "一级模块>二级菜单>三级菜单" `
+  --product-name "产品/系统名称"
 
 powershell -ExecutionPolicy Bypass -File scripts\validate-test-design-deliverable.ps1 `
   -WorkbookPath docs/test-design/current/<测试设计.xlsx> `
@@ -109,7 +112,7 @@ powershell -ExecutionPolicy Bypass -File scripts\validate-test-design-deliverabl
 ```
 
 大范围任务可追加 `-BatchStatusPath <batch-status.csv>` 校验批次状态中的覆盖数量和质量门禁。
-升级到包含 `element-case-plan.csv` 和 `test-data-lifecycle.csv` 的框架后，新批次必须通过 `init-batch-run` 生成完整账本；旧批次如果缺少新账本，交付件严格校验会提示补齐，不应直接用空模板覆盖历史事实。
+升级到包含逐选项账本、结构化计划和生命周期门禁的框架后，新批次必须通过 `init-batch-run --product-name` 生成 `batch-scope.json`、`selection-option-observations.csv`、`element-case-plan.csv` 和 `test-data-lifecycle.csv`；旧批次使用 `--resume` 迁移，缺失逐选项事实时必须重新实探，不应直接用空模板覆盖历史事实。
 只需要单独生成导入文件且不做批次收口时，可使用 `generate-import` 兼容命令。
 
 ## 资产结构升级

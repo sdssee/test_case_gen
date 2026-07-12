@@ -19,6 +19,11 @@ from test_design.contracts.function_cases import (
     MAX_FUNCTION_CASES_PER_PART,
 )
 from test_design.validators.batch_ledgers import validate_lifecycle_rows, validate_operation_plan_rows
+from test_design.validators.case_collection import (
+    transfer_counter,
+    validate_case_collection,
+    validate_case_field_parity,
+)
 
 NS = {
     "x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -383,6 +388,12 @@ def fail(message: str) -> None:
 
 ENVIRONMENT_VALUE_PATTERNS = [
     re.compile(r"https?://(?!<)[^\s\"'<>，,；;]+", re.IGNORECASE),
+    re.compile(
+        r"\b(?!(?:[A-Za-z0-9-]+\.)*example\.(?:com|org|net)\b)(?!localhost\b)"
+        r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+        r"(?:com|net|org|cn|io|corp|internal|local)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\b(?:10|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"),
     re.compile(r"\b172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}\b"),
     re.compile(r"\b192\.168\.\d{1,3}\.\d{1,3}\b"),
@@ -1159,6 +1170,11 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
         if row.get("前置条件"):
             assert_numbered(row["前置条件"], f"功能测试用例 row {index} 前置条件")
 
+    try:
+        validate_case_collection(function_rows, label="功能测试用例")
+    except ValueError as exc:
+        fail(str(exc))
+
     performance_rows_raw = sheet_rows(workbook, "性能测试设计")
     require_headers(performance_rows_raw, ["性能场景 ID", "业务链路", "性能测试类型", "DFX维度", "DFX场景", "是否纳入本轮测试"], "性能测试设计")
     performance_rows = row_dicts(performance_rows_raw, "性能测试设计")
@@ -1258,10 +1274,6 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
         len(rows) + 1,
     )
 
-    case_titles = workbook_data["case_titles"]
-    assert isinstance(case_titles, dict)
-    formal_titles = set(case_titles.values())
-    imported_titles: set[str] = set()
     for index, row in enumerate(rows, start=2):
         for field in IMPORT_REQUIRED_FIELDS:
             if not row.get(field):
@@ -1290,11 +1302,47 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
         )
         if row.get("前置条件"):
             assert_numbered(row["前置条件"], f"Import workbook row {index} 前置条件")
-        imported_titles.add(title)
 
-    missing_titles = sorted(formal_titles - imported_titles)
-    if missing_titles:
-        fail(f"Import workbook is missing formal function cases: {missing_titles[:10]}")
+    try:
+        validate_case_collection(
+            rows,
+            label="Import workbook",
+            id_field="测试用例序号",
+            title_field="测试用例名称",
+            steps_field="测试步骤描述",
+            expected_field="测试步骤预期结果",
+        )
+        function_rows = workbook_data["function_rows"]
+        assert isinstance(function_rows, list)
+        formal_counter = transfer_counter(
+            function_rows,
+            {
+                "用例标题": "用例标题",
+                "操作步骤": "操作步骤",
+                "预期结果": "预期结果",
+                "前置条件": "前置条件",
+            },
+        )
+        import_counter = transfer_counter(
+            rows,
+            {
+                "用例标题": "测试用例名称",
+                "操作步骤": "测试步骤描述",
+                "预期结果": "测试步骤预期结果",
+                "前置条件": "前置条件",
+            },
+        )
+    except ValueError as exc:
+        fail(str(exc))
+    if formal_counter != import_counter:
+        missing = formal_counter - import_counter
+        unexpected = import_counter - formal_counter
+        missing_summary = [(signature[0], count) for signature, count in missing.items()][:10]
+        unexpected_summary = [(signature[0], count) for signature, count in unexpected.items()][:10]
+        fail(
+            "Import workbook title/steps/expected/precondition rows must exactly match formal function cases; "
+            f"missing={missing_summary}, unexpected={unexpected_summary}"
+        )
 
     xml = first_worksheet_xml(import_workbook)
     for marker, label in {
@@ -1580,10 +1628,12 @@ def validate_batch_artifacts_location(batch_status: Path) -> None:
 def validate_batch_run_directory_from_page_discovery(page_discovery: Path) -> Path:
     run_dir = page_discovery.resolve().parent
     required_entries = [
+        "batch-scope.json",
         "batch-plan.md",
         "batch-status.csv",
         "batch-review.md",
         "page-discovery.csv",
+        "selection-option-observations.csv",
         "element-case-plan.csv",
         "test-data-lifecycle.csv",
         "risk-confirmation.csv",
@@ -1657,6 +1707,9 @@ def validate_batch_import_workbooks(batch_status: Path, batch_rows: list[dict[st
 
 
 def validate_batch_review(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
+    def markdown_cell(value: object) -> str:
+        return " ".join(str(value or "").split()).replace("|", "｜")
+
     review_path = batch_status.resolve().parent / "batch-review.md"
     if not review_path.exists():
         fail(f"batch-review.md not found beside batch-status.csv: {review_path}")
@@ -1674,6 +1727,42 @@ def validate_batch_review(batch_status: Path, batch_rows: list[dict[str, str]]) 
             value = row.get(field, "")
             if value and value not in text:
                 fail(f"batch-review.md must reference {field} for completed batch {batch_id}: {value}")
+        table_rows: list[list[str]] = []
+        for line in text.splitlines():
+            if not line.lstrip().startswith("|"):
+                continue
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if cells and cells[0] == batch_id:
+                table_rows.append(cells)
+        if len(table_rows) != 1:
+            fail(
+                f"batch-review.md must contain exactly one populated completion row for {batch_id}; "
+                f"found {len(table_rows)}"
+            )
+        cells = table_rows[0]
+        if len(cells) != 11:
+            fail(f"batch-review.md completion row for {batch_id} must contain exactly 11 columns")
+        expected = [
+            markdown_cell(value)
+            for value in [
+                batch_id,
+                row.get("状态", ""),
+                row.get("页面数", ""),
+                row.get("元素总数", ""),
+                row.get("已覆盖元素数", ""),
+                row.get("功能用例数", ""),
+                row.get("性能场景数", ""),
+                row.get("归档路径", ""),
+                row.get("导入文件路径", ""),
+                row.get("覆盖质量自检", ""),
+                row.get("待确认问题", "").strip() or "无",
+            ]
+        ]
+        if cells != expected:
+            fail(
+                f"batch-review.md completion row for {batch_id} must match batch-status.csv counts, paths, status, "
+                f"quality result, and remaining issue; expected={expected}, actual={cells}"
+            )
 
 
 def validate_batch_plan(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
@@ -1709,8 +1798,22 @@ def validate_batch_plan(batch_status: Path, batch_rows: list[dict[str, str]]) ->
             )
 
 
-def validate_sheet_split_artifacts(run_dir: Path, workbook_function_case_count: int | None = None) -> None:
+def validate_sheet_split_artifacts(
+    run_dir: Path,
+    workbook_function_rows: list[dict[str, str]] | int | None = None,
+    *,
+    workbook_function_case_count: int | None = None,
+) -> None:
     import json
+
+    # Preserve the former count-only call shape for external callers while the
+    # delivery pipeline now supplies full rows for exact field parity.
+    legacy_count = workbook_function_case_count
+    if isinstance(workbook_function_rows, int):
+        if legacy_count is not None and legacy_count != workbook_function_rows:
+            fail("Conflicting workbook function case counts were supplied")
+        legacy_count = workbook_function_rows
+        workbook_function_rows = None
 
     data_dir = run_dir / "artifacts" / "data"
     scripts_dir = run_dir / "artifacts" / "scripts"
@@ -1746,6 +1849,7 @@ def validate_sheet_split_artifacts(run_dir: Path, workbook_function_case_count: 
     if stale_parts:
         fail(f"artifacts/data contains stale function case shards not listed in function_cases_manifest.json: {stale_parts[:10]}")
     actual_function_case_count = 0
+    manifest_function_rows: list[dict[str, object]] = []
     for part_index, part in enumerate(function_parts):
         try:
             data = json.loads(part.read_text(encoding="utf-8-sig"))
@@ -1779,6 +1883,7 @@ def validate_sheet_split_artifacts(run_dir: Path, workbook_function_case_count: 
             title = str(case.get("用例标题", "") or "").strip()
             if not title.startswith(f"{function_point}-"):
                 fail(f"{part.name} case {case_index} 用例标题 must use 功能点-当前标题 format")
+            manifest_function_rows.append(case)
     if isinstance(manifest_data, dict):
         if manifest_data.get("part_size") not in {None, MAX_FUNCTION_CASES_PER_PART}:
             fail(f"function_cases_manifest.json part_size must be {MAX_FUNCTION_CASES_PER_PART}: {manifest_data.get('part_size')}")
@@ -1787,10 +1892,22 @@ def validate_sheet_split_artifacts(run_dir: Path, workbook_function_case_count: 
                 "function_cases_manifest.json total_cases must match actual shard rows: "
                 f"{manifest_data.get('total_cases')} != {actual_function_case_count}"
             )
-    if workbook_function_case_count is not None and workbook_function_case_count != actual_function_case_count:
+    try:
+        validate_case_collection(manifest_function_rows, label="function case manifest")
+        if workbook_function_rows is not None:
+            validate_case_field_parity(
+                manifest_function_rows,
+                workbook_function_rows,
+                fields=FUNCTION_CASE_REQUIRED_FIELDS,
+                source_label="function case manifest",
+                target_label="功能测试用例 Sheet",
+            )
+    except ValueError as exc:
+        fail(str(exc))
+    if legacy_count is not None and legacy_count != actual_function_case_count:
         fail(
             "功能测试用例 Sheet row count must match manifest-listed function case shards: "
-            f"{workbook_function_case_count} != {actual_function_case_count}"
+            f"{legacy_count} != {actual_function_case_count}"
         )
     if scripts_dir.exists():
         for script in scripts_dir.glob("*.py"):
@@ -1986,7 +2103,7 @@ def validate_product_map_sync(
     assert isinstance(function_case_count, int)
     assert isinstance(function_rows, list)
     run_dir = page_discovery.resolve().parent
-    validate_sheet_split_artifacts(run_dir, function_case_count)
+    validate_sheet_split_artifacts(run_dir, function_rows)
     validate_element_case_plan_and_lifecycle(run_dir, discovery_rows, case_ids, function_rows)
 
     workbook_elements = {

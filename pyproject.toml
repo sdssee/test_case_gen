@@ -1,6 +1,6 @@
 [project]
 name = "test-case-gen-tools"
-version = "2.1.0"
+version = "2.2.0"
 description = "Test design specification and Excel delivery automation tools"
 requires-python = ">=3.11,<3.14"
 dependencies = [

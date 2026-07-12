@@ -4,12 +4,12 @@
 
 ## 版本
 
-- framework_version: 2.1.0
+- framework_version: 2.2.0
 - asset_schema_version: 2.0.0
 
 ## 升级类型
 
-- 类型：框架与资产结构升级
+- 类型：普通框架升级（批次账本兼容迁移）
 - 是否需要资产迁移：仅当目标项目的 `asset_schema_version` 不是 `2.0.0` 时需要
 - 迁移脚本：`scripts/migrations/1.0.0_to_2.0.0.ps1`
 
@@ -53,7 +53,7 @@
 
 ## 升级后校验
 
-2.1.0 增加 discovery→plan→risk→cases→delivery 状态机、单叶独立 run-dir、结构化操作与逐修改项证据、精确 Sheet 契约、generation session、交付收据与事务回滚、Fast/Full 自检、验证缓存和轻量入口 Gate 契约；产品事实 schema 仍为 2.0.0，从 2.0.0 升级无需资产迁移，从 1.0.0 升级仍需运行既有迁移。
+2.2.0 增加逐选项实探账本、页面可验证问题自动退回 discovery、跨分片重复正文与标题参数门禁、JSON/正式表/导入表逐字段一致性、计划功能点防串位、临时选择/取消误判拦截、`batch-scope.json` 产品范围固化和 catalog 空文档/产品冲突校验。产品事实 schema 仍为 2.0.0；既有批次继续执行前使用 `init-batch-run --resume --product-name "<原产品名>"` 补齐新账本与 scope，不批量改写历史事实。
 
 外网生成升级包：
 

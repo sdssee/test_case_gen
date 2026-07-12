@@ -201,6 +201,19 @@ class ArchitectureSafetyTests(unittest.TestCase):
         return run_dir
 
     def function_case(self, case_id: str) -> dict[str, str]:
+        suffix = int(case_id.rsplit("-", 1)[-1])
+        interaction, outcome = [
+            ("点击弹窗右上角关闭按钮", "弹窗关闭且原页面数据不变"),
+            ("点击弹窗取消按钮", "弹窗取消并返回原页面且数据不变"),
+            ("按 Esc 键关闭弹窗", "弹窗关闭且焦点返回危险操作按钮"),
+            ("点击弹窗遮罩区域", "弹窗按遮罩策略关闭且原页面数据不变"),
+            ("用 Tab 聚焦取消按钮后按 Enter", "弹窗通过键盘取消并返回原页面"),
+            ("用 Tab 聚焦关闭按钮后按 Space", "弹窗通过键盘关闭且焦点顺序保持正确"),
+            ("缩小浏览器窗口后点击关闭按钮", "小窗口下弹窗仍可关闭且页面布局未错乱"),
+            ("切换浏览器页签再返回并点击取消", "页签切换后弹窗状态保留且可正常取消"),
+            ("等待三秒后点击关闭按钮", "等待期间弹窗保持稳定且随后正常关闭"),
+            ("连续双击关闭按钮", "弹窗只关闭一次且页面无重复操作或报错"),
+        ][(suffix - 1) % 10]
         return {
             "用例 ID": case_id,
             "Story ID/需求 ID": "REQ-001",
@@ -213,8 +226,14 @@ class ArchitectureSafetyTests(unittest.TestCase):
             "DFX场景": "正向流程",
             "前置条件": "1. 已获得测试账号\n2. 系统服务可用",
             "测试数据": "无数据变更",
-            "操作步骤": "1. 打开系统登录入口\n2. 登录后进入模块菜单\n3. 打开风险页面\n4. 点击危险操作按钮并关闭弹窗",
-            "预期结果": "1. 登录后显示模块导航\n2. 风险页面加载完成\n3. 确认弹窗关闭且数据不变",
+            "操作步骤": (
+                "1. 打开系统登录入口\n2. 登录后进入模块菜单\n3. 打开风险页面\n"
+                f"4. 点击危险操作按钮后{interaction}"
+            ),
+            "预期结果": (
+                "1. 登录后显示模块导航\n2. 风险页面加载完成\n"
+                f"3. {outcome}"
+            ),
             "实际结果": "",
             "执行状态": "未执行",
             "是否适合自动化": "否",
@@ -674,7 +693,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 ],
             )
             status = TOOLS.derive_pipeline_status(run_dir)
-            self.assertEqual("RISK_LEDGER_REPAIR_REQUIRED", status["state"])
+            self.assertEqual("DISCOVERY_REQUIRED", status["state"])
 
     def test_generation_session_becomes_stale_when_plan_semantics_change(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -779,6 +798,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
             synced_map = load_workbook(product_map)
             synced_map["产品模块地图"]["A2"] = "交付阶段同步后的产品事实"
             synced_map.save(product_map)
+            TOOLS.validate_catalog(product_map)
             TOOLS.write_delivery_receipt(
                 project_root,
                 status_path,
@@ -845,6 +865,8 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 plan = next(csv.DictReader(stream))
             plan.update(
                 {
+                    "功能点": "编辑-危险操作",
+                    "测试设计方向": "编辑危险操作状态并验证保存回显和实际生效",
                     "操作类别": "编辑",
                     "验证要求": "回显,持久化,实际生效",
                     "数据策略": "本次创建测试数据",

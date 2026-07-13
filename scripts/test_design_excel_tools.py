@@ -73,6 +73,51 @@ IMPORT_ALLOWED_VALUES = {
 IMPORT_EXCLUDED_TEST_TYPES = {"性能规格测试"}
 IMPORT_EXCLUDED_DFX_DIMENSIONS = {"DFP性能"}
 IMPORT_EXCLUDED_DFX_EXTREME_SCENARIOS = {"压力极限", "资源耗尽", "并发极限"}
+PROTECTED_PUBLICATION_DIRS = (
+    Path("docs/test-design/current"),
+    Path("docs/test-design/deliverables"),
+    Path("docs/test-assets/modules"),
+    Path("docs/test-assets/imports"),
+    Path("docs/test-assets/catalog"),
+)
+
+
+def _containing_project_root(path: Path) -> Path | None:
+    resolved = path.resolve()
+    for candidate in [resolved, *resolved.parents, Path.cwd().resolve(), *Path.cwd().resolve().parents]:
+        if (candidate / "docs" / "test-design").is_dir() and (candidate / "docs" / "test-assets").is_dir():
+            return candidate
+    return None
+
+
+def reject_direct_protected_output(path: Path, command: str) -> None:
+    root = _containing_project_root(path)
+    if root is None:
+        return
+    resolved = path.resolve()
+    protected_dirs = [(root / relative).resolve() for relative in PROTECTED_PUBLICATION_DIRS]
+    protected_file = (root / "docs/test-assets/product-map.xlsx").resolve()
+    for target in protected_dirs:
+        if resolved == target or target in resolved.parents:
+            raise ValueError(
+                f"{command} cannot write a protected publication path directly: {resolved}. "
+                "Use orchestrated complete-deliverables after the Review Gate."
+            )
+    if resolved == protected_file:
+        raise ValueError(
+            f"{command} cannot write a protected publication path directly: {resolved}. "
+            "Use orchestrated complete-deliverables after the Review Gate."
+        )
+
+
+def validate_assembly_preview_output(run_dir: Path, output: Path) -> None:
+    preview_root = (run_dir.resolve() / "artifacts" / "previews").resolve()
+    resolved = output.resolve()
+    if resolved == preview_root or preview_root not in resolved.parents:
+        raise ValueError(
+            "assemble-formal-workbook is preview-only and must write under "
+            f"{preview_root}; formal publication is owned by complete-deliverables"
+        )
 
 
 def normalize_case_level(priority: str) -> str:
@@ -295,9 +340,11 @@ from test_design.batch import (
 from test_design.pipeline import derive_pipeline_status
 from test_design.orchestration.engine import (
     advance_orchestration,
+    complete_delivery_orchestration,
     orchestration_status,
     resume_external_block,
     submit_agent_result,
+    validate_delivery_running_state,
 )
 from test_design.orchestration.review import validate_review_artifacts
 
@@ -457,6 +504,7 @@ def complete_deliverables(
     formal_template: Path | None = None,
 ) -> dict[str, int]:
     project_root = project_root.resolve()
+    run_dir = batch_status.resolve().parent if batch_status else None
     if batch_status:
         product_name = validate_delivery_scope(batch_status.resolve(), batch_id, module_path, product_name)
     script_dir = Path(__file__).resolve().parent
@@ -488,7 +536,6 @@ def complete_deliverables(
 
     if scripts_path and scripts_path.exists():
         run_python_script(script_dir / "validate-generated-python-scripts.py", ["--path", str(scripts_path)])
-    run_dir = batch_status.resolve().parent if batch_status else None
     orchestrated = bool(run_dir and (run_dir / "orchestration" / "run-manifest.json").exists())
     if orchestrated:
         if assembly_run_dir is None or assembly_run_dir.resolve() != run_dir:
@@ -498,6 +545,13 @@ def complete_deliverables(
             )
         if formal_template is None:
             raise ValueError("orchestrated delivery requires the standard formal template")
+        mutable_paths.extend(
+            [
+                run_dir / "orchestration" / "run-manifest.json",
+                run_dir / "orchestration" / "state.json",
+                run_dir / "orchestration" / "events.jsonl",
+            ]
+        )
     assembly_counts: dict[str, int] = {}
     delivery_lock = project_root / ".test-design-locks" / "delivery.lock"
     with contextlib.ExitStack() as stack:
@@ -507,6 +561,8 @@ def complete_deliverables(
         if orchestrated and run_dir:
             stack.enter_context(exclusive_process_lock(run_dir / "orchestration" / ".orchestrator.lock"))
         stack.enter_context(exclusive_process_lock(delivery_lock))
+        if orchestrated and run_dir:
+            validate_delivery_running_state(run_dir)
         if run_dir:
             validate_batch_artifacts(run_dir, "cases")
             if orchestrated:
@@ -564,6 +620,8 @@ def complete_deliverables(
                 module_path,
                 product_name,
             )
+        if orchestrated and run_dir:
+            complete_delivery_orchestration(run_dir)
         print("OK: delivery outputs published and validated:")
         for path in published:
             print(f"- {relative_project_path(project_root, path)}")
@@ -812,8 +870,10 @@ def main() -> int:
 
     args = parser.parse_args()
     if args.command == "generate-import":
+        reject_direct_protected_output(args.output, "generate-import")
         generate_import_workbook(args.formal_workbook, args.import_template, args.output, args.module_path, args.product_name)
     elif args.command == "fix-formal-styles":
+        reject_direct_protected_output(args.output or args.workbook, "fix-formal-styles")
         apply_formal_workbook_styles(args.workbook, args.output, args.template)
     elif args.command == "init-batch-run":
         init_batch_run(
@@ -877,6 +937,7 @@ def main() -> int:
     elif args.command == "assemble-formal-workbook":
         project_root = args.project_root.resolve()
         template = args.template or (project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx")
+        validate_assembly_preview_output(args.run_dir, args.output)
         counts = assemble_formal_workbook(args.run_dir, template, args.output)
         print(f"OK: assembled formal workbook: {args.output} ({sum(counts.values())} total data rows)")
     elif args.command == "complete-deliverables":
@@ -893,18 +954,12 @@ def main() -> int:
                 "ERROR: --batch-status is required when --page-discovery is provided. "
                 "Run init-batch-run first and keep batch-plan.md, batch-status.csv, batch-review.md, and page-discovery.csv together."
             )
-        if args.formal_workbook and run_dir:
-            raise SystemExit(
-                "ERROR: orchestrated --run-dir delivery cannot accept --formal-workbook; "
-                "the reviewed JSON must be assembled inside the locked delivery transaction."
-            )
         if args.formal_workbook:
-            complete_deliverables(
-                project_root, args.formal_workbook, import_template, args.module_path,
-                args.import_workbook, batch_status, args.batch_id, product_map,
-                page_discovery, args.product_name, scripts_path,
+            raise SystemExit(
+                "ERROR: final architecture does not allow external --formal-workbook publication. "
+                "Use --run-dir so reviewed JSON is assembled inside the locked complete-deliverables transaction."
             )
-        elif run_dir:
+        if run_dir:
             with tempfile.TemporaryDirectory(prefix="test-design-formal-") as value:
                 assembled = Path(value) / "formal.xlsx"
                 counts = complete_deliverables(
@@ -915,16 +970,27 @@ def main() -> int:
                 )
                 print(f"OK: assembled and delivered {counts.get(FORMAL_FUNCTION_SHEET, 0)} function case(s) from {run_dir}")
         else:
-            raise SystemExit("ERROR: complete-deliverables requires --formal-workbook or --run-dir")
+            raise SystemExit(
+                "ERROR: final architecture requires complete-deliverables --run-dir; "
+                "external --formal-workbook publication is disabled"
+            )
     elif args.command == "sync-product-map":
-        sync_product_map(
-            args.product_map,
-            args.formal_workbook,
-            args.page_discovery,
-            args.module_path,
-            args.archive_path,
-            args.product_name,
-        )
+        discovery_run = args.page_discovery.resolve().parent
+        if (discovery_run / "orchestration" / "run-manifest.json").is_file():
+            raise ValueError(
+                "sync-product-map cannot publish facts for an orchestrated run; "
+                "complete-deliverables owns Review validation, locking, publication, and receipt creation"
+            )
+        root = _containing_project_root(args.product_map) or Path.cwd().resolve()
+        with exclusive_process_lock(root / ".test-design-locks" / "catalog.lock"):
+            sync_product_map(
+                args.product_map,
+                args.formal_workbook,
+                args.page_discovery,
+                args.module_path,
+                args.archive_path,
+                args.product_name,
+            )
     elif args.command == "migrate-product-facts":
         ensure_catalog(args.product_map)
         rebuild_index(args.product_map)

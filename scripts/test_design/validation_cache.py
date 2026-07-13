@@ -26,7 +26,11 @@ def fingerprint(paths: list[Path]) -> str:
                 digest.update(child.encode("utf-8"))
             continue
         digest.update(str(path.stat().st_size).encode("ascii"))
-        digest.update(path.read_bytes())
+        # Evidence traces and generated JSON can be large. Hash incrementally
+        # so repeated gate/source checks remain memory-bounded.
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
     return digest.hexdigest()
 
 

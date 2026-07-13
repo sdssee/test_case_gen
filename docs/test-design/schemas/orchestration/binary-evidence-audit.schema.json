@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/test-design/binary-evidence-audit.schema.json",
+  "title": "Binary Evidence Visual Privacy Audit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_sha256",
+    "inspection_method",
+    "visible_text",
+    "address_bar_cropped_or_masked",
+    "environment_identifiers_masked",
+    "credentials_masked",
+    "status",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "evidence_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "inspection_method": {
+      "enum": [
+        "model_visual_review",
+        "ocr_and_visual_review",
+        "manual_visual_review"
+      ]
+    },
+    "visible_text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "address_bar_cropped_or_masked": {
+      "const": true
+    },
+    "environment_identifiers_masked": {
+      "const": true
+    },
+    "credentials_masked": {
+      "const": true
+    },
+    "status": {
+      "const": "PASSED"
+    },
+    "notes": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

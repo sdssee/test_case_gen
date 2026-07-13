@@ -29,10 +29,11 @@
 - 当前 run-dir 只允许执行上表中的一个最小标题批次，`batch-status.csv` 必须且只能有一行；其他最小标题使用新的 `<任务标识>_<BATCH-ID>` run-dir。当前批次覆盖质量自检通过后才能进入下一批，并为下一批初始化独立目录。
 - 当前批次先默认完成全量深探，只向用户确认模型仍不理解的风险项与待确认问题；没有真实不理解项时记录 `RISK-NONE`。确认结论动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级。
 - 当前批次正式写测试用例前，必须先综合评估 DFX 12 维度 × 4 场景覆盖，明确适用、不适用、待确认和需补充证据的维度，再进入用例设计。
-- 初始化必须显式传入真实产品名并生成 `batch-scope.json`；`batch-status.csv`、`page-element-inventory.csv`、`page-discovery.csv` 和 `selection-option-observations.csv` 必须复制标准模板或保持与模板完全一致的表头，禁止自定义精简表头、增删列或追加汇总行。
+- 初始化必须显式传入真实产品名并生成 `batch-scope.json`；`batch-status.csv`、`page-element-inventory.csv`、`page-discovery.csv`、`selection-option-observations.csv`、`interaction-branch-observations.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 和 `risk-confirmation.csv` 必须复制标准模板或保持与模板完全一致的表头，禁止自定义精简表头、增删列或追加汇总行。
 - 页面或功能点实探结果必须按当前批次 `最小标题路径` 记录到 `page-discovery.csv`，并能追溯到页面元素覆盖清单和功能测试用例；`page-discovery.csv` 必须使用 CSV writer 或等价结构化写入方式生成，每一行列数必须与表头一致，防止字段错位。
 - 页面交互前先从 DOM/可访问性树/trace/控件树独立采集 `page-element-inventory.csv`，再与 discovery 双向对账；同一元素的不同角色、状态、分支或动作使用稳定且不同的 `交互实例ID`。每个交互必须真实执行并填写当前批次 `artifacts/` 内非空证据文件与唯一定位；内容相同的静态截图即使改名也不得复用。未执行、仅展开、数据不足、缺少测试数据或证据矛盾时保持 `DISCOVERY_REQUIRED`，用户确认不能把未实探功能改成已覆盖。
 - 下拉框、级联选择、单选框、复选框、树选择、枚举筛选等选择类控件不得只展开；有限集合逐项实际选择并写入 `selection-option-observations.csv`。每项 `预期结果锚点` 必须取自实际页面变化，不能等于选项值或通用词，并进入精确关联用例预期。
+- 输入、动态选择、分页和弹窗必须逐必测分支写入 `interaction-branch-observations.csv`；每个分支独立实际执行、恢复、取证并只绑定一个不复用的计划用例 ID，步骤和预期分别落入该行真实锚点。
 - 能通过页面点击、选择、输入、切换、翻页或观察状态验证的问题必须由模型自行验证；未完成时退回 discovery，不得直接提交用户确认。
 - 不同用例的操作步骤和预期结果必须分别唯一、具体且可判定；同功能点形成唯一连续区块并服从计划 owner 顺序；标题中的选项值、页码、每页条数和状态值必须同时落到具体步骤与可观察预期中。
 - 输入框、搜索框、文本域、数字框、日期框、URL/地址、端口、邮箱、手机号、名称、编码等输入类控件必须实际输入正常、异常、边界或用户提供的测试数据并记录 `选项取值/输入值`、`预期/观察行为`、`结果分支/后续状态`；不得只观察字段存在。
@@ -51,5 +52,5 @@
 - 禁止保留 `fix_*`/`repair_*`/`patch_*`/`debug_*`/`check_*` 补丁脚本链、`gen_all_cases.py` 或内联多条用例正文；批次生成脚本不得超过 12 个。
 - 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
 - 如确需生成当前批次 Python 临时脚本，写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取，禁止手工拼接包含中文弯引号、智能引号或未转义双引号的字符串字面量；执行前运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过单文件大小、JSON 语法、Python 语法编译和高风险引号扫描后才能执行。
-- 正式测试设计、导入文件、批次账本、页面实探记录、临时脚本和 `product-map.xlsx` 都不得保留真实 URL/IP、内部域名/主机名、账号、疑似真实密钥、Token、密码或内部敏感凭据；必须改写为 `<product_login_url>`、`<test_env_base_url>`、`<test_host>`、`<valid_api_key>`、`<test_token>`、`<test_service_url>` 等占位符。
+- 正式测试设计、导入文件、批次账本、页面实探记录、临时脚本和 `product-map.xlsx` 都不得保留真实 URL/IP、内部域名/主机名、账号、疑似真实密钥、Token、密码或内部敏感凭据；必须改写为 `<product_login_url>`、`<test_env_base_url>`、`<test_host>`、`<valid_api_key>`、`<test_token>`、`<test_service_url>` 等占位符。截图、视频、PDF、Office 等二进制证据必须先裁剪/遮蔽敏感可见信息，并生成相邻、同 SHA256 的 `.sensitive-audit.json`。
 - 最终汇总只引用已归档批次成果和用例 ID，不得重新生成各批完整用例。

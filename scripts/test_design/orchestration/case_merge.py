@@ -19,6 +19,7 @@ from ..batch import (
     split_plan_values,
     template_headers,
 )
+from ..sensitive_data import binary_evidence_audit_path
 from ..contracts.function_cases import MAX_FUNCTION_CASES_PER_PART
 from ..io_utils import atomic_write_json, atomic_write_text, rollback_files_on_error
 from ..validators.case_collection import (
@@ -97,11 +98,23 @@ def expected_case_order(rows: Iterable[Mapping[str, object]]) -> list[str]:
     return result
 
 
-def _evidence_hash(run_dir: Path, raw: str) -> str | None:
+def _file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _evidence_hashes(run_dir: Path, raw: str) -> tuple[str, ...]:
     path = resolved_evidence_file(run_dir, raw)
     if path is None:
-        return None
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+        return ()
+    hashes = [_file_hash(path)]
+    audit = binary_evidence_audit_path(path)
+    if audit.is_file():
+        hashes.append(_file_hash(audit))
+    return tuple(hashes)
 
 
 def traceability_expectations(
@@ -114,6 +127,9 @@ def traceability_expectations(
     selections = _load_ledger(
         run_dir, "selection-option-observations.csv", "selection-option-observations-template.csv"
     )
+    branches = _load_ledger(
+        run_dir, "interaction-branch-observations.csv", "interaction-branch-observations-template.csv"
+    )
     lifecycle = _load_ledger(run_dir, "test-data-lifecycle.csv", "test-data-lifecycle-template.csv")
     discovery_by_identity = {_identity(row): row for row in discovery if row.get("元素名称/文案", "").strip()}
     result: dict[str, TraceabilityRecord] = {}
@@ -123,16 +139,42 @@ def traceability_expectations(
         if fact is None:
             raise ValueError(f"plan owner {plan_owner_id(plan)} has no exact discovery fact")
         interaction_id = plan.get("交互实例ID", "").strip()
-        evidence_hash = _evidence_hash(run_dir, fact.get("证据路径", ""))
-        if not evidence_hash:
+        discovery_hashes = _evidence_hashes(run_dir, fact.get("证据路径", ""))
+        if not discovery_hashes:
             raise ValueError(f"plan owner {plan_owner_id(plan)} has no non-empty discovery evidence")
         for case_id in split_plan_values(plan.get("计划用例ID", "")):
+            evidence_hashes = list(discovery_hashes)
+
+            def append_evidence_hash(source_name: str, row: Mapping[str, object]) -> None:
+                row_hashes = _evidence_hashes(run_dir, str(row.get("证据路径", "") or ""))
+                if not row_hashes:
+                    raise ValueError(
+                        f"plan owner {plan_owner_id(plan)} case {case_id} has no non-empty {source_name} evidence"
+                    )
+                for row_hash in row_hashes:
+                    if row_hash not in evidence_hashes:
+                        evidence_hashes.append(row_hash)
+
             option_ids: list[str] = []
             for option in selections:
                 if _identity(option) != identity or case_id not in split_plan_values(option.get("关联用例ID", "")):
                     continue
                 token = "|".join([*identity, _normalized(option.get("选项值", ""))])
                 option_ids.append("OPT-" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:16].upper())
+                append_evidence_hash("selection observation", option)
+            branch_ids: list[str] = []
+            for branch in branches:
+                if _identity(branch) != identity or case_id not in split_plan_values(branch.get("关联用例ID", "")):
+                    continue
+                token = "|".join(
+                    [
+                        *identity,
+                        _normalized(branch.get("分支类别", "")),
+                        _normalized(branch.get("分支动作", "")),
+                    ]
+                )
+                branch_ids.append("BRANCH-" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:16].upper())
+                append_evidence_hash("branch observation", branch)
             lifecycle_ids: list[str] = []
             for item in lifecycle:
                 if _normalized(item.get("交互实例ID", "")) != _normalized(interaction_id):
@@ -152,8 +194,9 @@ def traceability_expectations(
                 plan_owner_id=plan_owner_id(plan),
                 interaction_ids=(interaction_id,),
                 selection_observation_ids=tuple(option_ids),
+                branch_observation_ids=tuple(branch_ids),
                 lifecycle_ids=tuple(lifecycle_ids),
-                evidence_hashes=(evidence_hash,),
+                evidence_hashes=tuple(evidence_hashes),
                 worker_task_id=worker_task_id,
                 source_fingerprint=source_fingerprint,
             )
@@ -323,9 +366,9 @@ def backfill_case_links_and_status(run_dir: Path, cases: Sequence[Mapping[str, o
             "页面遍历完成": "是",
             "功能用例完成": "是",
             "性能设计完成": "是",
-            "异常边界权限覆盖完成": "是",
+            "异常边界权限覆盖完成": "否",
             "页面元素覆盖完成": "是",
-            "覆盖质量自检": "通过",
+            "覆盖质量自检": "未通过",
             "下一步动作": "执行独立只读 Review Agent；Review Gate 通过后才能交付",
         }
     )

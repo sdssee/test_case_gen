@@ -5,8 +5,8 @@
   "type": "object",
   "required": [
     "schema_version", "case_id", "function_point", "plan_owner_id", "interaction_ids",
-    "selection_observation_ids", "lifecycle_ids", "evidence_hashes", "worker_task_id",
-    "source_fingerprint"
+    "selection_observation_ids", "branch_observation_ids", "lifecycle_ids", "evidence_hashes",
+    "worker_task_id", "source_fingerprint"
   ],
   "additionalProperties": false,
   "properties": {
@@ -16,6 +16,7 @@
     "plan_owner_id": {"$ref": "#/$defs/identifier"},
     "interaction_ids": {"$ref": "#/$defs/uniqueStrings"},
     "selection_observation_ids": {"$ref": "#/$defs/uniqueStrings"},
+    "branch_observation_ids": {"$ref": "#/$defs/uniqueStrings"},
     "lifecycle_ids": {"$ref": "#/$defs/uniqueStrings"},
     "evidence_hashes": {
       "type": "array",

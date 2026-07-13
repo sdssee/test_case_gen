@@ -227,6 +227,21 @@ class ArchitectureSafetyTests(unittest.TestCase):
     def write_valid_sheet_files(self, data_dir: Path) -> None:
         for filename, headers in SHEET_DATA_HEADERS.items():
             row = {header: "正式数据" for header in headers}
+            if filename == "scenarios.json":
+                row.update({"DFX维度": "DFT功能", "DFX场景": "正向流程", "是否生成用例": "否"})
+            elif filename == "performance.json":
+                row.update({"DFX维度": "DFP性能", "DFX场景": "响应时间", "是否纳入本轮测试": "否"})
+            elif filename == "risks.json":
+                row.update({"关联DFX维度": "DFT功能", "关联DFX场景": "正向流程"})
+            elif filename == "page_elements.json":
+                row.update(
+                    {
+                        "适用DFX维度": "DFT功能",
+                        "适用DFX场景": "正向流程",
+                        "覆盖状态": "不适用",
+                        "待确认问题/备注": "测试夹具默认不绑定功能用例",
+                    }
+                )
             (data_dir / filename).write_text(json.dumps([row], ensure_ascii=False), encoding="utf-8")
 
     def make_valid_plan_run(self, project_root: Path, run_id: str = "risk-probe") -> Path:
@@ -254,6 +269,44 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 }
             ],
         )
+        branch_specs = [
+            ("打开", "打开确认弹窗", "确认弹窗展示操作内容"),
+            ("确认", "点击确认按钮", "弹窗确认关闭且原页面数据不变"),
+            ("取消", "点击取消按钮", "弹窗取消关闭且原页面数据不变"),
+            ("关闭/Esc", "按 Esc 键关闭弹窗", "弹窗关闭且焦点返回危险操作按钮"),
+            (
+                "恢复",
+                "再次点击危险操作按钮打开弹窗并点击取消按钮",
+                "首次关闭后页面恢复，再次取消后弹窗关闭且页面稳定",
+            ),
+        ]
+        branch_rows: list[dict[str, str]] = []
+        for index, (action, step_anchor, expected_anchor) in enumerate(branch_specs, start=1):
+            evidence = run_dir / "artifacts" / "evidence" / f"modal-branch-{index}.txt"
+            evidence.write_text(f"{step_anchor}；{expected_anchor}；恢复后页面稳定", encoding="utf-8")
+            branch_rows.append(
+                {
+                    "批次ID": "BATCH-001",
+                    "最小标题路径": "模块>页面",
+                    "交互实例ID": "INT-001",
+                    "页面/入口": "风险页面",
+                    "元素名称/文案": "危险操作按钮",
+                    "元素类型": "按钮",
+                    "分支类别": "弹窗",
+                    "分支动作": action,
+                    "执行前状态": "风险页面稳定且数据已记录",
+                    "执行动作": step_anchor,
+                    "执行后结果": expected_anchor,
+                    "恢复结果": "恢复后页面稳定且原数据不变",
+                    "操作步骤锚点": step_anchor,
+                    "预期结果锚点": expected_anchor,
+                    "是否实际执行": "是",
+                    "证据路径": f"artifacts/evidence/modal-branch-{index}.txt",
+                    "证据定位": f"第1行弹窗分支{index}",
+                    "关联用例ID": f"TC-RISK-{index:03d}",
+                }
+            )
+        self.write_csv_rows(run_dir / "interaction-branch-observations.csv", branch_rows)
         self.write_csv_rows(
             run_dir / "element-case-plan.csv",
             [
@@ -268,8 +321,8 @@ class ArchitectureSafetyTests(unittest.TestCase):
                     "适用DFX维度": "DFT功能",
                     "适用DFX场景": "正向流程",
                     "测试设计方向": "打开并关闭确认弹窗",
-                    "应生成用例数": "3",
-                    "计划用例ID": "TC-RISK-001,TC-RISK-002,TC-RISK-003",
+                    "应生成用例数": "5",
+                    "计划用例ID": "TC-RISK-001,TC-RISK-002,TC-RISK-003,TC-RISK-004,TC-RISK-005",
                     "操作类别": "查看",
                     "验证要求": "结果分支",
                     "数据策略": "无数据变更",
@@ -290,11 +343,14 @@ class ArchitectureSafetyTests(unittest.TestCase):
     def function_case(self, case_id: str) -> dict[str, str]:
         suffix = int(case_id.rsplit("-", 1)[-1])
         interaction, outcome = [
-            ("点击弹窗右上角关闭按钮", "弹窗关闭且原页面数据不变"),
-            ("点击弹窗取消按钮", "弹窗取消并返回原页面且数据不变"),
-            ("按 Esc 键关闭弹窗", "弹窗关闭且焦点返回危险操作按钮"),
-            ("点击弹窗遮罩区域", "弹窗按遮罩策略关闭且原页面数据不变"),
-            ("用 Tab 聚焦取消按钮后按 Enter", "弹窗通过键盘取消并返回原页面"),
+            ("打开确认弹窗并观察内容后点击关闭按钮", "确认弹窗展示操作内容，关闭后原页面数据不变"),
+            ("打开确认弹窗后点击确认按钮", "弹窗确认关闭且原页面数据不变"),
+            ("打开确认弹窗后点击取消按钮", "弹窗取消关闭且原页面数据不变"),
+            ("打开确认弹窗后按 Esc 键关闭弹窗", "弹窗关闭且焦点返回危险操作按钮"),
+            (
+                "观察弹窗后点击关闭按钮；确认页面恢复，再次点击危险操作按钮打开弹窗并点击取消按钮",
+                "首次关闭后页面恢复，再次取消后弹窗关闭且页面稳定",
+            ),
             ("用 Tab 聚焦关闭按钮后按 Space", "弹窗通过键盘关闭且焦点顺序保持正确"),
             ("缩小浏览器窗口后点击关闭按钮", "小窗口下弹窗仍可关闭且页面布局未错乱"),
             ("切换浏览器页签再返回并点击取消", "页签切换后弹窗状态保留且可正常取消"),
@@ -386,6 +442,10 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 }
             )
             self.write_csv_rows(discovery_path, [discovery])
+            # This test replaces the modal button with a non-modal state-change
+            # icon.  The inherited modal branches no longer describe the same
+            # interaction identity and must not survive the fact change.
+            self.write_csv_rows(run_dir / "interaction-branch-observations.csv", [])
 
             plan_path = run_dir / "element-case-plan.csv"
             with plan_path.open("r", encoding="utf-8-sig", newline="") as stream:
@@ -655,6 +715,28 @@ class ArchitectureSafetyTests(unittest.TestCase):
             second["交互实例ID"] = "INT-002"
             second["证据定位"] = "文本证据第2行：另一个页面同名按钮"
             self.write_csv_rows(discovery_path, [first, second])
+            branch_path = run_dir / "interaction-branch-observations.csv"
+            with branch_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                first_page_branches = list(csv.DictReader(stream))
+            second_page_branches: list[dict[str, str]] = []
+            for index, original in enumerate(first_page_branches, start=1):
+                evidence = run_dir / "artifacts" / "evidence" / f"page-scoped-modal-{index}.txt"
+                evidence.write_text(
+                    f"另一个页面：{original['执行动作']}；{original['执行后结果']}；{original['恢复结果']}",
+                    encoding="utf-8",
+                )
+                branch = dict(original)
+                branch.update(
+                    {
+                        "交互实例ID": "INT-002",
+                        "页面/入口": "另一个页面",
+                        "证据路径": f"artifacts/evidence/page-scoped-modal-{index}.txt",
+                        "证据定位": f"第1行另一个页面弹窗分支{index}",
+                        "关联用例ID": f"TC-OTHER-{index:03d}",
+                    }
+                )
+                second_page_branches.append(branch)
+            self.write_csv_rows(branch_path, first_page_branches + second_page_branches)
             with self.assertRaisesRegex(ValueError, "missing interactive page elements"):
                 TOOLS.validate_batch_artifacts(run_dir, "plan")
 
@@ -831,7 +913,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
             product_map = project_root / "docs/test-assets/product-map.xlsx"
             product_map.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(REPO_ROOT / "docs/test-assets/product-map.xlsx", product_map)
-            ids = ["TC-RISK-001", "TC-RISK-002", "TC-RISK-003"]
+            ids = [f"TC-RISK-{index:03d}" for index in range(1, 6)]
             TOOLS.record_no_model_uncertainty(run_dir)
             TOOLS.prepare_function_case_generation(run_dir)
 
@@ -850,7 +932,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
             status_path = run_dir / "batch-status.csv"
             with status_path.open("r", encoding="utf-8-sig", newline="") as stream:
                 status = next(csv.DictReader(stream))
-            status["功能用例数"] = "3"
+            status["功能用例数"] = "5"
             self.write_csv_rows(status_path, [status])
 
             data_dir = run_dir / "artifacts" / "data"
@@ -862,7 +944,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 json.dumps(
                     {
                         "part_size": 10,
-                        "total_cases": 3,
+                        "total_cases": 5,
                         "parts": ["function_cases_part_001.json"],
                         "generation_session_id": session["generation_session_id"],
                         "source_fingerprint": session["source_fingerprint"],
@@ -985,6 +1067,9 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 }
             )
             self.write_csv_rows(discovery_path, [discovery])
+            # The fixture now models a persisted edit instead of the original
+            # modal flow, so its modal branch observations are stale facts.
+            self.write_csv_rows(run_dir / "interaction-branch-observations.csv", [])
             lifecycle_path = run_dir / "test-data-lifecycle.csv"
             lifecycle = {
                 "批次ID": "BATCH-001",
@@ -1054,7 +1139,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
             project_root = Path(value)
             self.create_project_root(project_root)
             run_dir = self.make_valid_plan_run(project_root, "empty-sheet")
-            ids = ["TC-RISK-001", "TC-RISK-002", "TC-RISK-003"]
+            ids = [f"TC-RISK-{index:03d}" for index in range(1, 6)]
             plan_path = run_dir / "element-case-plan.csv"
             with plan_path.open("r", encoding="utf-8-sig", newline="") as stream:
                 plan = next(csv.DictReader(stream))
@@ -1063,7 +1148,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
             status_path = run_dir / "batch-status.csv"
             with status_path.open("r", encoding="utf-8-sig", newline="") as stream:
                 status = next(csv.DictReader(stream))
-            status["功能用例数"] = "3"
+            status["功能用例数"] = "5"
             self.write_csv_rows(status_path, [status])
             TOOLS.record_no_model_uncertainty(run_dir)
             TOOLS.prepare_function_case_generation(run_dir)
@@ -1074,7 +1159,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
             )
             manifest_payload = {
                 "part_size": 10,
-                "total_cases": 3,
+                "total_cases": 5,
                 "parts": ["function_cases_part_001.json"],
                 "generation_session_id": session["generation_session_id"],
                 "source_fingerprint": session["source_fingerprint"],

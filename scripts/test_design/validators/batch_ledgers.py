@@ -21,6 +21,15 @@ SELECTION_MARKERS = {
 }
 STRONG_SELECTION_MARKERS = SELECTION_MARKERS - {"选择器", "选择框"}
 SELECTION_SET_TYPES = {"有限", "动态"}
+BRANCH_ACTIONS = {
+    "输入": {"正常输入", "空值", "非法输入", "边界输入"},
+    "动态选择": {
+        "有结果搜索", "无结果搜索", "滚动/分页加载", "首项选择", "中间项选择",
+        "末项/边界选择", "清空恢复",
+    },
+    "分页": {"每页条数", "上一页", "下一页", "页码跳转", "边界页", "末页/无数据", "筛选后重置"},
+    "弹窗": {"打开", "确认", "取消", "关闭/Esc", "恢复"},
+}
 CONCRETE_OPTION_BLOCKERS = {
     "禁用", "置灰", "不可选", "不可用", "无法选择", "无权限", "权限不足", "未开通", "前置条件不满足",
     "缺少依赖", "disabled", "readonly", "read-only",
@@ -52,6 +61,17 @@ INCOMPLETE_DISCOVERY_PATTERNS = [
     re.compile(r"待验证|待补充|尚未验证|未观察到|无法充分验证"),
     re.compile(r"权限未知|待确认权限"),
     re.compile(r"\b(?:tbd|todo|not executed)\b", re.IGNORECASE),
+]
+DISCOVERY_BLOCKER_PATTERNS = [
+    re.compile(r"(?:测试|运行|当前)?环境(?:不可用|未就绪|无法访问|异常)"),
+    re.compile(r"(?:后端|服务端|接口|第三方|依赖|系统|服务)(?:不可用|未就绪|无法访问|异常)"),
+    re.compile(r"(?:无|没有|缺少)(?:可用)?测试数据|测试数据(?:不足|不够|缺失)|数据(?:不足|不够)"),
+    re.compile(
+        r"\b(?:environment|service|dependency|third[- ]party)\s+(?:is\s+)?"
+        r"(?:unavailable|down|not ready)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(?:no|missing|insufficient)\s+test\s+data\b", re.IGNORECASE),
 ]
 COMPLETED_DISCOVERY_STATUSES = {"已覆盖"}
 IMAGE_EVIDENCE_RE = re.compile(r"\.(?:png|jpe?g|gif|bmp|webp)(?:$|[?#])", re.IGNORECASE)
@@ -129,6 +149,266 @@ def is_selection_control(row: dict[str, str]) -> bool:
     ):
         return False
     return _contains(combined, SELECTION_MARKERS)
+
+
+def _is_input_control(row: dict[str, str]) -> bool:
+    if is_selection_control(row):
+        return False
+    combined = "\n".join([row.get("元素名称/文案", ""), row.get("元素类型", ""), row.get("交互方式", "")]).lower()
+    if _contains(combined, {"按钮", "链接", "图标", "button", "link"}):
+        return False
+    return _contains(
+        combined,
+        {"输入", "文本框", "文本域", "数字框", "日期框", "搜索框", "查询框", "input", "textarea"},
+    )
+
+
+def _is_pagination_control(row: dict[str, str]) -> bool:
+    combined = "\n".join([row.get("元素名称/文案", ""), row.get("元素类型", ""), row.get("交互方式", "")]).lower()
+    return _contains(combined, {"分页", "翻页", "页码", "每页", "上一页", "下一页", "跳页", "pagination", "pager"})
+
+
+def _is_modal_control(row: dict[str, str]) -> bool:
+    combined = "\n".join(
+        [
+            row.get("元素名称/文案", ""), row.get("元素类型", ""), row.get("交互方式", ""),
+            row.get("预期/观察行为", ""), row.get("结果分支/后续状态", ""),
+        ]
+    ).lower()
+    return _contains(combined, {"弹窗", "对话框", "抽屉", "浮层", "modal", "dialog", "drawer"})
+
+
+def _branch_identity(row: dict[str, str]) -> tuple[str, str, str, str, str]:
+    return _selection_key(row)
+
+
+def validate_interaction_branch_rows(
+    discovery_rows: list[dict[str, str]],
+    option_rows: list[dict[str, str]],
+    branch_rows: list[dict[str, str]],
+    evidence_exists: Callable[[str], bool],
+    evidence_fingerprint: Callable[[str], str | None] | None = None,
+) -> None:
+    """Require independently executed branches for compound UI controls.
+
+    The discovery summary is intentionally insufficient for inputs, dynamic
+    selects, pagers, and modal flows.  Each required branch must have a unique
+    evidence path+locator and an observable recovery state.
+    """
+
+    discovery_by_key = {_branch_identity(row): row for row in discovery_rows}
+    dynamic_keys = {
+        _branch_identity(row)
+        for row in option_rows
+        if row.get("选项集合类型", "").strip() == "动态"
+    }
+    required_owners: dict[tuple[str, tuple[str, ...]], set[str]] = {}
+    owner_labels: dict[tuple[str, tuple[str, ...]], str] = {}
+    for key, discovery in discovery_by_key.items():
+        page = discovery.get("页面/入口", "").strip()
+        element = discovery.get("元素名称/文案", "").strip()
+        if _is_input_control(discovery):
+            owner = ("输入", key)
+            required_owners[owner] = BRANCH_ACTIONS["输入"]
+            owner_labels[owner] = f"{page}/{element}({key[1]})"
+        if key in dynamic_keys:
+            owner = ("动态选择", key)
+            required_owners[owner] = BRANCH_ACTIONS["动态选择"]
+            owner_labels[owner] = f"{page}/{element}({key[1]})"
+        if _is_modal_control(discovery):
+            owner = ("弹窗", key)
+            required_owners[owner] = BRANCH_ACTIONS["弹窗"]
+            owner_labels[owner] = f"{page}/{element}({key[1]})"
+        if _is_pagination_control(discovery):
+            page_owner = (discovery.get("最小标题路径", "").strip(), page)
+            owner = ("分页", page_owner)
+            required_owners[owner] = BRANCH_ACTIONS["分页"]
+            owner_labels[owner] = page
+
+    observed: dict[tuple[str, tuple[str, ...]], set[str]] = {}
+    evidence_owners: dict[tuple[str, str], str] = {}
+    image_evidence_owners: dict[str, str] = {}
+    for source_name, rows in [
+        ("page-discovery.csv", discovery_rows),
+        ("selection-option-observations.csv", option_rows),
+    ]:
+        for index, row in enumerate(rows, start=2):
+            evidence = _normalized(row.get("证据路径", ""))
+            locator = _normalized(row.get("证据定位", ""))
+            if evidence and locator:
+                label = f"{source_name} row {index}"
+                evidence_key = (evidence, locator)
+                previous = evidence_owners.get(evidence_key)
+                if previous:
+                    raise ValueError(
+                        f"{label} reuses evidence path+locator from {previous}; execution evidence must be "
+                        "globally unique across discovery, option, and branch ledgers"
+                    )
+                evidence_owners[evidence_key] = label
+                if evidence_fingerprint:
+                    digest = evidence_fingerprint(row.get("证据路径", "").strip())
+                    if digest and (digest.startswith("image:") or IMAGE_EVIDENCE_RE.search(evidence)):
+                        previous_image = image_evidence_owners.get(digest)
+                        if previous_image:
+                            raise ValueError(
+                                f"{label} reuses static image content from {previous_image}; copying or renaming "
+                                "a screenshot cannot prove another executed interaction"
+                            )
+                        image_evidence_owners[digest] = label
+
+    for index, row in enumerate(branch_rows, start=2):
+        category = row.get("分支类别", "").strip()
+        action = row.get("分支动作", "").strip()
+        key = _branch_identity(row)
+        label = f"interaction-branch-observations.csv row {index} ({row.get('页面/入口', '')}/{row.get('元素名称/文案', '')}/{category}/{action})"
+        required_fields = [
+            "最小标题路径", "交互实例ID", "页面/入口", "元素名称/文案", "元素类型", "分支类别",
+            "分支动作", "执行前状态", "执行动作", "执行后结果", "恢复结果", "操作步骤锚点", "预期结果锚点", "是否实际执行", "证据路径", "证据定位",
+        ]
+        missing = [field for field in required_fields if not row.get(field, "").strip()]
+        if missing:
+            raise ValueError(f"{label} is missing required branch facts: {missing}")
+        if category not in BRANCH_ACTIONS or action not in BRANCH_ACTIONS[category]:
+            raise ValueError(f"{label} must use one exact required branch action from {BRANCH_ACTIONS}")
+        step_anchor = _normalized(row.get("操作步骤锚点", ""))
+        expected_anchor = _normalized(row.get("预期结果锚点", ""))
+        observed_action = _normalized(row.get("执行动作", ""))
+        observed_result = _normalized(f"{row.get('执行后结果', '')}\n{row.get('恢复结果', '')}")
+        generic_anchors = {"执行", "操作", "成功", "正常", "结果正常", "页面正常", "无异常"}
+        if len(step_anchor) < 4 or step_anchor in generic_anchors or step_anchor not in observed_action:
+            raise ValueError(f"{label} 操作步骤锚点 must be a concrete phrase copied from the executed action")
+        if len(expected_anchor) < 4 or expected_anchor in generic_anchors or expected_anchor not in observed_result:
+            raise ValueError(f"{label} 预期结果锚点 must be a concrete phrase copied from the observed/recovery result")
+        discovery = discovery_by_key.get(key)
+        if discovery is None:
+            raise ValueError(f"{label} has no exactly matching page-discovery.csv interaction")
+        owner_key: tuple[str, ...] = (
+            (discovery.get("最小标题路径", "").strip(), discovery.get("页面/入口", "").strip())
+            if category == "分页"
+            else key
+        )
+        owner = (category, owner_key)
+        if owner not in required_owners:
+            raise ValueError(f"{label} category does not match the discovered control type")
+        if not _is_yes(row.get("是否实际执行", "")):
+            raise ValueError(
+                f"{label} must be actually attempted and use 是否实际执行=是; disabled/permission-blocked "
+                "states record the attempted action and observed blocker as the result, while missing data or "
+                "environment blockers keep the batch in discovery"
+            )
+        execution_facts = "\n".join(
+            [
+                row.get("执行前状态", ""),
+                row.get("执行动作", ""),
+                row.get("执行后结果", ""),
+                row.get("恢复结果", ""),
+                row.get("阻塞原因", ""),
+                row.get("备注", ""),
+            ]
+        ).lower()
+        blockers = sorted(
+            {pattern.pattern for pattern in DISCOVERY_BLOCKER_PATTERNS if pattern.search(execution_facts)}
+        )
+        if blockers:
+            raise ValueError(
+                f"{label} records missing-data/environment blockers {blockers}; these blockers cannot count "
+                "as an executed branch and must keep the batch in discovery"
+            )
+        incomplete = sorted(
+            {pattern.pattern for pattern in INCOMPLETE_DISCOVERY_PATTERNS if pattern.search(execution_facts)}
+        )
+        if incomplete:
+            raise ValueError(
+                f"{label} contradicts 是否实际执行=是 with unexecuted/incomplete facts {incomplete}; "
+                "missing data or environment blockers must keep the batch in discovery"
+            )
+        evidence_key = (_normalized(row.get("证据路径", "")), _normalized(row.get("证据定位", "")))
+        previous = evidence_owners.get(evidence_key)
+        if previous:
+            raise ValueError(f"{label} reuses evidence path+locator from {previous}")
+        if not evidence_exists(row.get("证据路径", "").strip()):
+            raise ValueError(f"{label} must reference existing evidence")
+        evidence_owners[evidence_key] = label
+        if evidence_fingerprint:
+            digest = evidence_fingerprint(row.get("证据路径", "").strip())
+            if digest and (digest.startswith("image:") or IMAGE_EVIDENCE_RE.search(evidence_key[0])):
+                previous_image = image_evidence_owners.get(digest)
+                if previous_image:
+                    raise ValueError(
+                        f"{label} reuses static image content from {previous_image}; copying or renaming a "
+                        "screenshot cannot prove another independently executed branch"
+                    )
+                image_evidence_owners[digest] = label
+        if action in observed.setdefault(owner, set()):
+            raise ValueError(f"{label} duplicates branch action {action!r} for the same control/page")
+        observed[owner].add(action)
+
+    for owner, required in required_owners.items():
+        missing = sorted(required - observed.get(owner, set()))
+        if missing:
+            raise ValueError(
+                f"interaction-branch-observations.csv is incomplete for {owner_labels[owner]} ({owner[0]}); "
+                f"missing independently executed branch(es): {missing}"
+            )
+
+
+def validate_branch_plan_links(
+    branch_rows: list[dict[str, str]],
+    plan_rows: list[dict[str, str]],
+    split_ids: Callable[[str], list[str]],
+) -> None:
+    plans_by_key: dict[tuple[str, str, str, str, str], list[dict[str, str]]] = {}
+    for plan in plan_rows:
+        plans_by_key.setdefault(_branch_identity(plan), []).append(plan)
+    used_case_ids: dict[str, str] = {}
+    rows_by_key: dict[tuple[str, str, str, str, str], list[dict[str, str]]] = {}
+    for index, branch in enumerate(branch_rows, start=2):
+        key = _branch_identity(branch)
+        rows_by_key.setdefault(key, []).append(branch)
+        plans = plans_by_key.get(key, [])
+        label = f"interaction-branch-observations.csv row {index} ({key[2]}/{key[3]}/{branch.get('分支动作', '')})"
+        if not plans:
+            raise ValueError(f"{label} has no exactly matching element-case-plan.csv owner")
+        planned = {case_id for plan in plans for case_id in split_ids(plan.get("计划用例ID", ""))}
+        linked = split_ids(branch.get("关联用例ID", ""))
+        if len(linked) != 1 or linked[0] not in planned:
+            raise ValueError(f"{label} must link exactly one case ID owned by the exact control plan")
+        previous = used_case_ids.get(linked[0])
+        if previous:
+            raise ValueError(f"{label} reuses case {linked[0]} already assigned to {previous}; each branch needs a distinct case")
+        used_case_ids[linked[0]] = label
+    for key, rows in rows_by_key.items():
+        declared = sum(int(plan.get("应生成用例数", "0")) for plan in plans_by_key.get(key, []))
+        if declared < len(rows):
+            raise ValueError(
+                f"element-case-plan.csv {key[2]}/{key[3]} declares {declared} case(s), but "
+                f"{len(rows)} independently observed branches each require a grounded case"
+            )
+
+
+def validate_branch_case_grounding(
+    branch_rows: list[dict[str, str]],
+    case_rows: list[dict[str, object]],
+    split_ids: Callable[[str], list[str]],
+) -> None:
+    case_by_id = {str(case.get("用例 ID", "") or "").strip(): case for case in case_rows}
+    for index, branch in enumerate(branch_rows, start=2):
+        linked = split_ids(branch.get("关联用例ID", ""))
+        if len(linked) != 1 or linked[0] not in case_by_id:
+            raise ValueError(f"interaction-branch-observations.csv row {index} must reference one generated case")
+        case = case_by_id[linked[0]]
+        step_text = _normalized(str(case.get("操作步骤", "") or ""))
+        expected_text = _normalized(str(case.get("预期结果", "") or ""))
+        step_anchor = _normalized(branch.get("操作步骤锚点", ""))
+        expected_anchor = _normalized(branch.get("预期结果锚点", ""))
+        if step_anchor not in step_text:
+            raise ValueError(
+                f"case {linked[0]} does not ground branch 操作步骤锚点 {branch.get('操作步骤锚点', '')!r}"
+            )
+        if expected_anchor not in expected_text:
+            raise ValueError(
+                f"case {linked[0]} does not ground branch 预期结果锚点 {branch.get('预期结果锚点', '')!r}"
+            )
 
 
 def _split_option_tokens(value: str) -> set[str]:
@@ -659,6 +939,19 @@ def validate_operation_plan_rows(plan_rows: list[dict[str, str]]) -> bool:
         semantic_text = "\n".join(
             [row.get("功能点", ""), row.get("元素名称/文案", ""), row.get("元素类型", ""), row.get("交互方式", ""), row.get("测试设计方向", "")]
         )
+        editable_control = _is_input_control(row) or is_selection_control(row) or _contains(
+            "\n".join([row.get("元素类型", ""), row.get("交互方式", "")]).lower(),
+            {"开关", "switch", "toggle", "日期选择", "时间选择"},
+        )
+        mutation_page_context = "\n".join([row.get("页面/入口", ""), row.get("功能点", ""), row.get("业务路径", "")])
+        if editable_control and _contains(
+            mutation_page_context,
+            {"新增", "创建", "新建", "编辑", "修改", "配置", "设置", "状态变更"},
+        ) and category not in MUTATION_CATEGORIES:
+            raise ValueError(
+                f"{label} is an enabled editable control in a mutation flow and cannot be downgraded to {category}; "
+                "execute and verify its persisted modification"
+            )
         element_name = row.get("元素名称/文案", "")
         function_point = row.get("功能点", "")
         close_context = "\n".join(
@@ -706,7 +999,8 @@ def validate_operation_plan_rows(plan_rows: list[dict[str, str]]) -> bool:
                     "状态", "确认", "屏蔽", "启用", "停用", "发布", "下线", "审批", "重置", "撤销", "归档",
                 },
             }
-            if not _contains(semantic_text, persistent_markers[category]):
+            persisted_context = f"{semantic_text}\n{mutation_page_context}" if editable_control else semantic_text
+            if not _contains(persisted_context, persistent_markers[category]):
                 raise ValueError(
                     f"{label} 操作类别={category} lacks a concrete persisted mutation action; "
                     "do not classify selection, reset, cancel, or close UI state as data mutation"
@@ -751,6 +1045,8 @@ def validate_mutation_discovery_evidence(
             if not evidence or not evidence_exists(evidence):
                 raise ValueError(f"{label} mutation discovery must reference existing evidence")
             observed = "\n".join([discovery.get("预期/观察行为", ""), discovery.get("结果分支/后续状态", "")])
+            if _contains(observed, {"失败", "未生效", "不生效", "未保存", "仍显示旧值", "未找到", "无变化"}):
+                raise ValueError(f"{label} mutation discovery records failure/non-effect and cannot pass the plan gate")
             if not _contains(observed, {"成功", "回显", "生效", "持久化", "不再显示", "搜索不到", "状态更新", "数据更新"}):
                 raise ValueError(f"{label} mutation discovery must record an observable persisted/effective result")
 
@@ -855,6 +1151,41 @@ def validate_lifecycle_rows(
                 raise ValueError(f"test-data-lifecycle.csv {page}/{element} is missing {missing} for 操作类别={category}")
             if category in {"编辑", "配置", "状态变更"} and row.get("编辑前值", "").strip() == row.get("编辑后值", "").strip():
                 raise ValueError(f"test-data-lifecycle.csv {page}/{element} 编辑前值 and 编辑后值 must differ")
+            negative_checks = {
+                "创建结果": {"创建失败", "新增失败", "未创建", "未成功"},
+                "查看结果": {"未找到", "查询失败", "列表未找到", "无法查看"},
+                "编辑结果": {"保存失败", "编辑失败", "修改失败", "未保存", "未成功"},
+                "保存后回显": {"仍显示旧值", "未回显", "无回显", "未保存", "保存失败"},
+                "实际生效结果": {"未生效", "不生效", "仍为旧值", "无变化", "未变化"},
+                "配置生效验证点": {"未生效", "不生效", "无法验证", "待验证"},
+                "删除确认结果": {"删除失败", "仍然存在", "仍显示", "未删除"},
+                "清理状态": {"未清理", "清理失败", "仍保留"},
+            }
+            for field, negative_markers in negative_checks.items():
+                value = row.get(field, "").strip()
+                if value and _contains(value, negative_markers):
+                    raise ValueError(f"test-data-lifecycle.csv {page}/{element} {field} records failure/non-effect: {value}")
+            positive_requirements = {
+                "创建结果": {"成功", "已创建", "已新增", "创建完成", "新增完成"},
+                "查看结果": {"找到", "展示", "显示", "详情", "回显", "可查询"},
+            }
+            for field, markers in positive_requirements.items():
+                if field in fields_by_category[category] and not _contains(row.get(field, ""), markers):
+                    raise ValueError(f"test-data-lifecycle.csv {page}/{element} {field} must record a successful observable result")
+            if category in {"编辑", "配置", "状态变更"}:
+                if not _contains(row.get("编辑结果", ""), {"成功", "已保存", "已更新", "完成"}):
+                    raise ValueError(f"test-data-lifecycle.csv {page}/{element} 编辑结果 must prove a successful save/update")
+                after = _normalized(row.get("编辑后值", ""))
+                echo = _normalized(row.get("保存后回显", ""))
+                if after not in echo and not (_contains(echo, {"新值", "修改后值", "目标值"}) and _contains(echo, {"回显", "显示", "展示"})):
+                    raise ValueError(f"test-data-lifecycle.csv {page}/{element} 保存后回显 must prove the edited value persisted")
+                if not _contains(row.get("实际生效结果", ""), {"生效", "已更新", "详情", "列表", "关联", "下游", "调用", "状态已"}):
+                    raise ValueError(f"test-data-lifecycle.csv {page}/{element} 实际生效结果 must prove downstream/visible effect")
+            if category == "删除":
+                if not _contains(row.get("删除取消结果", ""), {"取消", "仍存在", "仍显示", "数据不变"}):
+                    raise ValueError(f"test-data-lifecycle.csv {page}/{element} 删除取消结果 must prove data remained")
+                if not _contains(row.get("删除确认结果", ""), {"成功", "已删除", "不再显示", "搜索不到"}):
+                    raise ValueError(f"test-data-lifecycle.csv {page}/{element} 删除确认结果 must prove removal")
             if category != "创建" and plan.get("数据策略", "").strip() == "本次创建测试数据":
                 data_id = row.get("测试数据ID/名称", "").strip()
                 owner_ids = ids(row.get("创建步骤关联用例", ""))
@@ -917,9 +1248,7 @@ def risk_page_verification_state(
             },
         ):
             reasons.append(f"{label}: 受外部阻塞 must record a concrete observed blocker, not a hypothetical dependency")
-        if _contains(question, PAGE_OBSERVABLE_MARKERS) and not _contains(
-            f"{question}\n{reason}", EXTERNAL_DEPENDENCY_MARKERS
-        ):
+        if _contains(question, PAGE_OBSERVABLE_MARKERS) and not _contains(question, EXTERNAL_DEPENDENCY_MARKERS):
             reasons.append(
                 f"{label}: question describes an observable page interaction without an external dependency; verify it on the page"
             )

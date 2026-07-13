@@ -338,6 +338,8 @@
 
 深遍历下拉框、级联选择、单选框、复选框、树选择、枚举筛选等选择类控件时，不得只展开查看选项；有限集合必须覆盖每个选项，可选项实际选择，真实禁用项尝试并记录具体阻塞状态与独立证据，全部在 `selection-option-observations.csv` 逐项记录前后状态与结果分支；每项填写取自真实页面结果、不能退化为选项值或通用词的 `预期结果锚点`，并进入精确关联用例预期。动态集合必须记录明确覆盖策略。
 
+输入、动态选择、分页和弹窗的必测分支必须逐行写入 `interaction-branch-observations.csv`。每个分支独立实际执行、恢复、取证并绑定一个不复用的计划用例 ID；正式功能用例必须包含该行真实操作步骤锚点和预期结果锚点。
+
 能通过页面直接验证的问题必须由模型自行操作并记录结果，未完成时退回 discovery，不得进入用户确认。页面交互前先独立采集 `page-element-inventory.csv`，再按稳定 `交互实例ID` 执行并与 discovery 双向对账；证据必须是当前批次 artifacts 内非空文件，静态截图按内容去重。不同用例在折叠测试实例编号后仍不得复用相同的操作步骤或相同的预期结果；标题参数必须同时落到步骤和预期，同功能点只允许一个连续区块。JSON、正式工作簿和独立导入工作簿的确定性映射字段必须逐行、有序一致。
 
 深遍历输入框、搜索框、文本域、数字框、日期框、URL/地址、端口、邮箱、手机号、名称、编码等输入类控件时，不得只观察字段存在或只写“输入后校验”；必须实际输入正常、异常、边界或用户提供的测试数据并触发后续动作。输入类控件已生成用例时，`page-discovery.csv` 必须填写 `选项取值/输入值`、`预期/观察行为` 和 `结果分支/后续状态`。
@@ -375,7 +377,7 @@
 
 截图、临时脚本、页面证据和过程材料只能写入当前独立批次 run-dir 的 `artifacts/`，不得写入共享根目录或其他批次目录。
 
-`batch-status.csv` 和 `page-discovery.csv` 必须从 `docs/test-assets/batch-runs/templates/` 复制标准模板或按完全相同表头生成，禁止自定义精简表头。写入 `page-discovery.csv` 时必须使用 CSV writer 或等价结构化写入方式，保证每一行列数与表头一致，防止字段错位；不得手工拼接逗号分隔字符串。
+`batch-status.csv`、`page-element-inventory.csv`、`page-discovery.csv`、`selection-option-observations.csv`、`interaction-branch-observations.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 和 `risk-confirmation.csv` 必须从 `docs/test-assets/batch-runs/templates/` 复制标准模板或按完全相同表头生成，禁止自定义精简表头。所有 CSV 必须使用 CSV writer 或等价结构化写入方式，保证每一行列数与表头一致，防止字段错位；不得手工拼接逗号分隔字符串。
 
 每个批次正式写测试用例前，如果存在可访问页面、原型或桌面窗口，必须使用浏览器能力或 computer use 遍历当前批次最小标题路径下所有可点击/可交互功能点，并把发现结果写入 `page-discovery.csv`、页面元素覆盖清单、功能测试用例和产品版图。
 

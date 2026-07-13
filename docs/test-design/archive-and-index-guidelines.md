@@ -88,7 +88,7 @@ docs/test-assets/product-map.xlsx
 
 当范围超过一个最小标题时，先建立任务级队列，再为每个最小标题创建独立的 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>_<BATCH-ID>/`。每个 run-dir 只允许一行 `batch-status.csv`、一个 `batch-scope.json`、一个最小标题和一套 manifest/Sheet 产物；下一批必须初始化新目录。只要发生页面实探，也必须先执行 `init-batch-run --product-name "<真实产品名>"` 并保留标准账本与 artifacts；后续交付复用 scope，禁止把一级模块误当产品。
 
-`batch-status.csv`、`page-element-inventory.csv` 和 `page-discovery.csv` 必须复制标准模板或保持与模板完全一致的表头，禁止自定义精简表头、增删列或在末尾追加汇总行。先从 DOM/可访问性树/trace/控件树独立采集 inventory，再按稳定 `交互实例ID` 执行实探并双向对账；`page-discovery.csv` 必须使用 CSV writer 或等价结构化写入方式生成，每一行列数必须与表头一致，避免页面元素、选项取值、联动变化、预期观察和关联用例 ID 字段错位。
+`batch-status.csv`、`page-element-inventory.csv`、`page-discovery.csv`、`selection-option-observations.csv`、`interaction-branch-observations.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 和 `risk-confirmation.csv` 必须复制标准模板或保持与模板完全一致的表头，禁止自定义精简表头、增删列或在末尾追加汇总行。先从 DOM/可访问性树/trace/控件树独立采集 inventory，再按稳定 `交互实例ID` 执行实探并双向对账；所有 CSV 必须使用 CSV writer 或等价结构化写入方式生成，每一行列数必须与表头一致，避免页面元素、选项取值、联动变化、预期观察和关联用例 ID 字段错位。
 
 已完成批次在 `batch-plan.md` 中不得仍标记为执行中或待开始；`batch-plan.md` 的页面清单数量必须与 `batch-status.csv` 的页面数一致。`batch-review.md` 必须引用已完成批次的批次 ID、归档路径和导入文件路径。
 
@@ -104,6 +104,8 @@ docs/test-assets/product-map.xlsx
 具体写测试用例时，必须在对应页面或功能点内做深遍历，覆盖所有可点击、可输入、可测试元素，包括按钮、链接、菜单、Tab、图标按钮、筛选、排序、分页、表格行操作、批量操作、输入框、下拉项、上传下载、弹窗、抽屉、开关、禁用态、空状态和错误态。
 
 深遍历选择类控件时不得只展开查看选项；有限集合的每个选项都要实际选择，并把选项取值/输入值、选择后页面变化、联动/依赖变化写入 `selection-option-observations.csv`。每项 `预期结果锚点` 必须来自真实页面变化，不能等于选项值或通用词，并进入精确关联用例预期；动态集合记录搜索、滚动/分页、边界和清空策略。
+
+输入、动态选择、分页和弹窗的规定分支必须逐行写入 `interaction-branch-observations.csv`。每个分支独立实际执行、恢复、取证并只关联一个不复用的计划用例 ID；对应功能用例必须包含该行真实操作与结果锚点，禁止用合并关键词或通用步骤冒充多分支覆盖。
 
 能通过页面点击、选择、输入、切换、翻页或观察状态验证的问题必须由模型自行操作验证；页面验证未完成时必须退回 discovery，只有依赖接口、日志、数据库、异步任务、额外权限或第三方系统且模型仍不理解的内容才提交用户确认。
 

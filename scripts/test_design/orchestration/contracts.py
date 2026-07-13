@@ -472,6 +472,7 @@ class TraceabilityRecord:
     plan_owner_id: str
     interaction_ids: tuple[str, ...]
     selection_observation_ids: tuple[str, ...]
+    branch_observation_ids: tuple[str, ...]
     lifecycle_ids: tuple[str, ...]
     evidence_hashes: tuple[str, ...]
     worker_task_id: str
@@ -479,8 +480,8 @@ class TraceabilityRecord:
 
     FIELDS: ClassVar[set[str]] = {
         "schema_version", "case_id", "function_point", "plan_owner_id", "interaction_ids",
-        "selection_observation_ids", "lifecycle_ids", "evidence_hashes", "worker_task_id",
-        "source_fingerprint",
+        "selection_observation_ids", "branch_observation_ids", "lifecycle_ids", "evidence_hashes",
+        "worker_task_id", "source_fingerprint",
     }
 
     def __post_init__(self) -> None:
@@ -488,7 +489,9 @@ class TraceabilityRecord:
         object.__setattr__(self, "case_id", _identifier(self.case_id, "case_id"))
         object.__setattr__(self, "function_point", _required_string(self.function_point, "function_point"))
         object.__setattr__(self, "plan_owner_id", _identifier(self.plan_owner_id, "plan_owner_id"))
-        for field_name in ("interaction_ids", "selection_observation_ids", "lifecycle_ids"):
+        for field_name in (
+            "interaction_ids", "selection_observation_ids", "branch_observation_ids", "lifecycle_ids"
+        ):
             object.__setattr__(self, field_name, _string_tuple(getattr(self, field_name), field_name))
         hashes = _string_tuple(self.evidence_hashes, "evidence_hashes")
         object.__setattr__(
@@ -513,6 +516,7 @@ class TraceabilityRecord:
             "plan_owner_id": self.plan_owner_id,
             "interaction_ids": list(self.interaction_ids),
             "selection_observation_ids": list(self.selection_observation_ids),
+            "branch_observation_ids": list(self.branch_observation_ids),
             "lifecycle_ids": list(self.lifecycle_ids),
             "evidence_hashes": list(self.evidence_hashes),
             "worker_task_id": self.worker_task_id,

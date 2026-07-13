@@ -59,7 +59,7 @@
   ],
   "gate_semantics": {
     "TD-GATE-DELIVERY": ["8 个标准 Sheet", "独立模板副本"],
-    "TD-GATE-FULL-DISCOVERY": ["默认全量深探", "独立元素清单", "角色和数据状态", "交互实例 ID", "实际执行", "artifacts 内非空证据文件", "静态截图", "有限集合", "每项实际选择", "观察结果锚点", "数据不足", "discovery", "风险确认不是"],
+    "TD-GATE-FULL-DISCOVERY": ["默认全量深探", "独立元素清单", "角色和数据状态", "交互实例 ID", "实际执行", "artifacts 内非空证据文件", "静态截图", "有限集合", "每项实际选择", "观察结果锚点", "输入/动态选择/分页/弹窗", "逐分支", "interaction-branch-observations.csv", "数据不足", "discovery", "风险确认不是"],
     "TD-GATE-CRUD-EFFECT": ["创建必须成功", "逐项", "持久化回显", "实际生效", "同一数据 ID", "创建 owner", "mutation plan 交互实例 ID"],
     "TD-GATE-DATA-SAFETY": ["既有数据只读", "AI_TEST", "CODEX_TEST"],
     "TD-GATE-RISK-UNCERTAINTY": ["页面可验证", "自行操作验证", "discovery", "模型仍不理解", "risk/cases", "不阻塞 plan"],
@@ -70,7 +70,7 @@
     "TD-GATE-SHARDS": ["按功能点感知", "1–10 条", "无断号", "同功能点不得跨片", "function_cases_manifest.json", "唯一读取源"],
     "TD-GATE-ASSEMBLY": ["标准组装器", "complete-deliverables"],
     "TD-GATE-ASSET-FACTS": ["catalog/modules/*.json", "product-map.xlsx"],
-    "TD-GATE-SENSITIVE-DATA": ["不得保留", "URL/IP", "域名/主机名", "密钥", "Token", "密码"],
+    "TD-GATE-SENSITIVE-DATA": ["禁含", "URL/IP", "主机", "账号", "凭据", "二进制证据", "同哈希", "审计", "sidecar", "discovery"],
     "TD-GATE-PROTECTED-ASSETS": ["docs/test-assets/", "docs/test-design/current/", "docs/test-design/deliverables/"],
     "TD-GATE-CASE-QUALITY": ["编号换行", "完整导航", "功能点-当前用例标题", "折叠 AI_TEST/CODEX_TEST 实例编号", "分别唯一", "可判定", "实探→计划→用例", "连续区块", "状态分类计数从用例派生", "确定性字段逐行有序一致", "闭环"]
   },

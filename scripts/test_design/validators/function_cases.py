@@ -17,6 +17,21 @@ from .case_collection import validate_case_collection, validate_page_size_ground
 
 
 PLACEHOLDER_CASE_IDS = {"", "TC-A2A-XXX", "TC-XXX", "TODO", "TBD"}
+MUTATING_TEST_DATA_MARKERS = ["AI_TEST", "CODEX_TEST", "本次创建", "本次新增", "用户提供测试数据", "测试标识"]
+SAFE_EXISTING_DATA_MARKERS = ["不保存", "不提交", "不确认", "取消", "关闭", "数据不变", "状态不变"]
+MUTATION_COMMIT_MARKERS = [
+    "保存成功", "提交成功", "新增成功", "创建成功", "添加成功", "确认删除", "删除成功", "编辑成功", "修改成功",
+    "配置成功", "启用成功", "停用成功", "发布成功", "下线成功", "审批成功", "重置成功", "撤销成功", "归档成功", "清空成功", "解绑成功",
+    "列表刷新", "落库", "状态变更", "状态流转",
+]
+TRANSIENT_STEP_MARKERS = [
+    "modal", "dialog", "drawer", "dropdown", "select", "confirm", "edit", "delete", "input",
+    "弹窗", "对话框", "抽屉", "下拉", "选择", "确认框", "编辑", "删除", "输入", "尝试点击", "观察",
+]
+TERMINAL_STEP_MARKERS = [
+    "click OK", "click Cancel", "close", "return", "back to list", "save", "submit", "not save", "no data changed",
+    "点击确定", "点击「确定」", "点击取消", "点击「取消」", "点击关闭", "点击「关闭」", "返回", "回到列表", "返回列表", "保存", "提交", "确认", "不保存", "关闭弹窗", "弹窗关闭", "列表不变", "数据不变", "退出编辑",
+]
 
 
 def contains_any(text: str, markers: list[str]) -> bool:
@@ -68,6 +83,57 @@ def validate_case_steps_and_expected(case: dict[str, str], label: str) -> None:
         context = "\n".join([precondition, str(case.get("测试数据", "") or ""), steps])
         if not contains_any(context, ["AI_TEST", "CODEX_TEST", "用户提供测试数据"]):
             raise ValueError(f"{label} changes data/state without tagged test data")
+    validate_mutation_case_evidence(case, label)
+    validate_pagination_jump_has_data(case, label)
+    validate_transient_flow_closed(steps, expected, label)
+
+
+def validate_transient_flow_closed(steps: str, expected: str, label: str) -> None:
+    normalized_steps = re.sub(r"\s+", "", steps or "").lower()
+    combined = re.sub(r"\s+", "", f"{steps}\n{expected}").lower()
+    if normalized_steps and any(marker.lower() in normalized_steps for marker in TRANSIENT_STEP_MARKERS):
+        if not any(marker.lower() in combined for marker in TERMINAL_STEP_MARKERS):
+            raise ValueError(
+                f"{label} opens or changes a transient UI state but does not describe a "
+                "confirm/cancel/close/return/recovery path"
+            )
+
+
+def validate_pagination_jump_has_data(row: dict[str, str], label: str) -> None:
+    combined = "\n".join([str(row.get("测试数据", "") or ""), str(row.get("操作步骤", "") or ""), str(row.get("预期结果", "") or "")])
+    if not contains_any(combined, ["第2页", "第 2 页", "输入2", "输入 2", "跳至页码", "页码输入"]):
+        return
+    if not contains_any(combined, ["超过一页", "多页", "大于1页", "大于 1 页", "超过10条", "超过 10 条", "造数", "准备超过"]):
+        raise ValueError(f"{label} jumps to page 2 but does not declare multi-page test data preparation")
+
+
+def validate_mutation_case_evidence(row: dict[str, str], label: str) -> None:
+    combined = "\n".join(
+        str(row.get(field, "") or "")
+        for field in ["功能点", "用例标题", "测试数据", "操作步骤", "预期结果", "备注"]
+    )
+    mutation_markers = ["新增", "创建", "添加", "新建", "保存", "提交", "编辑", "修改", "删除", "移除", "清空", "解绑", "配置", "启用", "停用", "发布", "下线", "审批", "重置", "撤销", "归档", "状态变更"]
+    if not contains_any(combined, mutation_markers):
+        return
+    commits_change = contains_any(combined, MUTATION_COMMIT_MARKERS)
+    if not commits_change and contains_any(combined, SAFE_EXISTING_DATA_MARKERS):
+        return
+    if contains_any(combined, ["已有数据", "既有数据"]):
+        if not contains_any(combined, SAFE_EXISTING_DATA_MARKERS):
+            raise ValueError(f"{label} touches existing data but does not close with cancel/close/no-save/no-change")
+        if contains_any(combined, ["确认删除", "保存修改", "提交修改", "最终确认"]):
+            raise ValueError(f"{label} must not finally modify or delete existing data")
+        return
+    if commits_change and not contains_any(combined, MUTATING_TEST_DATA_MARKERS):
+        raise ValueError(f"{label} mutating case must bind to AI_TEST/CODEX_TEST or user-provided test data")
+    if contains_any(combined, ["新增", "创建", "添加", "新建", "保存", "提交"]):
+        if not contains_any(combined, ["列表", "详情", "下一级", "刷新", "成功", "失败", "校验"]):
+            raise ValueError(f"{label} create/save flow must verify list/detail/next-page/success/failure state")
+    if contains_any(combined, ["编辑", "修改"]):
+        if not contains_any(combined, ["编辑前", "编辑后", "变更", "回显", "列表", "详情", "数据不变"]):
+            raise ValueError(f"{label} edit flow must verify before/after value, echo, list/detail, or unchanged state")
+    if "删除" in combined and not contains_any(combined, ["删除取消", "取消删除", "确认删除", "列表不再展示", "搜索不到", "数据不变"]):
+        raise ValueError(f"{label} delete flow must include cancel/confirm and post-delete or unchanged verification")
 
 
 def validate_function_case_schema(case: dict[str, object], label: str, planned_ids: set[str] | None = None) -> None:

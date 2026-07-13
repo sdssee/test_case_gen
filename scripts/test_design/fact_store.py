@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from .io_utils import atomic_save_workbook, atomic_write_json
+from .sensitive_data import assert_no_sensitive_text_file
 
 
 FACT_SCHEMA_VERSION = "2.0.0"
@@ -317,6 +318,10 @@ def project_catalog_to_workbook(product_map: Path) -> None:
 
 
 def validate_catalog(product_map: Path, require_existing: bool = False) -> dict[str, int]:
+    root = catalog_dir(product_map)
+    if root.is_dir():
+        for path in sorted(root.rglob("*.json")):
+            assert_no_sensitive_text_file(path, f"product catalog {path.relative_to(root).as_posix()}")
     documents = load_documents(product_map, require_existing=require_existing)
     counts = {sheet_name: 0 for sheet_name in PRODUCT_MAP_SHEETS}
     seen_module_keys: dict[str, Path] = {}

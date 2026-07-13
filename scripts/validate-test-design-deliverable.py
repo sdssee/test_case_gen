@@ -15,6 +15,14 @@ from xml.etree import ElementTree as ET
 
 from test_design.fact_store import validate_catalog
 from test_design.paths import module_names
+from test_design.sensitive_data import (
+    SENSITIVE_VALUE_PATTERNS,
+    SensitiveDataError,
+    assert_no_sensitive_batch_files as shared_assert_no_sensitive_batch_files,
+    assert_no_sensitive_csv_rows as shared_assert_no_sensitive_csv_rows,
+    assert_no_sensitive_text_file as shared_assert_no_sensitive_text_file,
+    assert_no_unmasked_value as shared_assert_no_unmasked_value,
+)
 from test_design.contracts.function_cases import (
     FUNCTION_CASE_FORBIDDEN_FIELDS,
     FUNCTION_CASE_PART_RE,
@@ -26,6 +34,9 @@ from test_design.validators.batch_ledgers import (
     validate_lifecycle_rows,
     validate_operation_plan_rows,
     validate_page_element_inventory,
+    validate_interaction_branch_rows,
+    validate_branch_plan_links,
+    validate_branch_case_grounding,
     validate_selection_case_grounding,
     validate_selection_option_rows,
     validate_selection_plan_links,
@@ -288,6 +299,11 @@ SELECTION_OPTION_OBSERVATIONS_EXPECTED_HEADERS = [
     "证据定位", "阻塞原因", "关联用例ID", "备注",
 ]
 
+INTERACTION_BRANCH_OBSERVATIONS_EXPECTED_HEADERS = [
+    "批次ID", "最小标题路径", "交互实例ID", "页面/入口", "元素名称/文案", "元素类型", "分支类别", "分支动作",
+    "执行前状态", "执行动作", "执行后结果", "恢复结果", "操作步骤锚点", "预期结果锚点", "是否实际执行", "阻塞原因", "证据路径", "证据定位", "关联用例ID", "备注",
+]
+
 PAGE_DISCOVERY_EXPECTED_HEADERS = [
     "批次ID",
     "一级模块",
@@ -421,44 +437,9 @@ PRODUCT_MAP_REQUIRED_REAL_SHEETS = [
     "变更记录",
 ]
 
-SENSITIVE_VALUE_PATTERNS = [
-    re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{8,}\b"),
-    re.compile(r"\b(secret|password|passwd|pwd|token)\s*[:=：]\s*[^<\s;，,]+", re.IGNORECASE),
-    re.compile(r"密钥\s*[:=：]\s*(?!<)[^<\s;，,]+", re.IGNORECASE),
-]
-
-
 def fail(message: str) -> None:
     raise AssertionError(message)
 
-
-ENVIRONMENT_VALUE_PATTERNS = [
-    re.compile(r"https?://(?!<)[^\s\"'<>，,；;]+", re.IGNORECASE),
-    re.compile(
-        r"\b(?!(?:[A-Za-z0-9-]+\.)*example\.(?:com|org|net)\b)(?!localhost\b)"
-        r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
-        r"(?:com|net|org|cn|io|corp|internal|local)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(r"\b(?:10|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"),
-    re.compile(r"\b172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}\b"),
-    re.compile(r"\b192\.168\.\d{1,3}\.\d{1,3}\b"),
-    re.compile(r"/hub/hub(?:/[^\s\"'<>，,；;]*)?", re.IGNORECASE),
-    re.compile(r"\badmin@\d+\b", re.IGNORECASE),
-]
-
-UNMASKED_VALUE_PATTERNS = [
-    (
-        "secret",
-        SENSITIVE_VALUE_PATTERNS,
-        "Use placeholders such as <valid_api_key>, <test_token>, or <test_service_url>.",
-    ),
-    (
-        "environment address/account",
-        ENVIRONMENT_VALUE_PATTERNS,
-        "Use placeholders such as <product_login_url>, <test_env_base_url>, <test_user_account>, or <test_user_password>.",
-    ),
-]
 
 TRANSIENT_STEP_MARKERS = [
     "modal",
@@ -637,19 +618,19 @@ def range_covers(actual_ref: str, expected_ref: str) -> bool:
 
 
 def assert_no_unmasked_value(value: str, label: str) -> None:
-    for kind, patterns, guidance in UNMASKED_VALUE_PATTERNS:
-        for pattern in patterns:
-            if pattern.search(value):
-                fail(f"{label} contains a possible unmasked {kind}. {guidance}")
+    try:
+        shared_assert_no_unmasked_value(value, label)
+    except SensitiveDataError as exc:
+        fail(str(exc))
 
 
 def assert_no_sensitive_text_values(path: Path, label: str) -> None:
     if not path.exists():
         return
-    text = path.read_text(encoding="utf-8-sig", errors="ignore")
-    for line_number, line in enumerate(text.splitlines(), start=1):
-        if line.strip():
-            assert_no_unmasked_value(line, f"{label} line {line_number}")
+    try:
+        shared_assert_no_sensitive_text_file(path, label)
+    except SensitiveDataError as exc:
+        fail(str(exc))
 
 
 def validate_table_ranges(path: Path, sheet_names: list[str] | None = None) -> None:
@@ -1120,11 +1101,10 @@ def csv_rows_with_exact_header(path: Path, expected: list[str], label: str) -> l
 
 
 def assert_no_sensitive_csv_values(rows: list[dict[str, str]], label: str) -> None:
-    for index, row in enumerate(rows, start=2):
-        for field, value in row.items():
-            if not value:
-                continue
-            assert_no_unmasked_value(value, f"{label} row {index} field {field}")
+    try:
+        shared_assert_no_sensitive_csv_rows(rows, label)
+    except SensitiveDataError as exc:
+        fail(str(exc))
 
 
 def require_headers(rows: list[list[str]], required: list[str], sheet_name: str) -> None:
@@ -1457,7 +1437,16 @@ def validate_import_workbook(
             "备注": remarks,
         }
         if expected_modules is not None:
-            expected.update({f"{level}级模块名称": expected_modules[level - 1] for level in range(1, 6)})
+            module_fields = [
+                "一级模块名称",
+                "二级模块名称",
+                "三级模块名称",
+                "四级模块名称",
+                "五级模块名称",
+            ]
+            expected.update(
+                {field: expected_modules[index] for index, field in enumerate(module_fields)}
+            )
         changed = [field for field, value in expected.items() if imported.get(field, "") != value]
         if changed:
             fail(
@@ -1662,6 +1651,7 @@ def is_template_or_empty_row(row: dict[str, str]) -> bool:
     template_markers = [
         "补充页面元素、DFX扩展方向和计划用例ID",
         "补充本次创建或用户提供测试数据的完整生命周期",
+        "仅记录当前独立叶子批次中本次创建或用户提供测试数据的逐修改项生命周期",
     ]
     return any(marker in combined for marker in template_markers)
 
@@ -1725,6 +1715,10 @@ def resolve_project_path(raw_path: str, batch_status: Path) -> Path:
 def validate_batch_status(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         fail(f"Batch status file not found: {path}")
+    try:
+        shared_assert_no_sensitive_batch_files(path.resolve().parent)
+    except SensitiveDataError as exc:
+        fail(str(exc))
     rows = [
         row
         for row in csv_rows_with_exact_header(path, BATCH_EXPECTED_HEADERS, "batch-status.csv")
@@ -1816,6 +1810,7 @@ def validate_batch_run_directory_from_page_discovery(page_discovery: Path) -> Pa
         "page-element-inventory.csv",
         "page-discovery.csv",
         "selection-option-observations.csv",
+        "interaction-branch-observations.csv",
         "element-case-plan.csv",
         "test-data-lifecycle.csv",
         "risk-confirmation.csv",
@@ -2315,6 +2310,12 @@ def validate_element_case_plan_and_lifecycle(
             "selection-option-observations.csv",
         )
         option_rows = [row for row in option_rows_all if row.get("选项值") or row.get("元素名称/文案")]
+        branch_rows_all = csv_rows_with_exact_header(
+            run_dir / "interaction-branch-observations.csv",
+            INTERACTION_BRANCH_OBSERVATIONS_EXPECTED_HEADERS,
+            "interaction-branch-observations.csv",
+        )
+        branch_rows = [row for row in branch_rows_all if row.get("分支类别") or row.get("分支动作")]
         validate_selection_option_rows(
             discovery_rows,
             option_rows,
@@ -2322,6 +2323,15 @@ def validate_element_case_plan_and_lifecycle(
             lambda value: run_evidence_fingerprint(run_dir, value),
         )
         validate_selection_plan_links(option_rows, plan_rows, parse_id_sequence)
+        validate_interaction_branch_rows(
+            discovery_rows,
+            option_rows,
+            branch_rows,
+            lambda value: resolved_run_evidence_file(run_dir, value) is not None,
+            lambda value: run_evidence_fingerprint(run_dir, value),
+        )
+        validate_branch_plan_links(branch_rows, plan_rows, parse_id_sequence)
+        validate_branch_case_grounding(branch_rows, case_rows, parse_id_sequence)
         validate_selection_case_grounding(option_rows, case_rows, parse_id_sequence)
     except ValueError as exc:
         fail(str(exc))

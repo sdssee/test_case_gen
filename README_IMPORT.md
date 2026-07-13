@@ -93,7 +93,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
 - 导入副本：`docs/test-assets/imports/`
 - 批次账本：`docs/test-assets/batch-runs/`
 
-大范围任务必须建立 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/`，并维护 `batch-scope.json`、`batch-plan.md`、`batch-status.csv`、`batch-review.md`、独立采集的 `page-element-inventory.csv`、带稳定交互实例 ID 的 `page-discovery.csv`、`selection-option-observations.csv`、结构化计划、生命周期和 `artifacts/`。页面证据必须是当前批次 `artifacts/` 内非空文件。
+大范围任务必须建立 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/`，并维护 `batch-scope.json`、`batch-plan.md`、`batch-status.csv`、`batch-review.md`、独立采集的 `page-element-inventory.csv`、带稳定交互实例 ID 的 `page-discovery.csv`、`selection-option-observations.csv`、`interaction-branch-observations.csv`、结构化计划、生命周期和 `artifacts/`。页面证据必须是当前批次 `artifacts/` 内非空文件。
 页面实探或批次任务开始前，先运行 `powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-run --project-root . --run-id <YYYYMMDD_任务标识> --module-path "一级模块>二级菜单>三级菜单" --product-name "<产品/系统名称>" --batch-id BATCH-001` 初始化标准批次账本和 `batch-scope.json`；已存在批次使用 `--resume` 并传入原产品名，不得重复初始化覆盖；传入 `--page-discovery` 收口时必须同时传入 `--batch-status`。
 
 初始化会直接启用必选的最终多 Agent 架构。调度器用 `agent-run --run-dir <run-dir> --json` 取得任务，Agent 只写 task packet 指定的 workspace，再用 `agent-submit --task-id <task-id> --result <agent-result.json>` 提交；`agent-status` 可只读查看状态，真实外部阻塞解除后使用 `agent-resume`。完整角色、契约、返工和 Review 规则见 `docs/AGENT_ORCHESTRATION.md`。

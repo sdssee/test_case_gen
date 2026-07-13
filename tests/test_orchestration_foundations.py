@@ -134,6 +134,7 @@ class OrchestrationContractTests(unittest.TestCase):
             "plan_owner_id": "PLAN-PAGING-SIZE",
             "interaction_ids": ["INT-PAGING-SIZE-20"],
             "selection_observation_ids": ["OPT-PAGING-SIZE-20"],
+            "branch_observation_ids": ["BRANCH-PAGING-SIZE-20"],
             "lifecycle_ids": [],
             "evidence_hashes": [EVIDENCE_HASH],
             "worker_task_id": "TASK-CASE-PAGING",

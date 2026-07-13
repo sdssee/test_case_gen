@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .contracts import AgentResult, AgentRole, AgentTask, TaskStatus, TraceabilityRecord, canonical_fingerprint
+from ..sensitive_data import (
+    BINARY_EVIDENCE_AUDIT_SUFFIX,
+    assert_no_sensitive_artifact,
+    binary_evidence_audit_path,
+)
 from ..validation_cache import fingerprint
 
 
@@ -31,6 +36,7 @@ _KEY_LEDGERS = (
     "page-element-inventory.csv",
     "page-discovery.csv",
     "selection-option-observations.csv",
+    "interaction-branch-observations.csv",
     "element-case-plan.csv",
     "test-data-lifecycle.csv",
     "risk-confirmation.csv",
@@ -60,6 +66,7 @@ REQUIRED_REVIEW_CHECKS = (
     "function_points_contiguous",
     "dfx_within_plan",
     "traceability_complete",
+    "binary_evidence_privacy_verified",
     "no_open_rework",
 )
 
@@ -188,6 +195,64 @@ def _manifest_part_names(run_dir: Path) -> tuple[str, ...]:
     return tuple(names)
 
 
+def review_evidence_paths(run_dir: Path | str) -> tuple[Path, ...]:
+    """Return every formal evidence file that the reviewer must inspect.
+
+    Ledger references are not sufficient: an unreferenced screenshot left in
+    the promoted evidence directories is still a generated run artifact.  All
+    such files therefore enter the frozen Reviewer input and final review
+    fingerprint.  Binary evidence additionally requires its hash-bound visual
+    privacy sidecar; orphan sidecars are rejected instead of being silently
+    ignored.
+    """
+
+    root = Path(run_dir).resolve()
+    candidates: set[Path] = set()
+    for name in ("evidence", "screenshots"):
+        directory = root / "artifacts" / name
+        if directory.is_dir():
+            candidates.update(path for path in directory.rglob("*") if path.is_file())
+
+    sidecars = {path for path in candidates if path.name.endswith(BINARY_EVIDENCE_AUDIT_SUFFIX)}
+    symbolic_sidecars = sorted(
+        (path for path in sidecars if path.is_symlink()),
+        key=lambda item: item.as_posix(),
+    )
+    if symbolic_sidecars:
+        raise ReviewValidationError(
+            "binary visual privacy audit must not be a symbolic link: "
+            f"{[path.relative_to(root).as_posix() for path in symbolic_sidecars]}"
+        )
+    result: set[Path] = set()
+    consumed_sidecars: set[Path] = set()
+    for path in sorted(candidates - sidecars, key=lambda item: item.as_posix()):
+        if path.is_symlink():
+            raise ReviewValidationError(f"review evidence must not be a symbolic link: {path}")
+        resolved = path.resolve()
+        try:
+            relative = resolved.relative_to(root).as_posix()
+            is_text = assert_no_sensitive_artifact(resolved, f"review evidence {relative}")
+        except ValueError as exc:
+            raise ReviewValidationError(str(exc)) from exc
+        result.add(resolved)
+        if not is_text:
+            audit = binary_evidence_audit_path(resolved)
+            if audit.is_symlink() or not audit.is_file():
+                raise ReviewValidationError(
+                    f"binary review evidence is missing a regular visual privacy audit: {relative}"
+                )
+            result.add(audit)
+            consumed_sidecars.add(audit)
+
+    orphan_sidecars = sorted(sidecars - consumed_sidecars, key=lambda item: item.as_posix())
+    if orphan_sidecars:
+        raise ReviewValidationError(
+            "orphan binary visual privacy audit(s) have no matching evidence: "
+            f"{[path.relative_to(root).as_posix() for path in orphan_sidecars]}"
+        )
+    return tuple(sorted(result, key=lambda item: item.as_posix()))
+
+
 def _review_source_paths(run_dir: Path) -> tuple[Path, ...]:
     data_dir = run_dir / "artifacts" / "data"
     relative_paths = [
@@ -220,6 +285,7 @@ def _review_source_paths(run_dir: Path) -> tuple[Path, ...]:
                             f"review source evidence is missing for {ledger_name}: {raw}"
                         )
                     paths.append(evidence)
+    paths.extend(review_evidence_paths(run_dir))
     # Guard against a manifest that hides stale formal shards from the review
     # fingerprint.  The cases gate checks this too, but the fingerprint helper
     # must be safe when called independently.
@@ -480,6 +546,23 @@ def _validate_traceability(
             "case-traceability.json must cover every and only manifest case exactly once: "
             f"missing={sorted(expected_ids - traced_ids)[:20]}, unknown={sorted(traced_ids - expected_ids)[:20]}"
         )
+    formal_case_order = tuple(case_by_id)
+    trace_case_order = tuple(record_by_id)
+    if trace_case_order != formal_case_order:
+        mismatch_index = next(
+            index
+            for index, (formal_case_id, trace_case_id) in enumerate(
+                zip(formal_case_order, trace_case_order),
+                start=1,
+            )
+            if formal_case_id != trace_case_id
+        )
+        raise ReviewValidationError(
+            "case-traceability.json record order must exactly match formal case order: "
+            f"first mismatch at position {mismatch_index}, "
+            f"formal={formal_case_order[mismatch_index - 1]!r}, "
+            f"trace={trace_case_order[mismatch_index - 1]!r}"
+        )
 
 
 def _is_closed_rework_payload(value: Any) -> bool:
@@ -666,6 +749,7 @@ def validate_review_artifacts(run_dir: Path | str) -> bool:
 __all__ = [
     "REQUIRED_REVIEW_CHECKS",
     "ReviewValidationError",
+    "review_evidence_paths",
     "review_source_fingerprint",
     "validate_review_artifacts",
 ]

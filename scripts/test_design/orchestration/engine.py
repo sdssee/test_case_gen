@@ -35,6 +35,12 @@ from ..batch import (
 )
 from ..io_utils import atomic_copy, atomic_write_json, exclusive_process_lock, rollback_files_on_error
 from ..pipeline import derive_pipeline_status
+from ..sensitive_data import (
+    SensitiveDataError,
+    assert_no_sensitive_artifact,
+    assert_no_sensitive_text_file,
+    binary_evidence_audit_path,
+)
 from ..validation_cache import fingerprint
 from ..validators.function_cases import validate_sheet_data_file
 from .case_merge import (
@@ -54,7 +60,12 @@ from .contracts import (
     canonical_fingerprint,
 )
 from .event_store import EventStore
-from .review import REQUIRED_REVIEW_CHECKS, review_source_fingerprint, validate_review_artifacts
+from .review import (
+    REQUIRED_REVIEW_CHECKS,
+    review_evidence_paths,
+    review_source_fingerprint,
+    validate_review_artifacts,
+)
 from .state_machine import OrchestrationStateMachine, PHASE_ORDER, Phase
 from .workspace import WorkspaceManager
 
@@ -354,6 +365,9 @@ def _ledger_evidence_sources(run_dir: Path, ledger_names: Sequence[str]) -> list
                     resolved = resolved_evidence_file(run_dir, str(raw))
                     if resolved is not None:
                         result.append(resolved)
+                        audit = binary_evidence_audit_path(resolved)
+                        if audit.is_file():
+                            result.append(audit)
     return list(dict.fromkeys(result))
 
 
@@ -362,19 +376,19 @@ def _phase_sources(run_dir: Path, role: AgentRole) -> list[Path]:
         AgentRole.DISCOVERY: ["batch-scope.json"],
         AgentRole.PLAN_DFX: [
             "batch-scope.json", "page-element-inventory.csv", "page-discovery.csv",
-            "selection-option-observations.csv", "test-data-lifecycle.csv",
+            "selection-option-observations.csv", "interaction-branch-observations.csv", "test-data-lifecycle.csv",
         ],
         AgentRole.RISK_ARBITER: [
             "batch-scope.json", "page-discovery.csv", "element-case-plan.csv",
         ],
         AgentRole.CASE_WORKER: [
             "batch-scope.json", "page-element-inventory.csv", "page-discovery.csv",
-            "selection-option-observations.csv", "element-case-plan.csv", "test-data-lifecycle.csv",
+            "selection-option-observations.csv", "interaction-branch-observations.csv", "element-case-plan.csv", "test-data-lifecycle.csv",
             "risk-confirmation.csv", "artifacts/data/generation-session.json",
         ],
         AgentRole.REVIEWER: [
             "batch-scope.json", "page-element-inventory.csv", "page-discovery.csv",
-            "selection-option-observations.csv", "element-case-plan.csv", "test-data-lifecycle.csv",
+            "selection-option-observations.csv", "interaction-branch-observations.csv", "element-case-plan.csv", "test-data-lifecycle.csv",
             "risk-confirmation.csv", "artifacts/data/generation-session.json",
             "artifacts/data/function_cases_manifest.json", "artifacts/data/case-traceability.json",
             "artifacts/data/dfx-assessment.json",
@@ -396,6 +410,7 @@ def _phase_sources(run_dir: Path, role: AgentRole) -> list[Path]:
             payload = _load_json(manifest_path, "function case manifest")
             if isinstance(payload, dict):
                 sources.extend(run_dir / "artifacts" / "data" / str(name) for name in payload.get("parts", []))
+        sources.extend(review_evidence_paths(run_dir))
     sources.extend(_rule_sources(run_dir, rule_names[role]))
     sources.extend(_catalog_sources(run_dir))
     if role is not AgentRole.DISCOVERY:
@@ -404,7 +419,7 @@ def _phase_sources(run_dir: Path, role: AgentRole) -> list[Path]:
                 run_dir,
                 [
                     "page-element-inventory.csv", "page-discovery.csv",
-                    "selection-option-observations.csv", "risk-confirmation.csv",
+                    "selection-option-observations.csv", "interaction-branch-observations.csv", "risk-confirmation.csv",
                 ],
             )
         )
@@ -431,6 +446,10 @@ def _case_worker_context_facts(run_dir: Path, owner_key: str) -> dict[str, list[
         row for row in _read_ledger_rows(run_dir, "selection-option-observations.csv")
         if identity(row) in identities
     ]
+    branches = [
+        row for row in _read_ledger_rows(run_dir, "interaction-branch-observations.csv")
+        if identity(row) in identities
+    ]
     lifecycle = [
         row for row in _read_ledger_rows(run_dir, "test-data-lifecycle.csv")
         if str(row.get("交互实例ID", "") or "").strip() in interactions
@@ -442,6 +461,7 @@ def _case_worker_context_facts(run_dir: Path, owner_key: str) -> dict[str, list[
     return {
         "discovery_facts": discovery,
         "selection_facts": selections,
+        "branch_facts": branches,
         "lifecycle_facts": lifecycle,
         "risk_facts": risks,
     }
@@ -502,10 +522,10 @@ def _task_outputs(role: AgentRole, task_id: str) -> tuple[list[str], list[str]]:
     names = {
         AgentRole.DISCOVERY: [
             "page-element-inventory.csv", "page-discovery.csv",
-            "selection-option-observations.csv", "test-data-lifecycle.csv",
+            "selection-option-observations.csv", "interaction-branch-observations.csv", "test-data-lifecycle.csv",
         ],
         AgentRole.PLAN_DFX: [
-            "element-case-plan.csv", "selection-option-observations.csv", "test-data-lifecycle.csv",
+            "element-case-plan.csv", "selection-option-observations.csv", "interaction-branch-observations.csv", "test-data-lifecycle.csv",
             "dfx-assessment.json", "risk-candidates.json",
             "overview.json", "requirements.json", "scenarios.json", "performance.json",
             "risks.json", "automation.json", "page_elements.json",
@@ -536,13 +556,16 @@ def _task_context(
     }
     if role is AgentRole.DISCOVERY:
         context["instructions"] = [
-            "独立盘点后全量执行全部交互", "有限选择项逐项操作", "页面可验证问题自行验证",
+            "独立盘点后全量执行全部交互", "有限选择项逐项操作", "输入/动态选择/分页/弹窗逐分支独立执行并记账", "页面可验证问题自行验证",
             "创建成功后完成修改回显和生效闭环", "证据写入 output/evidence 或 output/screenshots",
+            "二进制截图/视频/PDF 必须先裁剪或遮蔽地址栏、环境标识、账号和凭据，并生成同名 .sensitive-audit.json（绑定 SHA256、转录可见文本）",
         ]
     elif role is AgentRole.PLAN_DFX:
         context["instructions"] = [
             "只基于已冻结 discovery 事实生成计划", "完成 DFX 12×4 评估和预算",
-            "输出全部非功能用例 Sheet JSON", "risk-candidates.json 使用 {candidates: []} 结构且每项包含 dfx_dimensions",
+            "输出全部非功能用例 Sheet JSON",
+            "risk-candidates.json 使用 {candidates: []} 结构；affected_interaction_ids 必须来自当前 page-discovery，evidence 必须引用当前 run 的非空实探证据，每项包含 dfx_dimensions",
+            "页面可验证问题必须 NEEDS_REWORK 返回 discovery，不得作为外部语义候选提交",
         ]
     elif role is AgentRole.RISK_ARBITER:
         context["instructions"] = [
@@ -572,7 +595,11 @@ def _task_context(
                 "generation_session": generation_session_data(run_dir),
                 "review_source_fingerprint": review_source_fingerprint(run_dir),
                 "generator_task_ids": _successful_case_task_ids(_load_manifest(run_dir)),
-                "instructions": ["只读审查，不修改正式产物", "有问题输出 NEEDS_REWORK；无问题输出 APPROVED 报告"],
+                "instructions": [
+                    "只读审查，不修改正式产物",
+                    "逐个查看二进制证据，并核对同哈希 .sensitive-audit.json 的可见文本与脱敏声明",
+                    "有问题输出 NEEDS_REWORK；无问题输出 APPROVED 报告",
+                ],
             }
         )
     return context
@@ -765,16 +792,53 @@ def _plan_risk_candidates(run_dir: Path) -> list[dict[str, Any]]:
     if not latest:
         return []
     task, _ = latest
-    path = _accepted_output(run_dir, task, "risk-candidates.json")
-    value = _load_json(path, "risk-candidates.json")
-    if not isinstance(value, dict) or set(value) != {"candidates"} or not isinstance(value["candidates"], list):
-        raise OrchestrationError("risk-candidates.json must be exactly {\"candidates\": [...]} ")
-    if any(not isinstance(item, dict) for item in value["candidates"]):
-        raise OrchestrationError("risk-candidates.json candidates must be objects")
-    return list(value["candidates"])
+    return _validate_risk_candidates_file(
+        _accepted_output(run_dir, task, "risk-candidates.json"),
+        run_dir=run_dir,
+    )
 
 
-def _validate_risk_candidates_file(path: Path) -> list[dict[str, Any]]:
+def _current_discovery_interaction_evidence(run_dir: Path) -> dict[str, set[Path]]:
+    path = run_dir / "page-discovery.csv"
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            required_headers = {"交互实例ID", "证据路径"}
+            missing_headers = sorted(required_headers - set(reader.fieldnames or []))
+            if missing_headers:
+                raise OrchestrationError(
+                    "page-discovery.csv is missing risk-grounding headers: "
+                    f"{missing_headers}"
+                )
+            interactions: dict[str, set[Path]] = {}
+            for row_number, row in enumerate(reader, start=2):
+                interaction_id = str(row.get("交互实例ID", "") or "").strip()
+                if not interaction_id:
+                    continue
+                raw_evidence = str(row.get("证据路径", "") or "").strip()
+                evidence = resolved_evidence_file(run_dir, raw_evidence)
+                if evidence is None:
+                    raise OrchestrationError(
+                        f"page-discovery.csv row {row_number} interaction {interaction_id} must have "
+                        "real, non-empty evidence inside the current run artifacts before risk grounding"
+                    )
+                interactions.setdefault(interaction_id, set()).add(evidence)
+            return interactions
+    except OSError as exc:
+        raise OrchestrationError(
+            f"cannot read current page-discovery.csv for risk candidate grounding: {exc}"
+        ) from exc
+
+
+def _validate_risk_candidates_file(
+    path: Path,
+    *,
+    run_dir: Path | None = None,
+) -> list[dict[str, Any]]:
+    try:
+        assert_no_sensitive_text_file(path, "risk-candidates.json")
+    except SensitiveDataError as exc:
+        raise OrchestrationError(str(exc)) from exc
     value = _load_json(path, "risk-candidates.json")
     if not isinstance(value, dict) or set(value) != {"candidates"} or not isinstance(value["candidates"], list):
         raise OrchestrationError("risk-candidates.json must be exactly {\"candidates\": [...]} ")
@@ -784,6 +848,7 @@ def _validate_risk_candidates_file(path: Path) -> list[dict[str, Any]]:
     }
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
+    discovery_evidence_by_interaction: dict[str, set[Path]] | None = None
     for index, raw in enumerate(value["candidates"]):
         if not isinstance(raw, dict) or set(raw) != required:
             raise OrchestrationError(
@@ -813,6 +878,73 @@ def _validate_risk_candidates_file(path: Path) -> list[dict[str, Any]]:
         if not raw["affected_interaction_ids"] or not raw["evidence"]:
             raise OrchestrationError(
                 f"external risk candidate {risk_id} requires affected interaction IDs and deep-discovery evidence"
+            )
+        if run_dir is None:
+            raise OrchestrationError(
+                f"external risk candidate {risk_id} requires the current run directory for fact grounding"
+            )
+        if discovery_evidence_by_interaction is None:
+            discovery_evidence_by_interaction = _current_discovery_interaction_evidence(
+                run_dir.resolve()
+            )
+        if any(not isinstance(item, str) for item in raw["affected_interaction_ids"]):
+            raise OrchestrationError(
+                f"external risk candidate {risk_id} affected_interaction_ids must contain strings"
+            )
+        affected_ids = [item.strip() for item in raw["affected_interaction_ids"]]
+        if any(not item for item in affected_ids):
+            raise OrchestrationError(
+                f"external risk candidate {risk_id} affected_interaction_ids must contain non-empty IDs"
+            )
+        if len(affected_ids) != len(set(affected_ids)):
+            raise OrchestrationError(
+                f"external risk candidate {risk_id} repeats affected_interaction_ids"
+            )
+        unknown_interactions = sorted(
+            set(affected_ids) - set(discovery_evidence_by_interaction)
+        )
+        if unknown_interactions:
+            raise OrchestrationError(
+                f"external risk candidate {risk_id} references interaction IDs absent from current "
+                f"page-discovery.csv: {unknown_interactions}"
+            )
+        resolved_evidence: set[Path] = set()
+        for evidence_index, raw_evidence in enumerate(raw["evidence"]):
+            if not isinstance(raw_evidence, str) or not raw_evidence.strip():
+                raise OrchestrationError(
+                    f"external risk candidate {risk_id} evidence[{evidence_index}] must be a non-empty path"
+                )
+            evidence = resolved_evidence_file(run_dir, raw_evidence.strip())
+            if evidence is None:
+                raise OrchestrationError(
+                    f"external risk candidate {risk_id} evidence[{evidence_index}] must resolve to a real, "
+                    "non-empty file inside the current run artifacts"
+                )
+            if evidence in resolved_evidence:
+                raise OrchestrationError(
+                    f"external risk candidate {risk_id} repeats the same resolved evidence file: "
+                    f"{raw_evidence.strip()}"
+                )
+            resolved_evidence.add(evidence)
+            try:
+                assert_no_sensitive_artifact(
+                    evidence,
+                    f"risk candidate {risk_id} evidence[{evidence_index}]",
+                )
+            except SensitiveDataError as exc:
+                raise OrchestrationError(str(exc)) from exc
+        evidence_mismatches = {
+            interaction_id: sorted(
+                evidence.relative_to(run_dir.resolve()).as_posix()
+                for evidence in discovery_evidence_by_interaction[interaction_id] - resolved_evidence
+            )
+            for interaction_id in affected_ids
+            if discovery_evidence_by_interaction[interaction_id] - resolved_evidence
+        }
+        if evidence_mismatches:
+            raise OrchestrationError(
+                f"external risk candidate {risk_id} evidence does not cover each affected interaction's "
+                f"page-discovery evidence: {evidence_mismatches}"
             )
         candidates.append(raw)
     return candidates
@@ -849,7 +981,10 @@ def _validate_dfx_assessment(path: Path) -> dict[str, str]:
 
 def _validate_plan_retained_outputs(run_dir: Path, task: AgentTask) -> None:
     statuses = _validate_dfx_assessment(_accepted_output(run_dir, task, "dfx-assessment.json"))
-    candidates = _validate_risk_candidates_file(_accepted_output(run_dir, task, "risk-candidates.json"))
+    candidates = _validate_risk_candidates_file(
+        _accepted_output(run_dir, task, "risk-candidates.json"),
+        run_dir=run_dir,
+    )
     evidence_gaps = sorted(name for name, status in statuses.items() if status == "需补充证据")
     if evidence_gaps:
         raise OrchestrationError(
@@ -883,6 +1018,7 @@ def _validate_plan_link_outputs(run_dir: Path, task: AgentTask) -> None:
 
     policies = {
         "selection-option-observations.csv": {"关联用例ID"},
+        "interaction-branch-observations.csv": {"关联用例ID"},
         "test-data-lifecycle.csv": {"创建步骤关联用例"},
     }
     for name, mutable_fields in policies.items():
@@ -989,12 +1125,20 @@ def _ensure_role_task(
     pending = _pending_task(manifest, role, owner_key)
     if pending:
         entry = manifest["tasks"][pending.task_id]
+        inputs_current = _task_inputs_still_current(run_dir, pending, entry)
         current = (
             _generation_task_fingerprint(run_dir)
             if generation_fingerprint
-            else fingerprint(_resolve_source_paths(run_dir, entry))
+            else fingerprint(_current_task_source_paths(run_dir, pending))
         )
-        if current == pending.source_fingerprint:
+        if (
+            inputs_current
+            and current == pending.source_fingerprint
+            and (
+                pending.agent_role is not AgentRole.REVIEWER
+                or review_source_fingerprint(run_dir) == entry.get("review_input_fingerprint")
+            )
+        ):
             return pending
         entry["status"] = "INVALIDATED"
         entry["invalidated_reason"] = "task source changed before submission"
@@ -1117,6 +1261,65 @@ def orchestration_status(run_dir: Path | str) -> dict[str, Any]:
             if state["state"] == "DELIVERY_RUNNING" else ""
         ),
     }
+
+
+def validate_delivery_running_state(run_dir: Path | str) -> None:
+    """Require the locked run to be ready for the single-writer delivery transaction.
+
+    ``complete-deliverables`` calls this only while holding the run's
+    ``.orchestrator.lock``.  Keeping the state check in the orchestration module
+    avoids duplicating state-machine invariants in the Excel delivery CLI.
+    """
+
+    root = Path(run_dir).resolve()
+    manifest = _load_manifest(root)
+    machine = _machine(manifest)
+    if machine.state != "DELIVERY_RUNNING" or machine.active_phase is not Phase.DELIVERY:
+        raise OrchestrationError(
+            "orchestrated complete-deliverables requires state=DELIVERY_RUNNING; "
+            f"current state is {machine.state}"
+        )
+
+
+def complete_delivery_orchestration(run_dir: Path | str) -> dict[str, object]:
+    """Validate the published receipt and atomically close delivery to COMPLETE.
+
+    The caller must hold ``.orchestrator.lock`` and include the manifest, state
+    projection, and event log in its surrounding delivery rollback transaction.
+    This function deliberately does not acquire the lock again because the
+    complete-deliverables single writer already owns it from precheck through
+    publication.
+    """
+
+    root = Path(run_dir).resolve()
+    manifest = _load_manifest(root)
+    machine = _machine(manifest)
+    if machine.state != "DELIVERY_RUNNING" or machine.active_phase is not Phase.DELIVERY:
+        raise OrchestrationError(
+            "cannot complete orchestrated delivery unless state=DELIVERY_RUNNING; "
+            f"current state is {machine.state}"
+        )
+    pipeline = _quiet(derive_pipeline_status, root)
+    if pipeline.get("state") != "COMPLETE":
+        reasons = "; ".join(str(item) for item in pipeline.get("reasons", []))
+        raise OrchestrationError(
+            "published delivery did not pass the deterministic receipt gate: "
+            + (reasons or str(pipeline.get("state") or "unknown delivery state"))
+        )
+    # Advance both deterministic transitions in memory and persist only the
+    # final checkpoint.  A process must never be left at DELIVERY_VALIDATED
+    # merely because it died between two state writes; the surrounding
+    # complete-deliverables rollback transaction restores all three audit
+    # files if checkpoint or event publication fails.
+    phase_change = machine.validate_phase(Phase.DELIVERY)
+    change = machine.complete()
+    _save_machine(root, manifest, machine)
+    _event_store(root).append(
+        "PHASE_VALIDATED",
+        {**phase_change.to_dict(), "closed_rework_request_ids": []},
+    )
+    _event_store(root).append("RUN_COMPLETED", change.to_dict())
+    return machine.to_dict()
 
 
 def _validated_prefix_drift(
@@ -1303,12 +1506,31 @@ def _resolve_source_paths(run_dir: Path, entry: Mapping[str, Any]) -> list[Path]
     return result
 
 
+def _current_task_source_paths(run_dir: Path, task: AgentTask) -> list[Path]:
+    """Re-enumerate the complete current source set for one dispatched task."""
+
+    if task.agent_role is AgentRole.CASE_WORKER:
+        if task.owner_key is None:
+            raise OrchestrationError("case_worker task is missing owner_key")
+        return _case_worker_sources(run_dir, task.owner_key)
+    return _phase_sources(run_dir, task.agent_role)
+
+
 def _task_inputs_still_current(
     run_dir: Path,
     task: AgentTask,
     entry: Mapping[str, Any],
 ) -> bool:
     originals = _resolve_source_paths(run_dir, entry)
+    current_sources = _current_task_source_paths(run_dir, task)
+    original_set = {path.resolve() for path in originals}
+    current_set = {path.resolve() for path in current_sources}
+    if (
+        len(originals) != len(original_set)
+        or len(current_sources) != len(current_set)
+        or original_set != current_set
+    ):
+        return False
     snapshots = [run_dir / path for path in task.input_files]
     if len(originals) != len(snapshots):
         return False
@@ -1320,6 +1542,7 @@ def _task_inputs_still_current(
     ignored = dict(case_result_fields)
     if task.agent_role is AgentRole.PLAN_DFX:
         ignored["selection-option-observations.csv"] = {"关联用例ID"}
+        ignored["interaction-branch-observations.csv"] = {"关联用例ID"}
     for original, snapshot in zip(originals, snapshots):
         if not original.is_file() or not snapshot.is_file():
             return False
@@ -1351,6 +1574,10 @@ def _validate_result_files(run_dir: Path, task: AgentTask, entry: Mapping[str, A
         raise OrchestrationError("AgentTask packet changed after dispatch")
     if fingerprint([workspace_root / "meta" / "task-context.json"]) != entry.get("context_fingerprint"):
         raise OrchestrationError("AgentTask context changed after dispatch")
+    if not _task_inputs_still_current(run_dir, task, entry):
+        raise OrchestrationError(
+            "AgentTask source changed (path set or content); discard stale output and create a new task"
+        )
     if task.agent_role is AgentRole.REVIEWER:
         current_review = review_source_fingerprint(run_dir)
         if current_review != entry.get("review_input_fingerprint"):
@@ -1358,7 +1585,7 @@ def _validate_result_files(run_dir: Path, task: AgentTask, entry: Mapping[str, A
     if task.agent_role in {AgentRole.CASE_WORKER, AgentRole.REVIEWER}:
         current = _generation_task_fingerprint(run_dir)
     else:
-        current = fingerprint(_resolve_source_paths(run_dir, entry))
+        current = fingerprint(_current_task_source_paths(run_dir, task))
     if current != task.source_fingerprint:
         raise OrchestrationError("AgentTask source changed; discard stale output and create a new task")
     required = set(entry.get("required_outputs") or [])
@@ -1378,6 +1605,11 @@ def _validate_result_files(run_dir: Path, task: AgentTask, entry: Mapping[str, A
         raise OrchestrationError(
             f"AgentResult produced_files must exactly match workspace files; missing={sorted(actual-produced)}, hidden={sorted(produced-actual)}"
         )
+    for relative in sorted(produced):
+        try:
+            assert_no_sensitive_artifact(run_dir / relative, f"Agent output {relative}")
+        except SensitiveDataError as exc:
+            raise OrchestrationError(str(exc)) from exc
     if result.status is TaskStatus.SUCCEEDED and result.gate_summary.get(task.required_gate) is not True:
         raise OrchestrationError(f"successful AgentResult must declare gate_summary.{task.required_gate}=true")
 
@@ -1396,7 +1628,7 @@ def _promotion_mapping(task: AgentTask, result: AgentResult) -> dict[str, str]:
                 target = relative
             mapping[relative] = target
         elif task.agent_role is AgentRole.PLAN_DFX and relative in {
-            "element-case-plan.csv", "selection-option-observations.csv", "test-data-lifecycle.csv"
+            "element-case-plan.csv", "selection-option-observations.csv", "interaction-branch-observations.csv", "test-data-lifecycle.csv"
         }:
             mapping[relative] = relative
         elif task.agent_role is AgentRole.RISK_ARBITER and relative == "risk-confirmation.csv":
@@ -1519,8 +1751,13 @@ def submit_agent_result(
         if entry.get("status") != "PENDING":
             raise OrchestrationError(f"task {task_id} is not pending: {entry.get('status')}")
         task = AgentTask.from_dict(entry["task"])
+        result_source = Path(result_path).resolve()
         try:
-            result = AgentResult.from_dict(_load_json(Path(result_path), "AgentResult"))
+            assert_no_sensitive_text_file(result_source, "AgentResult")
+        except SensitiveDataError as exc:
+            raise OrchestrationError(str(exc)) from exc
+        try:
+            result = AgentResult.from_dict(_load_json(result_source, "AgentResult"))
         except (TypeError, ValueError) as exc:
             raise OrchestrationError(f"invalid AgentResult: {exc}") from exc
         _validate_result_files(root, task, entry, result)
@@ -1690,9 +1927,11 @@ __all__ = [
     "ARCHITECTURE",
     "OrchestrationError",
     "advance_orchestration",
+    "complete_delivery_orchestration",
     "initialize_orchestration",
     "orchestration_exists",
     "orchestration_status",
     "resume_external_block",
     "submit_agent_result",
+    "validate_delivery_running_state",
 ]

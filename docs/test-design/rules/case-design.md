@@ -70,6 +70,7 @@ DFX 落地必须遵循“先元素、后 DFX”的顺序：
 - 输入框至少覆盖正常值、空值、非法值、边界长度或格式、特殊字符/注入风险中适用项。
 - 下拉框、单选、复选、树选择、级联选择的有限可选项必须逐项实际选择并在 `selection-option-observations.csv` 一项一行记录；真实禁用项必须尝试并记录具体阻塞状态与独立证据；动态集合必须明确搜索、滚动/分页、边界、有无结果和清空恢复覆盖策略。用例至少覆盖展开、各独立结果分支、联动/无联动、清空/重置或取消。
 - 每个选项观察行必须关联属于该控件计划行的独立用例 ID；关联用例必须在步骤和预期中写出准确选项值，有限选项数量同时构成该控件的最低用例预算。
+- 输入、动态选择、分页和弹窗必须把每个规定动作独立写入 `interaction-branch-observations.csv`；每行实际执行、恢复、独立取证并只关联一个不复用的计划用例 ID。关联用例必须同时包含该行真实 `操作步骤锚点` 和 `预期结果锚点`，不得用一条通用用例覆盖多个分支。
 - 分页至少覆盖每页条数切换、上一页、下一页、页码跳转或边界页、筛选/搜索后分页重置、列表数据一致性。
 - 弹窗至少覆盖打开、确认、取消、关闭、必填校验、数据保留或清空。
 - 表格行操作至少覆盖查看、编辑不保存、删除确认弹窗取消；对本次新增数据还要覆盖编辑保存和删除确认。
@@ -81,19 +82,19 @@ DFX 落地必须遵循“先元素、后 DFX”的顺序：
 ## 功能用例分片生成
 
 - 最终多 Agent 架构先由 Plan/DFX Agent 冻结计划 owner、功能点顺序、预算和 DFX 评估，再按精确功能点向 Case Worker 发任务；Case Worker 只能生成自己的功能点，不得修改 discovery、plan、risk 或其他功能点产物。
-- 每个 Case Worker 必须同时输出用例与逐用例 traceability，精确绑定 `plan owner ID`、`交互实例ID`、逐选项观察、生命周期记录、证据哈希、worker task ID 和 generation source fingerprint。编排器只接受计划 ID、顺序、功能点和 traceability 全部一致的结果。
+- 每个 Case Worker 必须同时输出用例与逐用例 traceability，精确绑定 `plan owner ID`、`交互实例ID`、逐选项观察、交互分支观察、生命周期记录、证据哈希、worker task ID 和 generation source fingerprint。`branch_observation_ids` 由 `interaction-branch-observations.csv` 确定性派生；编排器只接受计划 ID、顺序、功能点和 traceability 全部一致的结果。
 
 - 生成新一轮功能用例分片前，必须先运行 `powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <batch-run-dir>` 清理旧的 `function_cases_part_*.json` 和 `function_cases_manifest.json`，避免历史分片混入本轮 Excel。
 - 功能测试用例较多时必须按 `function_cases_part_001.json`、`function_cases_part_002.json` 等功能点感知分片生成，每个分片必须有 1–10 条功能用例；分片必须从 001 开始连续无断号，同一功能点总数不超过 10 条时不得跨分片，超过 10 条时才可在该连续功能点区块内顺序切片。
 - 分片只能写入当前批次 `artifacts/data/`，禁止写到 `artifacts/` 根目录或 `artifacts/scripts/`。
 - 分片必须同步生成 `function_cases_manifest.json`，manifest 的 `parts` 只列出本轮有效、非空且连续的三位编号分片；Excel 写入脚本只能读取 manifest 中列出的分片，禁止直接 glob 目录下所有 `function_cases_part_*.json`。
-- `prepare-function-case-generation` 会生成 `generation-session.json`；manifest 必须原样写入相同的 `generation_session_id` 与 `source_fingerprint`。page-element-inventory、page-discovery、selection-option-observations、element-case-plan、test-data-lifecycle 或 risk-confirmation 任一语义变化后，旧会话和旧分片立即失效，必须重新 prepare。
+- `prepare-function-case-generation` 会生成 `generation-session.json`；manifest 必须原样写入相同的 `generation_session_id` 与 `source_fingerprint`。page-element-inventory、page-discovery、selection-option-observations、interaction-branch-observations、element-case-plan、test-data-lifecycle 或 risk-confirmation 任一语义变化后，旧会话和旧分片立即失效，必须重新 prepare。
 - 每条 JSON 用例只能使用标准字段：`用例 ID`、`Story ID/需求 ID`、`模块`、`功能点`、`用例标题`、`优先级`、`测试类型`、`DFX维度`、`DFX场景`、`前置条件`、`测试数据`、`操作步骤`、`预期结果`、`实际结果`、`执行状态`、`是否适合自动化`、`关联风险`、`备注`；禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected` 等非标准字段。
 - JSON 生成阶段必须直接写完整步骤和预期：`前置条件` 至少 2 条，`操作步骤` 至少 4 条且从系统入口和菜单路径开始，`预期结果` 至少 3 条；编号必须连续，不得出现跳号、`点搜索`、`操作元素`、`Extended scenario passes`、`behaves as expected` 等占位或笼统描述。
 - 分片必须按功能点、页面元素、业务路径或相邻交互连续编排，不得随机切分。
 - 每个分片生成后立即校验用例标题、步骤编号、预期编号、DFX维度/场景、关联 `element-case-plan.csv`、真实测试数据证据和配置生效验证；失败时只重写当前分片，不得重写全部功能用例。
 - `build_function_cases.py` 只能读取 `function_cases_part_*.json` 汇总写入 `功能测试用例` Sheet，不得内联大量用例正文。
-- 所有分片完成后再做总校验：用例 ID 唯一且由唯一计划行持有、计划用例ID全部落地、生成用例 `功能点` 与其计划行一致、`page-discovery.csv` 关联 ID 等于精确匹配计划行 ID、步骤和预期分别无重复、功能点单区块且 owner 顺序单调、功能 Sheet 不混入性能专项、导入文件只导入功能执行用例。
+- 所有分片完成后再做总校验：用例 ID 唯一且由唯一计划行持有、计划用例ID全部落地、生成用例 `功能点` 与其计划行一致、`page-discovery.csv` 关联 ID 等于精确匹配计划行 ID、逐选项与交互分支锚点落入各自唯一关联用例、步骤和预期分别无重复、功能点单区块且 owner 顺序单调、功能 Sheet 不混入性能专项、导入文件只导入功能执行用例。
 - `batch-status.csv` 的异常、边界、权限/状态、数据一致性用例数必须按明确 taxonomy 从 manifest 用例的 `DFX场景` 优先派生，并只用功能点、标题、测试数据中的精确语义补充；四类允许重叠，禁止用“状态/刷新/回显”等宽泛词放大计数，也禁止人工估算。
 - JSON 分片到正式 `功能测试用例` Sheet 必须按 manifest 顺序逐行校验全部标准字段一致；正式 Sheet 到导入工作簿必须对顺序号、名称、步骤、预期、前置条件、类型、级别、执行方式、说明、标签、备注等确定性映射字段逐行有序一致，自动生成字段除外。禁止重排、静默改写或只用 Counter 掩盖顺序错误。
 - Excel 数据必须按 Sheet 分文件输出，功能用例分片只负责 `功能测试用例` Sheet，不得把其他 Sheet 数据和功能用例正文混在同一个大文件中。

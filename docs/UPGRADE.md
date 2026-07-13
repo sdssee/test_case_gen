@@ -69,7 +69,7 @@ powershell -ExecutionPolicy Bypass -File scripts\new-framework-upgrade-package.p
 
 2.3.0 新增按角色/权限和数据状态采集的 `page-element-inventory.csv`；discovery、逐选项、元素计划和生命周期新增 `交互实例ID`，仅 page discovery 新增证据定位及通用步骤/结果锚点，逐选项新增非平凡 `预期结果锚点`。本次创建对象以同一测试数据 ID 和创建 owner 用例贯穿，各生命周期行使用对应 mutation plan 的交互实例 ID。状态计数按明确 DFX taxonomy 派生；分片从 001 非空连续；正式表与导入表确定性字段有序一致。`--resume` 只补空模板/列，不伪造事实；旧批次必须按角色和数据状态重新独立盘点、补录 ID/锚点，并把真实非空文件迁入当前批次作为证据。
 
-3.0.0 直接启用最终多 Agent 架构，没有 legacy/optional/灰度模式。`init-batch-run` 会建立 `orchestration/` 与 `artifacts/agent-work/`；批次由确定性状态机按 `discovery → plan → risk → cases → review → delivery` 推进，Agent 只写隔离 workspace。新架构强制单 Discovery owner、Plan/DFX、条件 Risk Arbiter、按功能点 Case Worker、独立只读 Reviewer 与单写者交付，并使用冻结输入、source fingerprint、结构化返工和逐用例 traceability。完整说明见 `docs/AGENT_ORCHESTRATION.md`。
+3.0.0 直接启用最终多 Agent 架构，没有 legacy/optional/灰度模式。`init-batch-run` 会建立 `orchestration/` 与 `artifacts/agent-work/`；批次由确定性状态机按 `discovery → plan → risk → cases → review → delivery` 推进，Agent 只写隔离 workspace。新架构强制单 Discovery owner、Plan/DFX、条件 Risk Arbiter、按功能点 Case Worker、独立只读 Reviewer 与单写者交付，并使用冻结输入、source fingerprint、结构化返工和逐用例 traceability；输入、动态选择、分页和弹窗的必测分支统一记录到 `interaction-branch-observations.csv`。完整说明见 `docs/AGENT_ORCHESTRATION.md`。
 
 从旧框架恢复的批次使用 `init-batch-run --resume --product-name "<原产品名>"` 补齐编排目录，不会把旧文件存在当作阶段已通过。已有事实缺少最终架构所需证据、交互 ID、generation session、traceability 或 Review 时，状态机会停在对应阶段；完成任务并提交严格 AgentResult 后才能继续。3.0.0 不改变 `asset_schema_version=2.0.0`，不需要迁移产品事实 catalog。
 
@@ -119,7 +119,7 @@ powershell -ExecutionPolicy Bypass -File scripts\validate-test-design-deliverabl
 ```
 
 大范围任务可追加 `-BatchStatusPath <batch-status.csv>` 校验批次状态中的覆盖数量和质量门禁。
-升级到包含独立元素盘点、逐选项账本、结构化计划和生命周期门禁的框架后，新批次必须通过 `init-batch-run --product-name` 生成 `batch-scope.json`、`page-element-inventory.csv`、`page-discovery.csv`、`selection-option-observations.csv`、`element-case-plan.csv` 和 `test-data-lifecycle.csv`；旧批次使用 `--resume` 迁移，缺失 inventory、交互实例 ID、逐选项事实或当前批次证据时必须重新实探，不应直接用空模板覆盖历史事实。
+升级到包含独立元素盘点、逐选项/交互分支账本、结构化计划和生命周期门禁的框架后，新批次必须通过 `init-batch-run --product-name` 生成 `batch-scope.json`、`page-element-inventory.csv`、`page-discovery.csv`、`selection-option-observations.csv`、`interaction-branch-observations.csv`、`element-case-plan.csv` 和 `test-data-lifecycle.csv`；旧批次使用 `--resume` 迁移，缺失 inventory、交互实例 ID、逐选项/交互分支事实或当前批次证据时必须重新实探，不应直接用空模板覆盖历史事实。
 只需要单独生成导入文件且不做批次收口时，可使用 `generate-import` 兼容命令。
 
 ## 资产结构升级

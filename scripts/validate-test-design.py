@@ -29,7 +29,14 @@ GLOBAL_INTERMEDIATE_ALLOWED_NAMES = {
     "batch-plan.md",
     "batch-status.csv",
     "batch-review.md",
+    "batch-scope.json",
+    "page-element-inventory.csv",
     "page-discovery.csv",
+    "selection-option-observations.csv",
+    "interaction-branch-observations.csv",
+    "element-case-plan.csv",
+    "test-data-lifecycle.csv",
+    "risk-confirmation.csv",
 }
 
 GLOBAL_INTERMEDIATE_NAME_PATTERNS = [
@@ -380,6 +387,7 @@ def main() -> int:
     validation_runner = repo_root / "scripts" / "run-validation.py"
     pipeline_module = domain_dir / "pipeline.py"
     validation_cache_module = domain_dir / "validation_cache.py"
+    sensitive_data_module = domain_dir / "sensitive_data.py"
     ledger_validator_module = domain_dir / "validators" / "batch_ledgers.py"
     function_case_validator = domain_dir / "validators" / "function_cases.py"
     function_case_contract = domain_dir / "contracts" / "function_cases.py"
@@ -397,6 +405,7 @@ def main() -> int:
     orchestration_schemas = [
         orchestration_schema_dir / name
         for name in [
+            "binary-evidence-audit.schema.json",
             "agent-task.schema.json",
             "agent-result.schema.json",
             "rework-request.schema.json",
@@ -462,6 +471,7 @@ def main() -> int:
         validation_runner,
         pipeline_module,
         validation_cache_module,
+        sensitive_data_module,
         ledger_validator_module,
         function_case_validator,
         function_case_contract,
@@ -559,6 +569,8 @@ def main() -> int:
             "AgentTask",
             "AgentResult",
             "TraceabilityRecord",
+            "interaction-branch-observations.csv",
+            "branch_observation_ids",
             "ReworkRequest",
             "EXTERNAL_BLOCKED",
             "独立 Review Gate",
@@ -568,13 +580,41 @@ def main() -> int:
             "complete-deliverables",
         ],
     )
-    assert_contains(orchestration_contracts, ["class AgentTask", "class AgentResult", "class ReworkRequest", "class TraceabilityRecord", "class RunConfig", "source_fingerprint"])
+    assert_contains(orchestration_contracts, ["class AgentTask", "class AgentResult", "class ReworkRequest", "class TraceabilityRecord", "branch_observation_ids", "class RunConfig", "source_fingerprint"])
     assert_contains(orchestration_state_machine, ["discovery -> plan -> risk -> cases -> review -> delivery", "EXTERNAL_BLOCKED", "request_rework", "COMPLETE"])
     assert_contains(orchestration_event_store, ["monotonically increasing sequence", "previous_hash", "event_hash", "_exclusive_lock"])
     assert_contains(orchestration_workspace, ["Isolated agent workspaces", "transactional artifact promotion", "rollback_promotion", "finalize_promotion"])
-    assert_contains(orchestration_case_merge, ["FUNCTION_CASE_MANIFEST", "case-traceability.json", "TraceabilityRecord", "rollback_files_on_error"])
-    assert_contains(orchestration_engine, ["multi-agent-final", 'agent_mode="required"', "parallel_discovery=False", "review_required=True", "delivery_single_writer=True", "validate_review_artifacts"])
-    assert_contains(orchestration_review, ["REQUIRED_REVIEW_CHECKS", "review_source_fingerprint", "validate_review_artifacts", "case-traceability.json"])
+    assert_contains(orchestration_case_merge, ["FUNCTION_CASE_MANIFEST", "case-traceability.json", "TraceabilityRecord", "interaction-branch-observations.csv", "branch_observation_ids", "rollback_files_on_error"])
+    assert_contains(orchestration_engine, ["multi-agent-final", 'agent_mode="required"', "parallel_discovery=False", "review_required=True", "delivery_single_writer=True", "interaction-branch-observations.csv", "branch_facts", "validate_review_artifacts"])
+    assert_contains(
+        orchestration_review,
+        [
+            "REQUIRED_REVIEW_CHECKS",
+            "review_evidence_paths",
+            "review_source_fingerprint",
+            "binary_evidence_privacy_verified",
+            "validate_review_artifacts",
+            "case-traceability.json",
+        ],
+    )
+    assert_contains(
+        sensitive_data_module,
+        [
+            "BINARY_EVIDENCE_AUDIT_SUFFIX",
+            "assert_binary_evidence_audited",
+            "evidence_sha256",
+            "visible_text",
+            "address_bar_cropped_or_masked",
+            "environment_identifiers_masked",
+            "credentials_masked",
+            "_scan_binary_and_sha256",
+        ],
+    )
+    assert_contains(
+        repo_root / "docs" / "test-design" / "rules" / "page-discovery.md",
+        [".sensitive-audit.json", "evidence_sha256", "visible_text", "status=PASSED"],
+    )
+    assert_contains(agent_architecture_doc, [".sensitive-audit.json", "证据 SHA256", "二进制明文元数据"])
     assert_contains(excel_tools, ["agent-run", "agent-status", "agent-submit", "agent-resume", "validate-review-artifacts"])
     for schema_path in orchestration_schemas:
         schema = json.loads(read_text(schema_path))
@@ -582,6 +622,10 @@ def main() -> int:
             fail(f"Orchestration schema must use JSON Schema 2020-12: {schema_path}")
         if schema.get("additionalProperties") is not False:
             fail(f"Orchestration schema root must reject unknown fields: {schema_path}")
+    assert_contains(
+        orchestration_schema_dir / "traceability-record.schema.json",
+        ["selection_observation_ids", "branch_observation_ids", "lifecycle_ids"],
+    )
 
     for dirname in ["current", "deliverables"]:
         path = repo_root / "docs" / "test-design" / dirname
@@ -786,6 +830,7 @@ def main() -> int:
     page_element_inventory_template = batch_templates_dir / "page-element-inventory-template.csv"
     page_discovery_template = batch_templates_dir / "page-discovery-template.csv"
     selection_option_observations_template = batch_templates_dir / "selection-option-observations-template.csv"
+    interaction_branch_observations_template = batch_templates_dir / "interaction-branch-observations-template.csv"
     element_case_plan_template = batch_templates_dir / "element-case-plan-template.csv"
     test_data_lifecycle_template = batch_templates_dir / "test-data-lifecycle-template.csv"
     risk_confirmation_template = batch_templates_dir / "risk-confirmation-template.csv"
@@ -797,6 +842,7 @@ def main() -> int:
         page_element_inventory_template,
         page_discovery_template,
         selection_option_observations_template,
+        interaction_branch_observations_template,
         element_case_plan_template,
         test_data_lifecycle_template,
         risk_confirmation_template,
@@ -1106,6 +1152,43 @@ def main() -> int:
     ]:
         assert_contains(path, selection_control_markers)
 
+    interaction_branch_markers = [
+        "interaction-branch-observations.csv",
+        "输入",
+        "动态选择",
+        "分页",
+        "弹窗",
+        "独立",
+        "恢复",
+        "关联",
+    ]
+    for path in [
+        repo_root / "docs" / "test-design" / "rules" / "page-discovery.md",
+        repo_root / "docs" / "test-design" / "rules" / "batch-run.md",
+        repo_root / "docs" / "test-design" / "rules" / "case-design.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
+        repo_root / "docs" / "test-assets" / "batch-runs" / "templates" / "batch-plan-template.md",
+    ]:
+        assert_contains(path, interaction_branch_markers)
+    for path in [
+        repo_root / "AGENTS.md",
+        repo_root / "CODEBUDDY.md",
+        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "README.md",
+        repo_root / "README_IMPORT.md",
+        repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "AGENT_ORCHESTRATION.md",
+        repo_root / "docs" / "RULE_OWNERSHIP.md",
+        repo_root / "docs" / "UPGRADE.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
+        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / "docs" / "test-design" / "rules" / "README.md",
+    ]:
+        assert_contains(path, ["interaction-branch-observations.csv"])
+
     input_control_markers = [
         "输入类控件",
         "不得只观察字段存在",
@@ -1231,7 +1314,7 @@ def main() -> int:
         repo_root / "docs" / "test-assets" / "README.md",
     ]:
         assert_contains(path, ["docs/test-assets/batch-runs/"])
-    assert_contains(batch_plan_template, ["批次执行计划", "最小标题路径", "最深标题级别", "禁止合并", "禁止再拆分", "batch-status.csv", "page-discovery.csv", "导入文件", "才能进入下一批", "不得重新生成各批完整用例"])
+    assert_contains(batch_plan_template, ["批次执行计划", "最小标题路径", "最深标题级别", "禁止合并", "禁止再拆分", "batch-status.csv", "page-discovery.csv", "interaction-branch-observations.csv", "导入文件", "才能进入下一批", "不得重新生成各批完整用例"])
     assert_contains(batch_plan_template, ["标准模板", "CSV writer", "示例产品", "<valid_api_key>", "执行中或待开始"])
     assert_contains(batch_review_template, ["批次执行复盘", "页面数", "元素总数", "导入文件路径", "最终交付约束", "不得重新生成各批完整用例"])
     expected_page_discovery_header = (
@@ -1260,6 +1343,19 @@ def main() -> int:
         or len(selection_option_observations_rows[1]) != len(selection_option_observations_rows[0])
     ):
         fail("selection-option-observations-template.csv sample row must have the same column count as its header")
+    expected_interaction_branch_observations_header = (
+        "批次ID,最小标题路径,交互实例ID,页面/入口,元素名称/文案,元素类型,分支类别,分支动作,执行前状态,执行动作,执行后结果,恢复结果,"
+        "操作步骤锚点,预期结果锚点,是否实际执行,阻塞原因,证据路径,证据定位,关联用例ID,备注"
+    )
+    if read_text(interaction_branch_observations_template).splitlines()[0] != expected_interaction_branch_observations_header:
+        fail("interaction-branch-observations-template.csv header changed unexpectedly")
+    with interaction_branch_observations_template.open("r", encoding="utf-8-sig", newline="") as fp:
+        interaction_branch_observations_rows = list(csv.reader(fp))
+    if (
+        len(interaction_branch_observations_rows) < 2
+        or len(interaction_branch_observations_rows[1]) != len(interaction_branch_observations_rows[0])
+    ):
+        fail("interaction-branch-observations-template.csv sample row must have the same column count as its header")
     expected_element_case_plan_header = (
         "批次ID,最小标题路径,交互实例ID,页面/入口,功能点,元素名称/文案,元素类型,交互方式,业务路径,数据状态,"
         "适用DFX维度,适用DFX场景,测试设计方向,应生成用例数,计划用例ID,实际用例ID,"
@@ -1420,7 +1516,7 @@ def main() -> int:
     )
     assert_contains(
         repo_root / "docs" / "test-assets" / "batch-runs" / "templates" / "batch-plan-template.md",
-        ["page-element-inventory.csv", "交互实例ID", "非空证据文件", "内容相同"],
+        ["page-element-inventory.csv", "interaction-branch-observations.csv", "交互实例ID", "非空证据文件", "内容相同"],
     )
     assert_contains(
         repo_root / "docs" / "test-design" / "rules" / "case-design.md",
@@ -1484,6 +1580,7 @@ def main() -> int:
             "PAGE_ELEMENT_INVENTORY_EXPECTED_HEADERS",
             "PAGE_DISCOVERY_EXPECTED_HEADERS",
             "SELECTION_OPTION_OBSERVATIONS_EXPECTED_HEADERS",
+            "INTERACTION_BRANCH_OBSERVATIONS_EXPECTED_HEADERS",
             "ELEMENT_CASE_PLAN_EXPECTED_HEADERS",
             "TEST_DATA_LIFECYCLE_EXPECTED_HEADERS",
             "validate_element_case_plan_and_lifecycle",
@@ -1501,6 +1598,7 @@ def main() -> int:
             "--page-discovery",
             "--batch-status",
             "page-discovery.csv",
+            "interaction-branch-observations.csv",
             "element-case-plan.csv",
             "test-data-lifecycle.csv",
             "risk-confirmation.csv",
@@ -1545,6 +1643,7 @@ def main() -> int:
         [
             "element-case-plan-template.csv",
             "test-data-lifecycle-template.csv",
+            "interaction-branch-observations-template.csv",
             "minimum_cases_for_plan_row",
             "validate_function_case_part",
             "function_cases_part_001.json",
@@ -1553,7 +1652,7 @@ def main() -> int:
     )
     assert_contains(
         ledger_validator_module,
-        ["OPERATION_CATEGORIES", "REQUIRED_VERIFICATION", "validate_single_batch_scope", "validate_discovery_rows", "validate_operation_plan_rows", "validate_mutation_discovery_evidence", "validate_lifecycle_rows", "risk_confirmation_state"],
+        ["OPERATION_CATEGORIES", "REQUIRED_VERIFICATION", "BRANCH_ACTIONS", "validate_single_batch_scope", "validate_discovery_rows", "validate_interaction_branch_rows", "validate_branch_plan_links", "validate_branch_case_grounding", "validate_operation_plan_rows", "validate_mutation_discovery_evidence", "validate_lifecycle_rows", "risk_confirmation_state"],
     )
     assert_contains(pipeline_module, ["derive_pipeline_status", "DISCOVERY_REQUIRED", "PLAN_REQUIRED", "RISK_ASSESSMENT_REQUIRED", "CASE_PREPARATION_REQUIRED", "DELIVERY_REQUIRED", "COMPLETE"])
     assert_contains(validation_cache_module, ["CACHE_VERSION", "fingerprint", "checked_at", "input_count", "atomic_write_text"])

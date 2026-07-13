@@ -5,6 +5,7 @@
 ## 读取路由
 
 - 所有任务：读取 `case-design.md`、`excel-deliverable.md`、`data-safety.md`、`dfx-test-strategy.md`。
+- 最终架构运行：读取 `docs/AGENT_ORCHESTRATION.md` 了解角色、契约、状态机和 CLI；质量判定仍以本目录专题规则及现有验证器为唯一依据。
 - 涉及页面、截图、原型、浏览器或 computer use：追加读取 `page-discovery.md`。
 - 范围超过一个最小标题、全产品、大模块或多个菜单：追加读取 `batch-run.md`。
 - 需要导入测试系统：追加读取 `import-template.md`。

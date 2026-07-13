@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-task.schema.json",
+  "title": "Test Design Agent Task",
+  "type": "object",
+  "required": [
+    "schema_version", "task_id", "run_id", "batch_id", "phase", "agent_role", "owner_key",
+    "input_files", "allowed_output_files", "allowed_output_prefixes", "required_gate", "source_fingerprint", "attempt"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "task_id": {"$ref": "#/$defs/identifier"},
+    "run_id": {"$ref": "#/$defs/scopeIdentifier"},
+    "batch_id": {"$ref": "#/$defs/scopeIdentifier"},
+    "phase": {"$ref": "#/$defs/reworkTarget"},
+    "agent_role": {"$ref": "#/$defs/agentRole"},
+    "owner_key": {"type": ["string", "null"], "minLength": 1, "pattern": "^(?:\\S(?:.*\\S)?)$"},
+    "input_files": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/inputPath"}
+    },
+    "allowed_output_files": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/outputPath"}
+    },
+    "allowed_output_prefixes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/outputPrefix"}
+    },
+    "required_gate": {
+      "enum": ["discovery", "plan", "risk", "cases-worker", "cases", "review", "delivery"]
+    },
+    "source_fingerprint": {"$ref": "#/$defs/fingerprint"},
+    "attempt": {"type": "integer", "minimum": 1}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"agent_role": {"const": "discovery"}}, "required": ["agent_role"]},
+      "then": {"properties": {"phase": {"const": "discovery"}}}
+    },
+    {
+      "if": {"properties": {"agent_role": {"const": "plan_dfx"}}, "required": ["agent_role"]},
+      "then": {"properties": {"phase": {"const": "plan"}}}
+    },
+    {
+      "if": {"properties": {"agent_role": {"const": "risk_arbiter"}}, "required": ["agent_role"]},
+      "then": {"properties": {"phase": {"const": "risk"}}}
+    },
+    {
+      "if": {"properties": {"agent_role": {"const": "case_worker"}}, "required": ["agent_role"]},
+      "then": {
+        "properties": {
+          "phase": {"const": "cases"},
+          "owner_key": {"type": "string", "minLength": 1, "pattern": "^(?:\\S(?:.*\\S)?)$"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"agent_role": {"const": "reviewer"}}, "required": ["agent_role"]},
+      "then": {"properties": {"phase": {"const": "review"}}}
+    }
+  ],
+  "$comment": "The Python contract additionally verifies every output path contains the same agent_role and task_id as this object.",
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "scopeIdentifier": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^/\\\\\\u0000]+$", "not": {"enum": [".", ".."]}},
+    "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "agentRole": {"enum": ["discovery", "plan_dfx", "risk_arbiter", "case_worker", "reviewer"]},
+    "reworkTarget": {"enum": ["discovery", "plan", "risk", "cases", "review", "delivery"]},
+    "inputPath": {
+      "type": "string",
+      "pattern": "^(?:batch-scope\\.json|artifacts/(?:data|evidence|screenshots)/[^\\\\]+|orchestration/(?:inputs|rework-requests)/[^\\\\]+)$",
+      "not": {"pattern": "(?:^|/)(?:\\.|\\.\\.)(?:/|$)"}
+    },
+    "outputPath": {
+      "type": "string",
+      "pattern": "^artifacts/agent-work/(?:discovery|plan_dfx|risk_arbiter|case_worker|reviewer)/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[^\\\\]+$",
+      "not": {"pattern": "(?:^|/)(?:\\.|\\.\\.)(?:/|$)"}
+    },
+    "outputPrefix": {
+      "type": "string",
+      "pattern": "^artifacts/agent-work/(?:discovery|plan_dfx|risk_arbiter|case_worker|reviewer)/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/.+/$",
+      "not": {"pattern": "(?:^|/)(?:\\.|\\.\\.)(?:/|$)"}
+    }
+  }
+}

@@ -819,7 +819,9 @@ class ArchitectureSafetyTests(unittest.TestCase):
 
             TOOLS.prepare_function_case_generation(run_dir)
             catalog_index.write_text('{"version":2}', encoding="utf-8")
-            self.assertFalse(TOOLS.generation_session_is_current(run_dir))
+            # catalog/index.json is a rebuildable projection; unrelated index
+            # churn must not invalidate a leaf run without a matching module fact.
+            self.assertTrue(TOOLS.generation_session_is_current(run_dir))
 
     def test_generation_result_backfills_keep_session_current_through_complete_status(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -910,7 +912,9 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 }
             )
             self.write_csv_rows(status_path, [status])
-            self.assertEqual("COMPLETE", TOOLS.derive_pipeline_status(run_dir)["state"])
+            review_required = TOOLS.derive_pipeline_status(run_dir)
+            self.assertEqual("REVIEW_REQUIRED", review_required["state"])
+            self.assertTrue(review_required["reasons"])
 
             delivered_map_bytes = product_map.read_bytes()
             externally_changed_map = load_workbook(product_map)
@@ -921,12 +925,11 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 TOOLS.validate_batch_artifacts(run_dir, "cases", use_cache=True)
             self.assertEqual("CASE_PREPARATION_REQUIRED", TOOLS.derive_pipeline_status(run_dir)["state"])
             product_map.write_bytes(delivered_map_bytes)
-            self.assertEqual("COMPLETE", TOOLS.derive_pipeline_status(run_dir)["state"])
+            self.assertEqual("REVIEW_REQUIRED", TOOLS.derive_pipeline_status(run_dir)["state"])
 
             published[0].write_bytes(b"tampered")
             tampered = TOOLS.derive_pipeline_status(run_dir)
-            self.assertEqual("DELIVERY_REQUIRED", tampered["state"])
-            self.assertIn("changed since validation", tampered["reasons"][0])
+            self.assertEqual("REVIEW_REQUIRED", tampered["state"])
 
     def test_pipeline_does_not_trust_manual_complete_flags_without_files(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -944,7 +947,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 "test_design.pipeline.validate_batch_artifacts", return_value=None
             ):
                 status = TOOLS.derive_pipeline_status(run_dir)
-            self.assertEqual("DELIVERY_REQUIRED", status["state"])
+            self.assertEqual("REVIEW_REQUIRED", status["state"])
 
     def test_lifecycle_requires_evidence_for_each_editable_item(self) -> None:
         with tempfile.TemporaryDirectory() as value:

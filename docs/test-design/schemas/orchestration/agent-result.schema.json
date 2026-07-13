@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-result.schema.json",
+  "title": "Test Design Agent Result",
+  "type": "object",
+  "required": [
+    "schema_version", "task_id", "agent_role", "status", "source_fingerprint", "produced_files",
+    "affected_interaction_ids", "affected_case_ids", "facts_used", "gate_summary",
+    "rework_requests", "error_message"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "task_id": {"$ref": "#/$defs/identifier"},
+    "agent_role": {"enum": ["discovery", "plan_dfx", "risk_arbiter", "case_worker", "reviewer"]},
+    "status": {"enum": ["SUCCEEDED", "FAILED", "NEEDS_REWORK", "EXTERNAL_BLOCKED"]},
+    "source_fingerprint": {"$ref": "#/$defs/fingerprint"},
+    "produced_files": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/outputPath"}
+    },
+    "affected_interaction_ids": {"$ref": "#/$defs/uniqueStrings"},
+    "affected_case_ids": {"$ref": "#/$defs/uniqueStrings"},
+    "facts_used": {"$ref": "#/$defs/uniqueStrings"},
+    "gate_summary": {"type": "object", "additionalProperties": {"type": "boolean"}},
+    "rework_requests": {
+      "type": "array",
+      "items": {"$ref": "rework-request.schema.json"}
+    },
+    "error_message": {"type": ["string", "null"], "minLength": 1, "pattern": "^(?:\\S(?:.*\\S)?)$"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "SUCCEEDED"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "rework_requests": {"maxItems": 0},
+          "error_message": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "NEEDS_REWORK"}}, "required": ["status"]},
+      "then": {"properties": {"rework_requests": {"minItems": 1}}}
+    },
+    {
+      "if": {"properties": {"status": {"enum": ["FAILED", "EXTERNAL_BLOCKED"]}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "error_message": {"type": "string", "minLength": 1},
+          "rework_requests": {"maxItems": 0}
+        }
+      }
+    }
+  ],
+  "$comment": "The Python contract additionally verifies every produced path contains the same agent_role and task_id as this object and rework request IDs are unique.",
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "uniqueStrings": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "pattern": "^(?:\\S(?:.*\\S)?)$"}
+    },
+    "outputPath": {
+      "type": "string",
+      "pattern": "^artifacts/agent-work/(?:discovery|plan_dfx|risk_arbiter|case_worker|reviewer)/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[^\\\\]+$",
+      "not": {"pattern": "(?:^|/)(?:\\.|\\.\\.)(?:/|$)"}
+    }
+  }
+}

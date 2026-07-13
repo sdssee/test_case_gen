@@ -4,12 +4,12 @@
 
 ## 版本
 
-- framework_version: 2.3.0
+- framework_version: 3.0.0
 - asset_schema_version: 2.0.0
 
 ## 升级类型
 
-- 类型：普通框架升级（批次账本兼容迁移）
+- 类型：最终多 Agent 编排架构（直接替换框架运行层）
 - 是否需要资产迁移：仅当目标项目的 `asset_schema_version` 不是 `2.0.0` 时需要
 - 迁移脚本：`scripts/migrations/1.0.0_to_2.0.0.ps1`
 
@@ -20,6 +20,7 @@
 - `.github/`
 - `.codebuddy/`
 - `docs/ARCHITECTURE.md`
+- `docs/AGENT_ORCHESTRATION.md`
 - `docs/UPGRADE.md`
 - `docs/test-design/*.md`
 - `docs/test-design/*.xlsx`
@@ -53,7 +54,7 @@
 
 ## 升级后校验
 
-2.3.0 新增独立 `page-element-inventory.csv`，并为 discovery、逐选项、元素计划和生命周期增加稳定 `交互实例ID`；逐选项新增 `预期结果锚点`，生命周期按同一测试数据 ID 与创建 owner 用例绑定。证据必须是当前 run-dir `artifacts/` 内非空文件，静态截图按内容哈希去重，复制改名不能复用。同时增加未执行/数据不足退回 discovery、折叠测试实例编号后步骤和预期分别唯一、确定性 oracle、实探→计划→用例精确归属、状态分类计数派生、功能点单区块、001..N 非空连续分片、JSON→正式表→导入表确定性字段逐行有序一致，以及聚合/补丁脚本膨胀拦截。既有批次继续执行前使用 `init-batch-run --resume --product-name "<原产品名>"` 生成备份并补充空模板/空列；迁移不会伪造 inventory、实例 ID、结果锚点或证据，必须重新独立盘点、补录并把真实证据迁入当前 artifacts 后复核。产品事实 schema 仍为 2.0.0。
+3.0.0 直接采用最终多 Agent 架构，不提供旧/新模式切换：确定性编排器强制执行单 Discovery owner、Plan/DFX、条件 Risk Arbiter、按功能点 Case Worker、独立只读 Reviewer 和单写者 Delivery。所有 Agent 使用严格 AgentTask/AgentResult、冻结输入、隔离 workspace、source fingerprint、逐用例 traceability 和结构化返工；阶段顺序升级为 `discovery → plan → risk → cases → review → delivery`，Review Gate 通过前 `complete-deliverables` 不得产生交付副作用。既有批次使用 `init-batch-run --resume --product-name "<原产品名>"` 补齐最终架构目录；已有页面事实不会被伪造或覆盖，缺失 inventory、实例 ID、结果锚点、真实证据或 Review 时必须回到相应阶段。产品事实 schema 仍为 2.0.0，无需产品资产迁移。
 
 外网生成升级包：
 

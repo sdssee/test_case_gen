@@ -746,9 +746,57 @@ def generation_source_fingerprint(run_dir: Path) -> str:
 def generation_catalog_paths(run_dir: Path) -> list[Path]:
     project_root = run_dir.resolve().parents[3]
     catalog = project_root / "docs" / "test-assets" / "catalog"
-    paths = list(catalog.rglob("*.json")) if catalog.exists() else []
-    paths.append(project_root / "docs" / "test-assets" / "product-map.xlsx")
-    return paths
+    scope = batch_scope_data(run_dir.resolve()) or {}
+    product = str(scope.get("product_name") or "").strip()
+    leaf = str(scope.get("module_path") or "").strip()
+    documents: list[tuple[Path, dict[str, object]]] = []
+    modules = catalog / "modules"
+    for path in sorted(modules.glob("*.json")) if modules.is_dir() else []:
+        try:
+            document = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(document, dict):
+            continue
+        documents.append((path, document))
+    selected: set[Path] = set()
+    for path, document in documents:
+        fact_product = str(document.get("product") or "").strip()
+        fact_path = str(document.get("module_path") or "").strip()
+        same_branch = (
+            fact_path == leaf
+            or (fact_path and leaf.startswith(fact_path + ">"))
+            or (leaf and fact_path.startswith(leaf + ">"))
+        )
+        if fact_product == product and same_branch:
+            selected.add(path)
+    # Expand explicit cross-module dependencies from authoritative fact data.
+    # This keeps sibling modules out unless the selected module actually names
+    # their module_key/path in its dependency facts.
+    changed = True
+    while changed:
+        changed = False
+        selected_text = "\n".join(
+            json.dumps(document.get("facts", {}), ensure_ascii=False, sort_keys=True)
+            for path, document in documents
+            if path in selected
+        )
+        for path, document in documents:
+            if path in selected:
+                continue
+            identifiers = {
+                str(document.get("module_key") or "").strip(),
+                str(document.get("module_path") or "").strip(),
+            }
+            if any(identifier and identifier in selected_text for identifier in identifiers):
+                selected.add(path)
+                changed = True
+    if selected:
+        return sorted(selected)
+    # Legacy projects without authoritative module facts still need one stable
+    # source until the catalog is migrated.  Once a relevant module document
+    # exists, the rebuildable workbook/index no longer invalidates other runs.
+    return [project_root / "docs" / "test-assets" / "product-map.xlsx"]
 
 
 def generation_catalog_fingerprint(run_dir: Path) -> str:
@@ -1412,6 +1460,9 @@ def init_batch_run(
                 finally:
                     temporary.unlink(missing_ok=True)
                 print(f"Migrated risk-confirmation.csv page-verification schema and preserved backup: {backup_path}")
+            from .orchestration.engine import initialize_orchestration
+
+            initialize_orchestration(run_dir)
             print(f"Resumed existing batch run; preserved facts and applied compatible schema additions: {run_dir}")
             return run_dir
         if not force_reinitialize:
@@ -1430,9 +1481,11 @@ def init_batch_run(
     scripts_dir = artifacts_dir / "scripts"
     data_dir = artifacts_dir / "data"
     screenshots_dir = artifacts_dir / "screenshots"
+    evidence_dir = artifacts_dir / "evidence"
     scripts_dir.mkdir(parents=True, exist_ok=True)
     data_dir.mkdir(parents=True, exist_ok=True)
     screenshots_dir.mkdir(parents=True, exist_ok=True)
+    evidence_dir.mkdir(parents=True, exist_ok=True)
 
     for target_name, template_path in required_templates.items():
         copy_template_if_missing(template_path, run_dir / target_name)
@@ -1567,5 +1620,8 @@ def init_batch_run(
         if "## 批次初始化" not in text:
             atomic_write_text(markdown_path, text.rstrip() + init_note, encoding="utf-8")
 
+    from .orchestration.engine import initialize_orchestration
+
+    initialize_orchestration(run_dir)
     print(f"Initialized batch run: {run_dir}")
     return run_dir

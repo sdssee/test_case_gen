@@ -31,6 +31,20 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>_<BATCH-ID>/
     scripts/
       assemble_workbook.py
       build_function_cases.py
+    agent-work/
+      <role>/<task-id>/
+        output/
+        meta/
+  orchestration/
+    config.json
+    run-manifest.json
+    state.json
+    events.jsonl
+    tasks/
+    results/
+    inputs/
+    rework-requests/
+    review-report.json
 ```
 
 只要发生页面实探或生成 `page-discovery.csv`，即使当前任务只有一个最小标题路径，也必须先执行 `scripts/run-test-design.ps1 init-batch-run` 初始化批次目录，禁止临时手写旧版 `page-discovery.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 表头或跳过 `batch-status.csv`。已存在同名批次时使用 `--resume` 原样恢复；强制重建使用 `--force-reinitialize`，工具会先创建时间戳备份。
@@ -50,6 +64,8 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>_<BATCH-ID>/
 - `element-case-plan.csv`：使用结构化 `操作类别/验证要求/数据策略/执行状态`，按页面与元素精确映射，禁止同名按钮跨页面互相覆盖。
 - `test-data-lifecycle.csv`：编辑、配置和状态变更按 `交互实例ID + 关联页面/入口 + 修改项/元素` 独立记录；本次创建数据必须用同一测试数据 ID 和创建 owner 用例贯穿创建、查看、修改、生效与清理，禁止无关对象拼接假闭环。
 - `artifacts/`：保存本次批次执行过程中产生的中间截图、页面遍历笔记、临时导出或核对材料；证据只能放在当前任务目录下，禁止写入共享的 `docs/test-assets/batch-runs/artifacts/` 根目录。
+- `artifacts/agent-work/`：最终架构的 Agent 隔离 workspace；Agent 只能写当前 task packet 的 output，不能直接写正式账本、manifest、Excel 或产品事实。
+- `orchestration/`：确定性编排状态、冻结输入、严格任务/结果、追加事件、提升记录、返工和独立 Review 报告。完整契约见 `docs/AGENT_ORCHESTRATION.md`。
 
 ## 执行规则
 
@@ -65,7 +81,7 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>_<BATCH-ID>/
    既有数据必须主动只读深探：进入详情、编辑页、删除/停用/提交确认弹窗观察字段、联动、二次确认、权限提示和取消路径，但不得最终确认；可以复制既有数据的非敏感字段，改名或改编码为带测试标识的新数据后新增。
 4. 必须先默认全量深探并回写 `page-discovery.csv`，通过 plan 后再进行 risk；页面可验证问题由模型自行操作验证，未完成时退回 discovery，风险只阻塞 risk/cases。创建类操作必须真实创建成功，所有修改项必须逐项验证保存回显和实际生效。没有模型不理解项时运行 `record-risk-none`，无需打扰用户。
 5. 不同用例在折叠 `AI_TEST`/`CODEX_TEST` 实例编号后的完整操作步骤和完整预期结果仍必须分别唯一、具体且可判定；同功能点只能形成一个连续区块并服从计划 owner 首次出现顺序；JSON、正式工作簿和导入工作簿的确定性字段必须逐行有序一致。
-6. 使用 `pipeline-status --run-dir <run-dir>` 从资产事实派生下一步，不信任人工状态文字；阶段成功会写入带输入哈希的 `.validation-cache.json`，任一上游输入、模板、证据或验证器变化都会使缓存失效。
+6. 最终架构使用 `agent-run --run-dir <run-dir> --json` 推进确定性状态并取得任务，使用 `agent-submit` 提交严格 AgentResult；`agent-status` 只读查看。阶段固定为 `discovery → plan → risk → cases → review → delivery`，Reviewer 独立只读且 Review 未通过不得交付。`pipeline-status` 保留为资产事实诊断入口；阶段成功会写入带输入哈希的 `.validation-cache.json`，任一上游输入、模板、证据或验证器变化都会使缓存失效。
 7. 功能用例必须按功能点感知且每片 1–10 条生成从 `function_cases_part_001.json` 开始无断号的分片；总数不超过 10 条的同功能点不得跨片，Excel 数据按 Sheet 分文件输出并由标准组装器写入模板。
 8. 每个批次完成后，必须更新 `batch-status.csv`，并填写最小标题路径、页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数、数据一致性用例数、页面遍历完成、功能用例完成、性能设计完成、异常边界权限覆盖完成、页面元素覆盖完成、产品版图已更新、导入文件路径、导入文件已生成和覆盖质量自检。
    已完成批次在 `batch-plan.md` 中不得仍标记为执行中或待开始；`batch-plan.md` 的页面清单数量必须与 `batch-status.csv` 的页面数一致。

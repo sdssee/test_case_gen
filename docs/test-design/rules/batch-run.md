@@ -44,16 +44,17 @@
 `batch-status.csv` 必须记录最小标题路径、页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数、数据一致性用例数、导入文件路径、导入文件已生成。
 页面数、元素总数、覆盖数和待确认数从 discovery 精确派生；功能用例数从 manifest 派生；异常、边界、权限/状态、数据一致性四类按明确 DFX taxonomy 派生、允许重叠，不得人工估算或用宽泛词计数。
 
-阶段性门禁必须按顺序执行：
+阶段性门禁必须按 `discovery → plan → risk → cases → review → delivery` 顺序执行。最终架构由确定性编排器发放严格 `AgentTask`，Agent 只写 `artifacts/agent-work/<role>/<task-id>/output/`；编排器校验 `AgentResult`、输入指纹、输出白名单和既有阶段门禁后才原子提升产物。具体契约与状态见 `docs/AGENT_ORCHESTRATION.md`。
 
 1. 先从 DOM/可访问性树/trace/控件树独立采集 `page-element-inventory.csv`，再执行页面交互；页面发现后运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery`，校验 inventory 与 discovery 双向一致、`交互实例ID` 传递、每个交互真实执行、当前批次 `artifacts/` 内存在非空证据文件和唯一定位、`batch-status.csv` 派生状态及逐选项账本。内容相同的静态截图即使改名也不得复用；有限选择集合必须每个选项一行且实际选择，每行 `预期结果锚点` 必须进入精确关联用例预期；数据不足或未执行必须退回 discovery。
 2. 先默认完成全部页面、元素、交互路径和 CRUD 生效闭环并通过 plan 门禁；随后仅把模型仍无法理解的业务语义、规则歧义或页面无法观察项写入 `risk-confirmation.csv`。真实风险必须声明页面可验证性、实际页面验证动作与结果、不可验证或外部依赖原因和证据；“仅查看/未逐项点击/权限未知”不算外部阻塞，可页面验证或验证未完成时必须退回 discovery。真实确认项由用户确认后更新为 `已确认/否`；没有模型不理解项时由模型运行 `record-risk-none` 写入唯一的 `RISK-NONE/无需用户确认/否`，不得伪造用户确认。
 3. 功能用例分片生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <batch-run-dir>`，清理旧分片和旧 manifest，确保本轮只保留当前批次有效 JSON。
 4. 功能用例分片、Sheet JSON 和正式 Excel 生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase cases`，先校验 `function_cases_manifest.json`、功能点感知三位编号分片、步骤与预期分别唯一、确定性 oracle、标题参数落地、逐选项落地、实探→计划→用例精确归属、owner 顺序和功能点单区块，再校验 Sheet 分文件、计划用例数量和实际分片数量一致。
-5. 严格按 `discovery → plan → risk → cases → delivery` 累积门禁执行；任一阶段失败时回到当前阶段补充页面深探、元素计划、逐修改项生命周期、模型不理解项确认或用例分片，禁止降低预算、删除元素或跳过 DFX 绕过门禁。
+5. 严格按 `discovery → plan → risk → cases → review → delivery` 累积门禁执行；任一阶段失败时回到责任阶段补充页面深探、元素计划、逐修改项生命周期、模型不理解项确认、用例或审查问题，禁止降低预算、删除元素或跳过 DFX/Review 绕过门禁。
    本次创建对象的后续生命周期必须复用同一测试数据 ID 和创建 owner 用例；每行用其对应 mutation plan 的 `交互实例ID` 精确归属。
 6. `element-case-plan.csv` 必须填写 `操作类别`、`验证要求`、`数据策略`、`执行状态`。创建、编辑、删除、配置、状态变更必须使用本次创建或用户提供测试数据并标记实际执行完成；编辑/配置/状态变更的每个修改项必须在 `test-data-lifecycle.csv` 独立一行记录保存后回显和实际生效结果。
 7. 生成用例前运行 `prepare-function-case-generation`；该命令先通过 risk 门禁，再清理旧分片、manifest 和七个 Sheet JSON，并生成绑定当前 inventory/discovery/逐选项/plan/lifecycle/risk 语义与证据哈希的 `generation-session.json`。manifest 必须携带同一 session ID 和 source fingerprint，避免新旧轮次混装或上游变化后继续复用旧用例。
+8. cases 门禁通过后必须由独立只读 Reviewer 检查 inventory/discovery 完整性、逐选项、CRUD、页面可验证风险、计划与用例、步骤与预期唯一性、功能点连续性、DFX、traceability 和未关闭返工；`review-report.json`、generation session 或 review source fingerprint 任一失效都必须重新 Review。
 
 当前独立批次覆盖质量自检通过后，才能初始化下一批的独立 run-dir。所有批次完成后，任务级汇总只读取各批归档、receipt 和用例 ID，生成跨模块汇总、回归范围、风险清单和客户总览，不得把多个批次重新合并到一个 manifest 或重新生成各批完整用例。
 

@@ -13,6 +13,7 @@
 - `.github/`
 - `.codebuddy/`
 - `docs/ARCHITECTURE.md`
+- `docs/AGENT_ORCHESTRATION.md`
 - `docs/UPGRADE.md`
 - `docs/test-design/*.md`
 - `docs/test-design/*.xlsx`
@@ -41,7 +42,7 @@
 `VERSION` 中包含两个版本：
 
 ```text
-framework_version=2.3.0
+framework_version=3.0.0
 asset_schema_version=2.0.0
 ```
 
@@ -67,6 +68,10 @@ powershell -ExecutionPolicy Bypass -File scripts\new-framework-upgrade-package.p
 2.2.0 起有限选择集合必须补录 `selection-option-observations.csv` 的每个选项事实；旧批次恢复时工具只补齐模板和 scope，不会伪造逐项点击、页面变化或证据。原用例分片若存在重复正文、标题参数未落地、计划功能点串位或临时选择误判为持久化变更，必须回到 discovery/plan 后重新 prepare 和生成。
 
 2.3.0 新增按角色/权限和数据状态采集的 `page-element-inventory.csv`；discovery、逐选项、元素计划和生命周期新增 `交互实例ID`，仅 page discovery 新增证据定位及通用步骤/结果锚点，逐选项新增非平凡 `预期结果锚点`。本次创建对象以同一测试数据 ID 和创建 owner 用例贯穿，各生命周期行使用对应 mutation plan 的交互实例 ID。状态计数按明确 DFX taxonomy 派生；分片从 001 非空连续；正式表与导入表确定性字段有序一致。`--resume` 只补空模板/列，不伪造事实；旧批次必须按角色和数据状态重新独立盘点、补录 ID/锚点，并把真实非空文件迁入当前批次作为证据。
+
+3.0.0 直接启用最终多 Agent 架构，没有 legacy/optional/灰度模式。`init-batch-run` 会建立 `orchestration/` 与 `artifacts/agent-work/`；批次由确定性状态机按 `discovery → plan → risk → cases → review → delivery` 推进，Agent 只写隔离 workspace。新架构强制单 Discovery owner、Plan/DFX、条件 Risk Arbiter、按功能点 Case Worker、独立只读 Reviewer 与单写者交付，并使用冻结输入、source fingerprint、结构化返工和逐用例 traceability。完整说明见 `docs/AGENT_ORCHESTRATION.md`。
+
+从旧框架恢复的批次使用 `init-batch-run --resume --product-name "<原产品名>"` 补齐编排目录，不会把旧文件存在当作阶段已通过。已有事实缺少最终架构所需证据、交互 ID、generation session、traceability 或 Review 时，状态机会停在对应阶段；完成任务并提交严格 AgentResult 后才能继续。3.0.0 不改变 `asset_schema_version=2.0.0`，不需要迁移产品事实 catalog。
 
 ## 内网应用升级包
 
@@ -103,10 +108,10 @@ powershell -ExecutionPolicy Bypass -File scripts\validate-test-design-deliverabl
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-deliverables `
   --project-root . `
-  --formal-workbook docs/test-design/current/<测试设计.xlsx> `
-  --import-template docs/test-design/测试用例模板.xlsx `
+  --run-dir docs/test-assets/batch-runs/<任务_BATCH-001> `
   --module-path "一级模块>二级菜单>三级菜单" `
-  --product-name "产品/系统名称"
+  --product-name "产品/系统名称" `
+  --batch-id BATCH-001
 
 powershell -ExecutionPolicy Bypass -File scripts\validate-test-design-deliverable.ps1 `
   -WorkbookPath docs/test-design/current/<测试设计.xlsx> `

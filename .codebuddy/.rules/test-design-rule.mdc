@@ -9,7 +9,8 @@
 - [TD-GATE-RISK-UNCERTAINTY] 页面可验证内容由模型自行操作验证并在未完成时退回 discovery；仅把模型仍不理解的外部语义交给用户确认；风险只阻塞 risk/cases，不阻塞 plan。
 - [TD-GATE-DFX] 先建立元素与交互骨架，再按 `docs/test-design/rules/dfx-test-strategy.md` 完成 DFX 12×4 评估和扩展；性能规格测试和 DFP性能不进入功能用例。
 - [TD-GATE-LEAF-BATCH] 超过一个最小标题时逐最深标题分批，不合并、不再拆分；每个最小标题使用独立 run-dir，禁止在同一账本和 manifest 混装多个批次。
-- [TD-GATE-PHASES] 批次严格按 discovery → plan → risk → cases → delivery 累积门禁执行。
+- [TD-GATE-PHASES] 批次严格按 discovery → plan → risk → cases → review → delivery 累积门禁执行。
+- [TD-GATE-ORCHESTRATION] 最终架构强制使用确定性编排器：单 Discovery owner → Plan/DFX → 条件 Risk Arbiter → 按功能点 Case Worker → 独立只读 Reviewer → 单写者 Delivery；Agent 只写隔离 workspace，AgentTask/AgentResult 必须校验 source fingerprint；Review 未通过或存在返工不得交付。
 - [TD-GATE-SHARDS] 新一轮先清旧产物；功能用例按功能点感知且每片 1–10 条，使用从 `function_cases_part_001.json` 开始无断号的三位编号分片，可容纳的同功能点不得跨片，`function_cases_manifest.json` 是唯一读取源。
 - [TD-GATE-ASSEMBLY] 正式 Excel 只能由标准组装器生成，并由 `complete-deliverables` 一站式收口。
 - [TD-GATE-ASSET-FACTS] `catalog/modules/*.json` 是产品事实源，`product-map.xlsx` 是查询投影。

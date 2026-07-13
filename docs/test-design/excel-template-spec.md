@@ -371,7 +371,7 @@
 
 如确需生成当前批次 Python 临时脚本，写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取，禁止手工拼接包含中文弯引号、智能引号或未转义双引号的字符串字面量。执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过单文件大小、JSON 语法、Python 语法编译和高风险引号扫描后才能执行。
 
-当范围超过一个最小标题时，先建立批次队列，并为每个最小标题分别运行 `init-batch-run --product-name "<真实产品名>"` 建立独立 run-dir。每个目录的 `batch-scope.json` 固定产品与叶子模块，`batch-status.csv` 只能有一行，manifest、Sheet JSON、生命周期和 receipt 不得跨批次混装。通过 `pipeline-status` 按 `discovery → plan → risk → cases → delivery` 派生下一步。
+当范围超过一个最小标题时，先建立批次队列，并为每个最小标题分别运行 `init-batch-run --product-name "<真实产品名>"` 建立独立 run-dir。每个目录的 `batch-scope.json` 固定产品与叶子模块，`batch-status.csv` 只能有一行，manifest、Sheet JSON、生命周期和 receipt 不得跨批次混装。最终架构通过 `agent-run` 按 `discovery → plan → risk → cases → review → delivery` 推进；`pipeline-status` 保留为事实诊断，独立 Review Gate 通过后才能生成正式 Excel。
 
 截图、临时脚本、页面证据和过程材料只能写入当前独立批次 run-dir 的 `artifacts/`，不得写入共享根目录或其他批次目录。
 

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "run-config.schema.json",
+  "title": "Test Design Multi-Agent Run Configuration",
+  "type": "object",
+  "required": [
+    "schema_version", "run_id", "batch_id", "agent_mode", "parallel_discovery",
+    "case_parallel_threshold", "max_case_workers", "max_rework_attempts", "review_required",
+    "delivery_single_writer", "source_fingerprint"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "run_id": {"$ref": "#/$defs/scopeIdentifier"},
+    "batch_id": {"$ref": "#/$defs/scopeIdentifier"},
+    "agent_mode": {"const": "required"},
+    "parallel_discovery": {"const": false},
+    "case_parallel_threshold": {"type": "integer", "minimum": 1},
+    "max_case_workers": {"type": "integer", "minimum": 1, "maximum": 32},
+    "max_rework_attempts": {"type": "integer", "minimum": 0, "maximum": 10},
+    "review_required": {"const": true},
+    "delivery_single_writer": {"const": true},
+    "source_fingerprint": {"$ref": "#/$defs/fingerprint"}
+  },
+  "$defs": {
+    "identifier": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "scopeIdentifier": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^/\\\\\\u0000]+$", "not": {"enum": [".", ".."]}},
+    "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

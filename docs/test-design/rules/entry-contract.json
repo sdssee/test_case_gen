@@ -25,8 +25,8 @@
     ".codebuddy/.rules/test-design-rule.mdc": 4000
   },
   "runtime_budgets": {
-    "codex": 7000,
-    "codebuddy": 6500
+    "codex": 8000,
+    "codebuddy": 7500
   },
   "runtime_graphs": {
     "codex": [
@@ -49,6 +49,7 @@
     "TD-GATE-DFX",
     "TD-GATE-LEAF-BATCH",
     "TD-GATE-PHASES",
+    "TD-GATE-ORCHESTRATION",
     "TD-GATE-SHARDS",
     "TD-GATE-ASSEMBLY",
     "TD-GATE-ASSET-FACTS",
@@ -64,7 +65,8 @@
     "TD-GATE-RISK-UNCERTAINTY": ["页面可验证", "自行操作验证", "discovery", "模型仍不理解", "risk/cases", "不阻塞 plan"],
     "TD-GATE-DFX": ["元素与交互骨架", "DFX 12×4"],
     "TD-GATE-LEAF-BATCH": ["最小标题", "不合并", "不再拆分", "独立 run-dir"],
-    "TD-GATE-PHASES": ["discovery → plan → risk → cases → delivery", "累积门禁"],
+    "TD-GATE-PHASES": ["discovery → plan → risk → cases → review → delivery", "累积门禁"],
+    "TD-GATE-ORCHESTRATION": ["确定性编排器", "单 Discovery owner", "Plan/DFX", "条件 Risk Arbiter", "按功能点 Case Worker", "独立只读 Reviewer", "单写者 Delivery", "隔离 workspace", "AgentTask/AgentResult", "source fingerprint", "Review 未通过", "不得交付"],
     "TD-GATE-SHARDS": ["按功能点感知", "1–10 条", "无断号", "同功能点不得跨片", "function_cases_manifest.json", "唯一读取源"],
     "TD-GATE-ASSEMBLY": ["标准组装器", "complete-deliverables"],
     "TD-GATE-ASSET-FACTS": ["catalog/modules/*.json", "product-map.xlsx"],

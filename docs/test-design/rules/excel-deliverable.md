@@ -33,6 +33,8 @@
 
 ## 交付件校验
 
+最终多 Agent 架构的交付前置条件是 `validate-review-artifacts --run-dir <batch-run-dir>` 通过。Reviewer 只读检查已通过 cases 门禁的正式 JSON、账本与 traceability，不生成或修改 Excel；正式 Excel 和导入文件仍只能由 `complete-deliverables` 的单写者事务生成。
+
 生成正式测试设计 Excel 后，必须运行：
 
 ```powershell

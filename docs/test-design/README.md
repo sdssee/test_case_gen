@@ -18,6 +18,7 @@
 
 - 硬性测试质量规则：`../../.codebuddy/rules/test-design-rule.md`
 - 执行流程：`../../.codebuddy/skills/test-design/SKILL.md`
+- 最终多 Agent 编排、契约与 Review：`../AGENT_ORCHESTRATION.md`
 - Excel 字段、下拉框、导入模板：`excel-template-spec.md`
 - 产品版图、资产归档、跨模块依赖：`archive-and-index-guidelines.md`
 - 规则归属矩阵：`../RULE_OWNERSHIP.md`

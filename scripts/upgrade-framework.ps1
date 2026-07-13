@@ -23,6 +23,7 @@ $allowedPrefixes = @(
   ".github/",
   ".codebuddy/",
   "docs/ARCHITECTURE.md",
+  "docs/AGENT_ORCHESTRATION.md",
   "docs/UPGRADE.md",
   "docs/test-design/rules/",
   "docs/test-design/schemas/",

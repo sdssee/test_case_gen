@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "review-report.schema.json",
+  "title": "Independent Test Design Review Report",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generation_session_id",
+    "generation_source_fingerprint",
+    "review_source_fingerprint",
+    "review_task_id",
+    "reviewer_role",
+    "verdict",
+    "generator_task_ids",
+    "checks",
+    "issues"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "generation_session_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?:\\S(?:.*\\S)?)$"
+    },
+    "generation_source_fingerprint": {"$ref": "#/$defs/fingerprint"},
+    "review_source_fingerprint": {"$ref": "#/$defs/fingerprint"},
+    "review_task_id": {"$ref": "#/$defs/identifier"},
+    "reviewer_role": {"const": "reviewer"},
+    "verdict": {"const": "APPROVED"},
+    "generator_task_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/identifier"}
+    },
+    "checks": {
+      "type": "object",
+      "required": [
+        "cases_gate_passed",
+        "inventory_discovery_complete",
+        "selection_options_executed",
+        "crud_lifecycle_verified",
+        "page_verifiable_risks_resolved",
+        "plan_case_alignment",
+        "steps_unique",
+        "expected_results_unique",
+        "function_points_contiguous",
+        "dfx_within_plan",
+        "traceability_complete",
+        "no_open_rework"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "cases_gate_passed": {"const": true},
+        "inventory_discovery_complete": {"const": true},
+        "selection_options_executed": {"const": true},
+        "crud_lifecycle_verified": {"const": true},
+        "page_verifiable_risks_resolved": {"const": true},
+        "plan_case_alignment": {"const": true},
+        "steps_unique": {"const": true},
+        "expected_results_unique": {"const": true},
+        "function_points_contiguous": {"const": true},
+        "dfx_within_plan": {"const": true},
+        "traceability_complete": {"const": true},
+        "no_open_rework": {"const": true}
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/issue"}
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "uniqueIdentifiers": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/identifier"}
+    },
+    "issue": {
+      "type": "object",
+      "required": [
+        "issue_id",
+        "severity",
+        "status",
+        "reason_code",
+        "affected_ids",
+        "message"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "issue_id": {"$ref": "#/$defs/identifier"},
+        "severity": {"enum": ["MAJOR", "MINOR", "INFO"]},
+        "status": {"enum": ["RESOLVED", "WAIVED"]},
+        "reason_code": {"$ref": "#/$defs/identifier"},
+        "affected_ids": {"$ref": "#/$defs/uniqueIdentifiers"},
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?:\\S(?:.*\\S)?)$"
+        }
+      }
+    }
+  }
+}

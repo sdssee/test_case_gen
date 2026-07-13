@@ -18,6 +18,7 @@
 | `docs/test-assets/catalog/` | 按模块 JSON 保存的内部产品测试权威事实源。 |
 | `docs/test-assets/product-map.xlsx` | 从 catalog 重建的 Excel 查询视图，不作为默认客户交付件。 |
 | `docs/RULE_OWNERSHIP.md` | 规则归属矩阵，避免重复和漂移。 |
+| `docs/AGENT_ORCHESTRATION.md` | 最终多 Agent 架构、角色、契约、状态机、返工、Review 与 CLI。 |
 
 详细规则按任务读取 `docs/test-design/rules/`；Excel 字段以 `docs/test-design/excel-template-spec.md` 为准；归档和跨模块依赖以 `docs/test-design/archive-and-index-guidelines.md` 为准。
 
@@ -51,7 +52,15 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-
   --batch-id BATCH-001
 ```
 
-完成批次 JSON 分片后，优先使用真正的一站式组装与收口命令。该命令会从 manifest 和 7 个 Sheet JSON 生成 8 Sheet 正式工作簿，并同时写入 `current/`、`deliverables/`、内部归档和独立导入文件：
+`init-batch-run` 会直接建立必选的最终多 Agent 运行环境。使用 `agent-run` 获取下一组隔离任务，Agent 按 task packet 写入自己的 output 后用 `agent-submit` 提交；编排器依次完成 discovery、plan、risk、cases 和独立 review，进入 `DELIVERY_RUNNING` 后才允许收口：
+
+```powershell
+scripts/run-test-design.ps1 agent-run --run-dir <批次目录> --json
+scripts/run-test-design.ps1 agent-status --run-dir <批次目录> --json
+scripts/run-test-design.ps1 agent-submit --run-dir <批次目录> --task-id <任务ID> --result <agent-result.json> --json
+```
+
+进入 `DELIVERY_RUNNING` 后使用一站式组装与收口命令。该命令从 manifest 和 7 个 Sheet JSON 生成 8 Sheet 正式工作簿，并同时写入 `current/`、`deliverables/`、内部归档和独立导入文件：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-deliverables `
@@ -61,6 +70,8 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
   --product-name "产品/系统名称" `
   --batch-id BATCH-001
 ```
+
+交付事务成功后再运行一次 `agent-run --run-dir <批次目录> --json`，由编排器复核 delivery 事实并把运行状态收口为 `COMPLETE`。
 
 如需排查组装问题，可先运行 `assemble-formal-workbook --run-dir <批次目录> --output <临时检查.xlsx>`；禁止在批次目录编写 `gen_excel.py` 之类脚本绕过标准组装器。
 
@@ -81,7 +92,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
 - 生成功能测试用例分片前先运行 `prepare-function-case-generation` 清理旧分片和旧 manifest；功能用例按功能点感知、每片 1–10 条生成从 `artifacts/data/function_cases_part_001.json` 开始连续无断号的三位编号分片，同功能点可容纳时不得跨片，并同步 `function_cases_manifest.json`。
 - 功能用例 JSON 只允许标准字段，禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected`、英文模板或泛化占位文本；Excel 数据按 Sheet 分文件输出，避免单个脚本或 JSON 承载过多内容。
 - 七个 Sheet JSON 必须使用目标 Sheet 的精确表头且至少有一个非空值；错误字段在 cases 门禁直接失败，不延迟到 Excel 组装阶段。
-- 先运行 `pipeline-status` 获取事实派生的下一步，再按 `discovery → plan → risk → cases → delivery` 逐阶段执行；风险只阻塞 risk/cases，不阻塞元素计划。没有模型不理解项时运行 `record-risk-none`，不伪造用户确认。
+- 最终架构强制由确定性编排器按 `discovery → plan → risk → cases → review → delivery` 推进：单 Discovery owner、Plan/DFX、条件 Risk Arbiter、按功能点 Case Worker、独立只读 Reviewer、单写者 Delivery。Agent 只写隔离 workspace，Review 未通过不得交付。`pipeline-status` 保留为事实诊断入口。
 - 日常修改运行 `scripts/validate-test-design.ps1 -Mode Fast`；提交、CI 和发布运行 `-Mode Full`。
 - `功能测试用例` 不写性能规格测试或 `DFP性能` 场景；性能、并发、大数据量、资源监控和极端压力进入 `性能测试设计`、风险或自动化建议。
 - 选择类有限集合逐项实际选择并写入 `selection-option-observations.csv`；每项 `预期结果锚点` 取自真实页面变化、不能只填选项值，并进入关联用例预期。创建对象后续生命周期复用同一测试数据 ID 和创建 owner 用例，各行绑定对应 mutation plan 交互实例 ID。

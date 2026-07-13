@@ -14,8 +14,9 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 2. 初始化批次，默认全量深探所有元素、交互、CRUD 和配置生效路径。
 3. 生成结构化 `element-case-plan.csv` 与逐修改项 `test-data-lifecycle.csv`，通过 plan 门禁。
 4. 汇总模型不理解项；有问题才请用户确认，无问题运行 `record-risk-none`。
-5. 完成 DFX 评估，准备并按 manifest 分片生成用例。
-6. 组装 8 Sheet 正式设计、独立导入文件，归档并同步产品事实。
+5. 完成 DFX 评估，按功能点 Case Worker 生成用例并由编排器确定性分片。
+6. 由独立只读 Reviewer 通过 Review Gate；存在问题时按结构化返工回到责任阶段。
+7. 由单写者组装 8 Sheet 正式设计、独立导入文件，归档并同步产品事实。
 
 <!-- TEST-DESIGN-GENERATED:BEGIN -->
 - [TD-GATE-DELIVERY] 正式测试设计只含 8 个标准 Sheet；测试系统导入文件必须由独立模板副本生成。
@@ -25,7 +26,8 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - [TD-GATE-RISK-UNCERTAINTY] 页面可验证内容由模型自行操作验证并在未完成时退回 discovery；仅把模型仍不理解的外部语义交给用户确认；风险只阻塞 risk/cases，不阻塞 plan。
 - [TD-GATE-DFX] 先建立元素与交互骨架，再按 `docs/test-design/rules/dfx-test-strategy.md` 完成 DFX 12×4 评估和扩展；性能规格测试和 DFP性能不进入功能用例。
 - [TD-GATE-LEAF-BATCH] 超过一个最小标题时逐最深标题分批，不合并、不再拆分；每个最小标题使用独立 run-dir，禁止在同一账本和 manifest 混装多个批次。
-- [TD-GATE-PHASES] 批次严格按 discovery → plan → risk → cases → delivery 累积门禁执行。
+- [TD-GATE-PHASES] 批次严格按 discovery → plan → risk → cases → review → delivery 累积门禁执行。
+- [TD-GATE-ORCHESTRATION] 最终架构强制使用确定性编排器：单 Discovery owner → Plan/DFX → 条件 Risk Arbiter → 按功能点 Case Worker → 独立只读 Reviewer → 单写者 Delivery；Agent 只写隔离 workspace，AgentTask/AgentResult 必须校验 source fingerprint；Review 未通过或存在返工不得交付。
 - [TD-GATE-SHARDS] 新一轮先清旧产物；功能用例按功能点感知且每片 1–10 条，使用从 `function_cases_part_001.json` 开始无断号的三位编号分片，可容纳的同功能点不得跨片，`function_cases_manifest.json` 是唯一读取源。
 - [TD-GATE-ASSEMBLY] 正式 Excel 只能由标准组装器生成，并由 `complete-deliverables` 一站式收口。
 - [TD-GATE-ASSET-FACTS] `catalog/modules/*.json` 是产品事实源，`product-map.xlsx` 是查询投影。
@@ -37,12 +39,14 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 ## 命令
 
 ```powershell
-scripts/run-test-design.ps1 pipeline-status --run-dir <run-dir>
-scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <run-dir> --phase discovery|plan|risk|cases
-scripts/run-test-design.ps1 record-risk-none --run-dir <run-dir>
-scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <run-dir>
+scripts/run-test-design.ps1 agent-run --run-dir <run-dir> --json
+scripts/run-test-design.ps1 agent-status --run-dir <run-dir> --json
+scripts/run-test-design.ps1 agent-submit --run-dir <run-dir> --task-id <任务ID> --result <agent-result.json> --json
+scripts/run-test-design.ps1 validate-review-artifacts --run-dir <run-dir>
 scripts/run-test-design.ps1 complete-deliverables --run-dir <run-dir> --module-path "<模块路径>" --batch-id <批次ID>
 ```
+
+`pipeline-status`、`validate-batch-artifacts`、`record-risk-none` 和 `prepare-function-case-generation` 是编排器复用的诊断/门禁能力，不是绕过 Agent 与 Review 的手工捷径。
 
 <!-- LOCAL-OVERRIDES:BEGIN -->
 <!-- 业务项目可以在本区块追加本地约束；同步脚本不得覆盖。 -->

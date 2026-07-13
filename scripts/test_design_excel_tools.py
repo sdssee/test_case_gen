@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -291,6 +293,13 @@ from test_design.batch import (
     init_batch_run,
 )
 from test_design.pipeline import derive_pipeline_status
+from test_design.orchestration.engine import (
+    advance_orchestration,
+    orchestration_status,
+    resume_external_block,
+    submit_agent_result,
+)
+from test_design.orchestration.review import validate_review_artifacts
 
 
 from test_design.product_map_sync import product_map_mutable_paths, sync_product_map
@@ -444,7 +453,9 @@ def complete_deliverables(
     page_discovery: Path | None = None,
     product_name: str | None = None,
     scripts_path: Path | None = None,
-) -> None:
+    assembly_run_dir: Path | None = None,
+    formal_template: Path | None = None,
+) -> dict[str, int]:
     project_root = project_root.resolve()
     if batch_status:
         product_name = validate_delivery_scope(batch_status.resolve(), batch_id, module_path, product_name)
@@ -477,11 +488,32 @@ def complete_deliverables(
 
     if scripts_path and scripts_path.exists():
         run_python_script(script_dir / "validate-generated-python-scripts.py", ["--path", str(scripts_path)])
-    if batch_status:
-        validate_batch_artifacts(batch_status.resolve().parent, "cases")
-
+    run_dir = batch_status.resolve().parent if batch_status else None
+    orchestrated = bool(run_dir and (run_dir / "orchestration" / "run-manifest.json").exists())
+    if orchestrated:
+        if assembly_run_dir is None or assembly_run_dir.resolve() != run_dir:
+            raise ValueError(
+                "orchestrated delivery must assemble from the reviewed run-dir inside the locked transaction; "
+                "external --formal-workbook input is not allowed"
+            )
+        if formal_template is None:
+            raise ValueError("orchestrated delivery requires the standard formal template")
+    assembly_counts: dict[str, int] = {}
     delivery_lock = project_root / ".test-design-locks" / "delivery.lock"
-    with exclusive_process_lock(delivery_lock), rollback_files_on_error(mutable_paths):
+    with contextlib.ExitStack() as stack:
+        # Hold the run lock from final cases/review validation through receipt
+        # publication, so a concurrent rework/result submission cannot race the
+        # delivery transaction after Review has passed.
+        if orchestrated and run_dir:
+            stack.enter_context(exclusive_process_lock(run_dir / "orchestration" / ".orchestrator.lock"))
+        stack.enter_context(exclusive_process_lock(delivery_lock))
+        if run_dir:
+            validate_batch_artifacts(run_dir, "cases")
+            if orchestrated:
+                validate_review_artifacts(run_dir)
+        stack.enter_context(rollback_files_on_error(mutable_paths))
+        if orchestrated and run_dir and formal_template:
+            assembly_counts = assemble_formal_workbook(run_dir, formal_template, formal_workbook)
         apply_formal_workbook_styles(formal_workbook)
         generate_import_workbook(formal_workbook, import_template, target_import, module_path, product_name)
 
@@ -537,6 +569,7 @@ def complete_deliverables(
             print(f"- {relative_project_path(project_root, path)}")
         if receipt:
             print(f"- {relative_project_path(project_root, receipt)}")
+    return assembly_counts
 
 
 def generate_import_workbook(
@@ -706,6 +739,36 @@ def main() -> int:
     pipeline_status.add_argument("--run-dir", required=True, type=Path)
     pipeline_status.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
+    agent_run = sub.add_parser(
+        "agent-run",
+        help="Advance the required final multi-agent architecture and emit the next isolated AgentTask packet(s).",
+    )
+    agent_run.add_argument("--run-dir", required=True, type=Path)
+    agent_run.add_argument("--json", action="store_true", help="Emit one clean machine-readable JSON document.")
+
+    agent_status = sub.add_parser(
+        "agent-status",
+        help="Read state without advancing phases; repair audit projections after an interrupted write if required.",
+    )
+    agent_status.add_argument("--run-dir", required=True, type=Path)
+    agent_status.add_argument("--json", action="store_true")
+
+    agent_submit = sub.add_parser("agent-submit", help="Validate and submit one isolated AgentResult, then advance safely.")
+    agent_submit.add_argument("--run-dir", required=True, type=Path)
+    agent_submit.add_argument("--task-id", required=True)
+    agent_submit.add_argument("--result", required=True, type=Path)
+    agent_submit.add_argument("--json", action="store_true")
+
+    agent_resume = sub.add_parser("agent-resume", help="Resume a genuinely external-blocked Agent phase.")
+    agent_resume.add_argument("--run-dir", required=True, type=Path)
+    agent_resume.add_argument("--json", action="store_true")
+
+    review_gate = sub.add_parser(
+        "validate-review-artifacts",
+        help="Run the mandatory independent read-only Review Gate before delivery.",
+    )
+    review_gate.add_argument("--run-dir", required=True, type=Path)
+
     assemble = sub.add_parser("assemble-formal-workbook", help="Assemble all 8 formal-design Sheets from one batch run and the standard template.")
     assemble.add_argument("--run-dir", required=True, type=Path)
     assemble.add_argument("--template", type=Path)
@@ -769,7 +832,11 @@ def main() -> int:
     elif args.command == "record-risk-none":
         record_no_model_uncertainty(args.run_dir)
     elif args.command == "pipeline-status":
-        status = derive_pipeline_status(args.run_dir)
+        if args.json:
+            with contextlib.redirect_stdout(io.StringIO()):
+                status = derive_pipeline_status(args.run_dir)
+        else:
+            status = derive_pipeline_status(args.run_dir)
         if args.json:
             print(json.dumps(status, ensure_ascii=False, indent=2))
         else:
@@ -779,6 +846,34 @@ def main() -> int:
                 print(f"command={status['command']}")
             for reason in status.get("reasons", []):
                 print(f"reason={reason}")
+    elif args.command in {"agent-run", "agent-status", "agent-submit", "agent-resume"}:
+        with contextlib.redirect_stdout(io.StringIO()):
+            if args.command == "agent-run":
+                status = advance_orchestration(args.run_dir)
+            elif args.command == "agent-status":
+                status = orchestration_status(args.run_dir)
+            elif args.command == "agent-submit":
+                status = submit_agent_result(args.run_dir, args.task_id, args.result)
+            else:
+                status = resume_external_block(args.run_dir)
+        if args.json:
+            print(json.dumps(status, ensure_ascii=False, indent=2))
+        else:
+            print(f"state={status['state']}")
+            for task in status.get("runnable_tasks", []):
+                task_id = task.get("task_id", "")
+                role = task.get("agent_role", "")
+                print(f"task={task_id} role={role}")
+                print(
+                    "task_packet="
+                    + str(args.run_dir.resolve() / "artifacts" / "agent-work" / role / task_id / "meta" / "agent-task.json")
+                )
+            if status.get("delivery_command"):
+                print(f"command={status['delivery_command']}")
+    elif args.command == "validate-review-artifacts":
+        if not validate_review_artifacts(args.run_dir):
+            raise ValueError("Review Gate is not applicable because this run has no final orchestration manifest")
+        print(f"OK: independent Review Gate passed: {args.run_dir.resolve()}")
     elif args.command == "assemble-formal-workbook":
         project_root = args.project_root.resolve()
         template = args.template or (project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx")
@@ -798,6 +893,11 @@ def main() -> int:
                 "ERROR: --batch-status is required when --page-discovery is provided. "
                 "Run init-batch-run first and keep batch-plan.md, batch-status.csv, batch-review.md, and page-discovery.csv together."
             )
+        if args.formal_workbook and run_dir:
+            raise SystemExit(
+                "ERROR: orchestrated --run-dir delivery cannot accept --formal-workbook; "
+                "the reviewed JSON must be assembled inside the locked delivery transaction."
+            )
         if args.formal_workbook:
             complete_deliverables(
                 project_root, args.formal_workbook, import_template, args.module_path,
@@ -807,11 +907,11 @@ def main() -> int:
         elif run_dir:
             with tempfile.TemporaryDirectory(prefix="test-design-formal-") as value:
                 assembled = Path(value) / "formal.xlsx"
-                counts = assemble_formal_workbook(run_dir, formal_template, assembled)
-                complete_deliverables(
+                counts = complete_deliverables(
                     project_root, assembled, import_template, args.module_path,
                     args.import_workbook, batch_status, args.batch_id, product_map,
                     page_discovery, args.product_name, scripts_path,
+                    assembly_run_dir=run_dir, formal_template=formal_template,
                 )
                 print(f"OK: assembled and delivered {counts.get(FORMAL_FUNCTION_SHEET, 0)} function case(s) from {run_dir}")
         else:

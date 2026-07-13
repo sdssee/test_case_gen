@@ -40,6 +40,7 @@ $includeFiles = @(
   "VERSION",
   "UPGRADE_MANIFEST.md",
   "docs/ARCHITECTURE.md",
+  "docs/AGENT_ORCHESTRATION.md",
   "docs/UPGRADE.md",
   "docs/test-assets/README.md",
   "docs/test-assets/batch-runs/README.md"

@@ -176,6 +176,19 @@ def derive_pipeline_status(run_dir: Path) -> dict[str, object]:
     except Exception as exc:
         return _failure("CASE_GENERATION_REQUIRED", "补齐或修复当前用例分片和 Sheet JSON", str(exc))
 
+    if (run_dir / "orchestration" / "run-manifest.json").exists():
+        try:
+            from .orchestration.review import validate_review_artifacts
+
+            validate_review_artifacts(run_dir)
+        except Exception as exc:
+            return _failure(
+                "REVIEW_REQUIRED",
+                "运行独立只读 Review Agent；通过 Review Gate 后才能交付",
+                str(exc),
+                f"scripts/run-test-design.ps1 agent-run --run-dir \"{run_dir}\"",
+            )
+
     status_path = run_dir / "batch-status.csv"
     with status_path.open("r", encoding="utf-8-sig", newline="") as stream:
         status_rows = list(csv.DictReader(stream))

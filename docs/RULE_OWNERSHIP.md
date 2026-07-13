@@ -21,6 +21,7 @@
 | Excel Sheet、字段、枚举、导入模板 | `docs/test-design/excel-template-spec.md`、`docs/test-design/rules/excel-deliverable.md`、`docs/test-design/rules/import-template.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md` | `README.md` |
 | 产品版图、资产归档、跨模块依赖 | `docs/test-design/archive-and-index-guidelines.md`、`docs/test-design/rules/product-map-sync.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | `README.md` |
 | 批次运行状态与质量门禁 | `docs/test-design/rules/batch-run.md`、`docs/test-assets/batch-runs/README.md`、`docs/test-assets/batch-runs/templates/` | Rule、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md`、`docs/test-design/archive-and-index-guidelines.md` | `README.md`、`docs/test-design/README.md` |
+| 最终多 Agent 编排、契约、状态、返工与 Review | `docs/AGENT_ORCHESTRATION.md`、`scripts/test_design/orchestration/`、`docs/test-design/schemas/orchestration/` | Rule Gate、Skill、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md`、专题规则 | 在架构文档中复制页面、DFX、用例或 Excel 规则正文 |
 | 交付件质量校验 | `scripts/validate-test-design-deliverable.py`、`scripts/validate-test-design-deliverable.ps1`、`scripts/validate-generated-python-scripts.py`、`scripts/validate-generated-python-scripts.ps1`、`scripts/test_design_excel_tools.py`、`docs/test-design/excel-template-spec.md` | `README.md`、`README_IMPORT.md`、Skill、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | Rule 中的脚本实现细节 |
 | 客户交付与内部资产边界 | `docs/test-design/archive-and-index-guidelines.md`、`docs/test-assets/README.md` | `README.md`、`README_IMPORT.md`、`docs/ARCHITECTURE.md` | Skill 中的长篇资产目录说明 |
 | 外网到内网升级 | `docs/UPGRADE.md`、`UPGRADE_MANIFEST.md`、`scripts/new-framework-upgrade-package.ps1`、`scripts/upgrade-framework.ps1` | `README.md`、`README_IMPORT.md`、`docs/ARCHITECTURE.md` | Skill、Rule 中的长篇升级流程 |
@@ -52,3 +53,4 @@
 | 修改交付件质量校验 | `scripts/validate-test-design-deliverable.py`、`scripts/validate-test-design-deliverable.ps1`、`scripts/validate-generated-python-scripts.py`、`scripts/validate-generated-python-scripts.ps1`、`scripts/test_design_excel_tools.py`、`excel-template-spec.md`、校验脚本 | README/Skill/AGENTS/CODEBUDDY 摘要 |
 | 修改升级机制 | `docs/UPGRADE.md`、`UPGRADE_MANIFEST.md`、升级脚本、校验脚本 | README/README_IMPORT |
 | 修改架构分层 | `docs/ARCHITECTURE.md`、`docs/RULE_OWNERSHIP.md`、校验脚本 | README |
+| 修改多 Agent 编排或 Review | `docs/AGENT_ORCHESTRATION.md`、orchestration 实现与 schema、专题规则、校验脚本、测试 | Rule/Skill/AGENTS/CODEBUDDY 的 Gate 摘要 |

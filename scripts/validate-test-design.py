@@ -384,6 +384,27 @@ def main() -> int:
     function_case_validator = domain_dir / "validators" / "function_cases.py"
     function_case_contract = domain_dir / "contracts" / "function_cases.py"
     sheet_data_contract = domain_dir / "contracts" / "sheet_data.py"
+    agent_architecture_doc = repo_root / "docs" / "AGENT_ORCHESTRATION.md"
+    orchestration_dir = domain_dir / "orchestration"
+    orchestration_contracts = orchestration_dir / "contracts.py"
+    orchestration_state_machine = orchestration_dir / "state_machine.py"
+    orchestration_event_store = orchestration_dir / "event_store.py"
+    orchestration_workspace = orchestration_dir / "workspace.py"
+    orchestration_case_merge = orchestration_dir / "case_merge.py"
+    orchestration_engine = orchestration_dir / "engine.py"
+    orchestration_review = orchestration_dir / "review.py"
+    orchestration_schema_dir = repo_root / "docs" / "test-design" / "schemas" / "orchestration"
+    orchestration_schemas = [
+        orchestration_schema_dir / name
+        for name in [
+            "agent-task.schema.json",
+            "agent-result.schema.json",
+            "rework-request.schema.json",
+            "run-config.schema.json",
+            "traceability-record.schema.json",
+            "review-report.schema.json",
+        ]
+    ]
     rule_docs = [
         rules_dir / "README.md",
         rules_dir / "case-design.md",
@@ -445,6 +466,15 @@ def main() -> int:
         function_case_validator,
         function_case_contract,
         sheet_data_contract,
+        agent_architecture_doc,
+        orchestration_contracts,
+        orchestration_state_machine,
+        orchestration_event_store,
+        orchestration_workspace,
+        orchestration_case_merge,
+        orchestration_engine,
+        orchestration_review,
+        *orchestration_schemas,
         *rule_docs,
     ]:
         if not path.exists():
@@ -515,6 +545,43 @@ def main() -> int:
     assert_contains(validation_runner, ["--mode", "fast", "full", "SLOW_TEST_MARKERS"])
     assert_contains(upgrade_script, ["Restore-UpgradeSnapshot", "restoring framework and protected assets", "frameworkSnapshot", '".github/"', "Merge-LocalOverrideBlock", "-Mode Fast"])
     assert_contains(formal_assembler_module, ["assemble_formal_workbook", "SHEET_DATA_SOURCES", "exact target Sheet headers", "template data"])
+    assert_contains(version_file, ["framework_version=3.0.0", "asset_schema_version=2.0.0"])
+    assert_contains(upgrade_manifest, ["framework_version: 3.0.0", "最终多 Agent", "docs/AGENT_ORCHESTRATION.md"])
+    assert_contains(upgrade_doc, ["framework_version=3.0.0", "最终多 Agent", "docs/AGENT_ORCHESTRATION.md"])
+    assert_contains(package_script, ["docs/AGENT_ORCHESTRATION.md"])
+    assert_contains(upgrade_script, ["docs/AGENT_ORCHESTRATION.md"])
+    assert_contains(
+        agent_architecture_doc,
+        [
+            "最终多 Agent 测试设计架构",
+            "discovery → plan → risk → cases → review → delivery",
+            "单一页面事实 owner",
+            "AgentTask",
+            "AgentResult",
+            "TraceabilityRecord",
+            "ReworkRequest",
+            "EXTERNAL_BLOCKED",
+            "独立 Review Gate",
+            "agent-run",
+            "agent-submit",
+            "validate-review-artifacts",
+            "complete-deliverables",
+        ],
+    )
+    assert_contains(orchestration_contracts, ["class AgentTask", "class AgentResult", "class ReworkRequest", "class TraceabilityRecord", "class RunConfig", "source_fingerprint"])
+    assert_contains(orchestration_state_machine, ["discovery -> plan -> risk -> cases -> review -> delivery", "EXTERNAL_BLOCKED", "request_rework", "COMPLETE"])
+    assert_contains(orchestration_event_store, ["monotonically increasing sequence", "previous_hash", "event_hash", "_exclusive_lock"])
+    assert_contains(orchestration_workspace, ["Isolated agent workspaces", "transactional artifact promotion", "rollback_promotion", "finalize_promotion"])
+    assert_contains(orchestration_case_merge, ["FUNCTION_CASE_MANIFEST", "case-traceability.json", "TraceabilityRecord", "rollback_files_on_error"])
+    assert_contains(orchestration_engine, ["multi-agent-final", 'agent_mode="required"', "parallel_discovery=False", "review_required=True", "delivery_single_writer=True", "validate_review_artifacts"])
+    assert_contains(orchestration_review, ["REQUIRED_REVIEW_CHECKS", "review_source_fingerprint", "validate_review_artifacts", "case-traceability.json"])
+    assert_contains(excel_tools, ["agent-run", "agent-status", "agent-submit", "agent-resume", "validate-review-artifacts"])
+    for schema_path in orchestration_schemas:
+        schema = json.loads(read_text(schema_path))
+        if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
+            fail(f"Orchestration schema must use JSON Schema 2020-12: {schema_path}")
+        if schema.get("additionalProperties") is not False:
+            fail(f"Orchestration schema root must reject unknown fields: {schema_path}")
 
     for dirname in ["current", "deliverables"]:
         path = repo_root / "docs" / "test-design" / dirname
@@ -703,6 +770,7 @@ def main() -> int:
         repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / "docs" / "ARCHITECTURE.md",
+        agent_architecture_doc,
         repo_root / "docs" / "RULE_OWNERSHIP.md",
         repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
     ]

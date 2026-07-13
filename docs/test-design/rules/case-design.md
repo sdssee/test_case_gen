@@ -80,6 +80,9 @@ DFX 落地必须遵循“先元素、后 DFX”的顺序：
 
 ## 功能用例分片生成
 
+- 最终多 Agent 架构先由 Plan/DFX Agent 冻结计划 owner、功能点顺序、预算和 DFX 评估，再按精确功能点向 Case Worker 发任务；Case Worker 只能生成自己的功能点，不得修改 discovery、plan、risk 或其他功能点产物。
+- 每个 Case Worker 必须同时输出用例与逐用例 traceability，精确绑定 `plan owner ID`、`交互实例ID`、逐选项观察、生命周期记录、证据哈希、worker task ID 和 generation source fingerprint。编排器只接受计划 ID、顺序、功能点和 traceability 全部一致的结果。
+
 - 生成新一轮功能用例分片前，必须先运行 `powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <batch-run-dir>` 清理旧的 `function_cases_part_*.json` 和 `function_cases_manifest.json`，避免历史分片混入本轮 Excel。
 - 功能测试用例较多时必须按 `function_cases_part_001.json`、`function_cases_part_002.json` 等功能点感知分片生成，每个分片必须有 1–10 条功能用例；分片必须从 001 开始连续无断号，同一功能点总数不超过 10 条时不得跨分片，超过 10 条时才可在该连续功能点区块内顺序切片。
 - 分片只能写入当前批次 `artifacts/data/`，禁止写到 `artifacts/` 根目录或 `artifacts/scripts/`。
@@ -94,6 +97,7 @@ DFX 落地必须遵循“先元素、后 DFX”的顺序：
 - `batch-status.csv` 的异常、边界、权限/状态、数据一致性用例数必须按明确 taxonomy 从 manifest 用例的 `DFX场景` 优先派生，并只用功能点、标题、测试数据中的精确语义补充；四类允许重叠，禁止用“状态/刷新/回显”等宽泛词放大计数，也禁止人工估算。
 - JSON 分片到正式 `功能测试用例` Sheet 必须按 manifest 顺序逐行校验全部标准字段一致；正式 Sheet 到导入工作簿必须对顺序号、名称、步骤、预期、前置条件、类型、级别、执行方式、说明、标签、备注等确定性映射字段逐行有序一致，自动生成字段除外。禁止重排、静默改写或只用 Counter 掩盖顺序错误。
 - Excel 数据必须按 Sheet 分文件输出，功能用例分片只负责 `功能测试用例` Sheet，不得把其他 Sheet 数据和功能用例正文混在同一个大文件中。
+- 所有 Case Worker 完成后，由确定性合并器按计划 owner 顺序统一生成 001..N 分片与 manifest；worker 不得直接写正式分片或 manifest。独立 Reviewer 必须在 cases 门禁之后检查全量追踪、步骤/预期唯一性、功能点连续性和未关闭返工，Review 未通过不得交付。
 
 ## 真实测试数据与配置生效
 

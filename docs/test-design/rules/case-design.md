@@ -19,6 +19,7 @@
 
 - 功能测试用例必须按模块、页面、业务流程和小功能块组织。
 - 同一小功能块的用例必须连续放在附近，例如新增、查看、编辑、删除、搜索、筛选、分页、导入、导出、审批等分别成组。
+- 同一精确 `功能点` 的全部用例必须形成唯一连续区块，禁止出现 A→B→A；区块顺序必须服从 `element-case-plan.csv` 首次出现和 owner 顺序，区块内用例 ID 顺序必须与计划行一致。不能只按用例自身可能写错的 `功能点` 字段判断集中性。
 - 小功能块内部按 `DFX维度`、`DFX场景`、业务流程和页面元素连续编排；`场景类型`、`正向/反向` 不再作为测试策略主字段。
 - 同一小功能块内部优先按“新增/查看/编辑/删除/搜索/筛选/分页/弹窗/权限/异常/边界/数据一致性”的自然操作顺序连续编排，再标注对应 DFX 维度和场景。
 - `用例标题` 和导入文件中的 `测试用例名称` 必须正式、简洁、可检索，避免口语化。
@@ -32,7 +33,8 @@
 - 弹窗、抽屉、下拉框、编辑态、删除确认框、添加变量、动态行、输入校验或联动选择等临时交互必须写完整闭环；步骤不能停在“点击按钮”“展开下拉”“尝试选择”“输入后观察”，必须继续写明确认、取消或关闭、返回列表、恢复输入或保持数据不变等可执行收尾。
 - 对已有数据进行查看、编辑预览、删除确认预览时，必须在步骤或预期中明确不保存、不提交、不最终确认，并写清取消或关闭路径。
 - 预期结果必须可观察、可验证，并体现业务规则来源，例如状态变化、数据展示/落库、权限拦截、接口结果、通知、日志、审计或验收标准。
-- 不同用例不得复用相同的 `操作步骤 + 预期结果` 正文；共享导航步骤可以相同，但当前用例的具体操作对象、选项值、输入值、页码/每页条数、状态转换和可观察结果必须不同。
+- 不同用例的完整 `操作步骤` 与完整 `预期结果` 必须分别唯一；比较前会折叠 `AI_TEST`/`CODEX_TEST` 实例编号，不能通过只替换测试数据序号制造伪差异。共享导航步骤可以相同，但当前用例的具体操作对象、选项值、输入值、页码/每页条数、状态转换和可观察结果必须不同。不得通过只换标题、用例 ID、DFX 标签或测试数据字段制造重复用例。
+- 预期结果必须是唯一、确定、可判定的 oracle；禁止“成功或提示失败”“为空或显示原值”“可能”“视情况”“功能正常”“数据展示正确”“页面不报错”等互斥或泛化结论。边界用例必须写出具体边界值/动作，权限用例必须写出角色或权限条件及可观察差异。
 - 标题中的每页条数、目标页码、选项值、状态值等参数必须在 `操作步骤` 和 `预期结果` 中原样落地，不得只改标题而复用“操作分页控件”“选择目标值”“功能正常”等通用正文。
 
 ## DFX 测试策略落地
@@ -79,17 +81,18 @@ DFX 落地必须遵循“先元素、后 DFX”的顺序：
 ## 功能用例分片生成
 
 - 生成新一轮功能用例分片前，必须先运行 `powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <batch-run-dir>` 清理旧的 `function_cases_part_*.json` 和 `function_cases_manifest.json`，避免历史分片混入本轮 Excel。
-- 功能测试用例较多时必须按 `function_cases_part_001.json`、`function_cases_part_002.json` 等分片生成，每个分片最多 10 条功能用例。
+- 功能测试用例较多时必须按 `function_cases_part_001.json`、`function_cases_part_002.json` 等功能点感知分片生成，每个分片必须有 1–10 条功能用例；分片必须从 001 开始连续无断号，同一功能点总数不超过 10 条时不得跨分片，超过 10 条时才可在该连续功能点区块内顺序切片。
 - 分片只能写入当前批次 `artifacts/data/`，禁止写到 `artifacts/` 根目录或 `artifacts/scripts/`。
-- 分片必须同步生成 `function_cases_manifest.json`，manifest 的 `parts` 只列出本轮有效的三位编号分片；Excel 写入脚本只能读取 manifest 中列出的分片，禁止直接 glob 目录下所有 `function_cases_part_*.json`。
-- `prepare-function-case-generation` 会生成 `generation-session.json`；manifest 必须原样写入相同的 `generation_session_id` 与 `source_fingerprint`。page-discovery、selection-option-observations、element-case-plan、test-data-lifecycle 或 risk-confirmation 任一语义变化后，旧会话和旧分片立即失效，必须重新 prepare。
+- 分片必须同步生成 `function_cases_manifest.json`，manifest 的 `parts` 只列出本轮有效、非空且连续的三位编号分片；Excel 写入脚本只能读取 manifest 中列出的分片，禁止直接 glob 目录下所有 `function_cases_part_*.json`。
+- `prepare-function-case-generation` 会生成 `generation-session.json`；manifest 必须原样写入相同的 `generation_session_id` 与 `source_fingerprint`。page-element-inventory、page-discovery、selection-option-observations、element-case-plan、test-data-lifecycle 或 risk-confirmation 任一语义变化后，旧会话和旧分片立即失效，必须重新 prepare。
 - 每条 JSON 用例只能使用标准字段：`用例 ID`、`Story ID/需求 ID`、`模块`、`功能点`、`用例标题`、`优先级`、`测试类型`、`DFX维度`、`DFX场景`、`前置条件`、`测试数据`、`操作步骤`、`预期结果`、`实际结果`、`执行状态`、`是否适合自动化`、`关联风险`、`备注`；禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected` 等非标准字段。
 - JSON 生成阶段必须直接写完整步骤和预期：`前置条件` 至少 2 条，`操作步骤` 至少 4 条且从系统入口和菜单路径开始，`预期结果` 至少 3 条；编号必须连续，不得出现跳号、`点搜索`、`操作元素`、`Extended scenario passes`、`behaves as expected` 等占位或笼统描述。
 - 分片必须按功能点、页面元素、业务路径或相邻交互连续编排，不得随机切分。
 - 每个分片生成后立即校验用例标题、步骤编号、预期编号、DFX维度/场景、关联 `element-case-plan.csv`、真实测试数据证据和配置生效验证；失败时只重写当前分片，不得重写全部功能用例。
 - `build_function_cases.py` 只能读取 `function_cases_part_*.json` 汇总写入 `功能测试用例` Sheet，不得内联大量用例正文。
-- 所有分片完成后再做总校验：用例 ID 唯一且由唯一计划行持有、计划用例ID全部落地、生成用例 `功能点` 与其计划行一致、跨分片无重复步骤与预期、功能 Sheet 不混入性能专项、导入文件只导入功能执行用例。
-- JSON 分片到正式 `功能测试用例` Sheet 必须按用例 ID 校验全部标准字段逐字段一致；正式 Sheet 到导入工作簿必须对标题、步骤、预期、前置条件做包含重复次数的精确一致性校验，禁止组装或导入阶段静默改写。
+- 所有分片完成后再做总校验：用例 ID 唯一且由唯一计划行持有、计划用例ID全部落地、生成用例 `功能点` 与其计划行一致、`page-discovery.csv` 关联 ID 等于精确匹配计划行 ID、步骤和预期分别无重复、功能点单区块且 owner 顺序单调、功能 Sheet 不混入性能专项、导入文件只导入功能执行用例。
+- `batch-status.csv` 的异常、边界、权限/状态、数据一致性用例数必须按明确 taxonomy 从 manifest 用例的 `DFX场景` 优先派生，并只用功能点、标题、测试数据中的精确语义补充；四类允许重叠，禁止用“状态/刷新/回显”等宽泛词放大计数，也禁止人工估算。
+- JSON 分片到正式 `功能测试用例` Sheet 必须按 manifest 顺序逐行校验全部标准字段一致；正式 Sheet 到导入工作簿必须对顺序号、名称、步骤、预期、前置条件、类型、级别、执行方式、说明、标签、备注等确定性映射字段逐行有序一致，自动生成字段除外。禁止重排、静默改写或只用 Counter 掩盖顺序错误。
 - Excel 数据必须按 Sheet 分文件输出，功能用例分片只负责 `功能测试用例` Sheet，不得把其他 Sheet 数据和功能用例正文混在同一个大文件中。
 
 ## 真实测试数据与配置生效

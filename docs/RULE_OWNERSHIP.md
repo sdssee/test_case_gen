@@ -17,7 +17,7 @@
 | DFX 测试策略矩阵 | `docs/test-design/rules/dfx-test-strategy.md`、`docs/test-design/rules/case-design.md` | Rule、Skill、`AGENTS.md`、`CODEBUDDY.md`、`README.md`、`docs/test-design/README.md` | 入口文件中的完整 12 维度矩阵正文 |
 | 执行流程与自检步骤 | `.codebuddy/skills/test-design/SKILL.md`、`docs/test-design/rules/README.md` | `AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | `README.md` |
 | 页面实探与数据安全 | `docs/test-design/rules/page-discovery.md`、`docs/test-design/rules/data-safety.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md` | `README.md` |
-| 元素用例计划与测试数据生命周期 | `docs/test-design/rules/page-discovery.md`、`docs/test-design/rules/case-design.md`、`docs/test-assets/batch-runs/templates/element-case-plan-template.csv`、`docs/test-assets/batch-runs/templates/test-data-lifecycle-template.csv` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md`、`README.md` | `README.md` 中的完整字段说明 |
+| 元素盘点、逐选项、元素用例计划与测试数据生命周期 | `docs/test-design/rules/page-discovery.md`、`docs/test-design/rules/case-design.md`、`page-element-inventory-template.csv`、`selection-option-observations-template.csv`、`element-case-plan-template.csv`、`test-data-lifecycle-template.csv` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md`、`README.md` | `README.md` 中的完整字段说明 |
 | Excel Sheet、字段、枚举、导入模板 | `docs/test-design/excel-template-spec.md`、`docs/test-design/rules/excel-deliverable.md`、`docs/test-design/rules/import-template.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md` | `README.md` |
 | 产品版图、资产归档、跨模块依赖 | `docs/test-design/archive-and-index-guidelines.md`、`docs/test-design/rules/product-map-sync.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | `README.md` |
 | 批次运行状态与质量门禁 | `docs/test-design/rules/batch-run.md`、`docs/test-assets/batch-runs/README.md`、`docs/test-assets/batch-runs/templates/` | Rule、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md`、`docs/test-design/archive-and-index-guidelines.md` | `README.md`、`docs/test-design/README.md` |
@@ -48,7 +48,7 @@
 | 修改执行流程 | Skill、校验脚本 | AGENTS/CODEBUDDY 摘要 |
 | 修改 Excel 字段或枚举 | Excel 模板、`excel-template-spec.md`、校验脚本 | Skill/Rule 中的摘要 |
 | 修改归档、批次运行状态或产品版图规则 | `archive-and-index-guidelines.md`、`docs/test-assets/batch-runs/README.md`、批次模板、校验脚本 | Skill/Rule/AGENTS/CODEBUDDY 摘要 |
-| 修改元素计划、测试数据生命周期或 `function_cases_part_*.json` 功能用例分片规则 | `page-discovery.md`、`case-design.md`、批次模板、校验脚本 | Skill/Rule/AGENTS/CODEBUDDY/README 摘要 |
+| 修改元素用例计划、测试数据生命周期或 `function_cases_part_*.json` 功能用例分片规则 | `page-discovery.md`、`case-design.md`、批次模板、校验脚本 | Skill/Rule/AGENTS/CODEBUDDY/README 摘要 |
 | 修改交付件质量校验 | `scripts/validate-test-design-deliverable.py`、`scripts/validate-test-design-deliverable.ps1`、`scripts/validate-generated-python-scripts.py`、`scripts/validate-generated-python-scripts.ps1`、`scripts/test_design_excel_tools.py`、`excel-template-spec.md`、校验脚本 | README/Skill/AGENTS/CODEBUDDY 摘要 |
 | 修改升级机制 | `docs/UPGRADE.md`、`UPGRADE_MANIFEST.md`、升级脚本、校验脚本 | README/README_IMPORT |
 | 修改架构分层 | `docs/ARCHITECTURE.md`、`docs/RULE_OWNERSHIP.md`、校验脚本 | README |

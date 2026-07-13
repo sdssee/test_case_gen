@@ -44,6 +44,26 @@ REQUIRED_VERIFICATION = {
     "状态变更": {"回显", "持久化", "实际生效"},
     "删除": {"持久化", "确认取消"},
 }
+INCOMPLETE_DISCOVERY_PATTERNS = [
+    re.compile(r"未(?:实际)?(?:执行|点击|操作|尝试)"),
+    re.compile(r"(?:只|仅)(?:展开|查看)(?:了|到)?(?:选项|控件|页面)?[，,；;：:\s]*(?:未|没有)(?:逐项)?(?:选择|点击|操作|验证)"),
+    re.compile(r"(?:数据不足|缺少测试数据).{0,16}(?:无法|未能|不能).{0,12}(?:验证|执行|翻页|跳转)"),
+    re.compile(r"(?:仅|只有)\s*1\s*条.{0,24}(?:无法|未能|不能).{0,12}验证"),
+    re.compile(r"待验证|待补充|尚未验证|未观察到|无法充分验证"),
+    re.compile(r"权限未知|待确认权限"),
+    re.compile(r"\b(?:tbd|todo|not executed)\b", re.IGNORECASE),
+]
+COMPLETED_DISCOVERY_STATUSES = {"已覆盖"}
+IMAGE_EVIDENCE_RE = re.compile(r"\.(?:png|jpe?g|gif|bmp|webp)(?:$|[?#])", re.IGNORECASE)
+
+
+def _is_static_observation_row(row: dict[str, str]) -> bool:
+    element_type = row.get("元素类型", "")
+    interaction = row.get("交互方式", "")
+    combined = f"{element_type}\n{interaction}"
+    interactive_markers = {"按钮", "链接", "输入", "选择", "下拉", "单选", "复选", "开关", "分页", "上传", "编辑", "点击"}
+    static_markers = {"表格列", "文本", "标签", "只读字段", "展示字段", "提示", "图标说明"}
+    return _contains(element_type, static_markers) and not _contains(combined, interactive_markers)
 
 
 def validate_single_batch_scope(
@@ -89,9 +109,10 @@ def _normalized(value: str) -> str:
     return "".join((value or "").split()).lower()
 
 
-def _selection_key(row: dict[str, str]) -> tuple[str, str, str, str]:
+def _selection_key(row: dict[str, str]) -> tuple[str, str, str, str, str]:
     return (
         row.get("最小标题路径", "").strip(),
+        row.get("交互实例ID", "").strip(),
         row.get("页面/入口", "").strip(),
         row.get("元素名称/文案", "").strip(),
         row.get("元素类型", "").strip(),
@@ -123,26 +144,29 @@ def validate_selection_option_rows(
     discovery_rows: list[dict[str, str]],
     option_rows: list[dict[str, str]],
     evidence_exists: Callable[[str], bool],
-) -> dict[tuple[str, str, str, str], int]:
-    selection_discovery: dict[tuple[str, str, str, str], dict[str, str]] = {}
+    evidence_fingerprint: Callable[[str], str | None] | None = None,
+) -> dict[tuple[str, str, str, str, str], int]:
+    selection_discovery: dict[tuple[str, str, str, str, str], dict[str, str]] = {}
     for discovery in discovery_rows:
         if not is_selection_control(discovery):
             continue
         key = _selection_key(discovery)
         if key in selection_discovery:
             raise ValueError(
-                f"page-discovery.csv has duplicate selection-control identity {key[1]}/{key[2]}/{key[3]}; "
+                f"page-discovery.csv has duplicate selection-control identity {key[2]}/{key[3]}/{key[4]} ({key[1]}); "
                 "use distinct element identities for different roles or data states"
             )
         selection_discovery[key] = discovery
-    grouped: dict[tuple[str, str, str, str], list[tuple[int, dict[str, str]]]] = {}
+    grouped: dict[tuple[str, str, str, str, str], list[tuple[int, dict[str, str]]]] = {}
+    global_evidence_locations: dict[tuple[str, str], str] = {}
+    global_image_digests: dict[str, str] = {}
     for index, row in enumerate(option_rows, start=2):
         key = _selection_key(row)
-        label = f"selection-option-observations.csv row {index} ({key[1]}/{key[2]}/{row.get('选项值', '')})"
+        label = f"selection-option-observations.csv row {index} ({key[2]}/{key[3]}/{row.get('选项值', '')})"
         required = [
-            "最小标题路径", "页面/入口", "元素名称/文案", "元素类型", "选项值", "选项序号",
+            "最小标题路径", "交互实例ID", "页面/入口", "元素名称/文案", "元素类型", "选项值", "选项序号",
             "可用选项总数", "选项集合类型", "是否实际选择", "选择前状态", "选择后页面变化",
-            "联动/依赖变化", "结果分支/后续状态", "恢复/清空结果", "覆盖策略", "证据路径", "证据定位",
+            "联动/依赖变化", "结果分支/后续状态", "预期结果锚点", "恢复/清空结果", "覆盖策略", "证据路径", "证据定位",
         ]
         missing = [field for field in required if not row.get(field, "").strip()]
         if missing:
@@ -152,6 +176,22 @@ def validate_selection_option_rows(
         set_type = row.get("选项集合类型", "").strip()
         if set_type not in SELECTION_SET_TYPES:
             raise ValueError(f"{label} 选项集合类型 must be one of {sorted(SELECTION_SET_TYPES)}")
+        anchor = _normalized(row.get("预期结果锚点", ""))
+        option_value = _normalized(row.get("选项值", ""))
+        observed_effect = _normalized("\n".join([
+            row.get("选择后页面变化", ""), row.get("联动/依赖变化", ""), row.get("结果分支/后续状态", ""),
+        ]))
+        generic_anchors = {"成功", "正常", "正确", "功能正常", "页面正常", "数据正确", "无异常", "无变化"}
+        if (
+            len(anchor) < 4
+            or anchor == option_value
+            or anchor in generic_anchors
+            or anchor not in observed_effect
+        ):
+            raise ValueError(
+                f"{label} 预期结果锚点 must be a non-trivial phrase copied from the actually observed page "
+                "change/linkage/result; it cannot equal only the option value or a generic success word"
+            )
         try:
             sequence = int(row.get("选项序号", ""))
         except ValueError as exc:
@@ -176,6 +216,24 @@ def validate_selection_option_rows(
         evidence = row.get("证据路径", "").strip()
         if not evidence_exists(evidence):
             raise ValueError(f"{label} must reference existing per-option evidence")
+        locator = row.get("证据定位", "").strip()
+        evidence_key = (_normalized(evidence), _normalized(locator))
+        previous_owner = global_evidence_locations.get(evidence_key)
+        if previous_owner:
+            raise ValueError(
+                f"{label} reuses the same evidence path+locator as {previous_owner}; evidence uniqueness is global"
+            )
+        global_evidence_locations[evidence_key] = label
+        if evidence_fingerprint:
+            digest = evidence_fingerprint(evidence)
+            if digest and (digest.startswith("image:") or IMAGE_EVIDENCE_RE.search(evidence)):
+                previous_digest_owner = global_image_digests.get(digest)
+                if previous_digest_owner:
+                    raise ValueError(
+                        f"{label} reuses image content already used by {previous_digest_owner}; renaming or copying "
+                        "the same screenshot does not create independent option evidence"
+                    )
+                global_image_digests[digest] = label
         coverage = row.get("覆盖策略", "").strip()
         if set_type == "有限":
             try:
@@ -190,7 +248,7 @@ def validate_selection_option_rows(
             if row.get("可用选项总数", "").strip() != "动态":
                 raise ValueError(f"{label} dynamic selection must use 可用选项总数=动态")
             discovery_context = "\n".join(value or "" for value in selection_discovery[key].values())
-            if _contains(f"{key[2]}\n{discovery_context}", {"每页条数", "条/页", "页容量"}) or not _contains(
+            if _contains(f"{key[3]}\n{discovery_context}", {"每页条数", "条/页", "页容量"}) or not _contains(
                 discovery_context,
                 {"远程", "滚动加载", "懒加载", "分页加载", "异步加载", "服务端搜索", "按需加载"},
             ):
@@ -207,13 +265,13 @@ def validate_selection_option_rows(
 
     missing_groups = [key for key in selection_discovery if key not in grouped]
     if missing_groups:
-        preview = ", ".join(f"{key[1]}/{key[2]}" for key in missing_groups[:10])
+        preview = ", ".join(f"{key[2]}/{key[3]}({key[1]})" for key in missing_groups[:10])
         raise ValueError(
             "selection-option-observations.csv must record every selection control and every finite option; missing: "
             + preview
         )
 
-    counts: dict[tuple[str, str, str, str], int] = {}
+    counts: dict[tuple[str, str, str, str, str], int] = {}
     for key, entries in grouped.items():
         values = [row.get("选项值", "").strip() for _, row in entries]
         normalized_values = [_normalized(value) for value in values]
@@ -223,47 +281,47 @@ def validate_selection_option_rows(
             for _, row in entries
         ]
         if len(normalized_values) != len(set(normalized_values)):
-            raise ValueError(f"selection-option-observations.csv has duplicate option values for {key[1]}/{key[2]}")
+            raise ValueError(f"selection-option-observations.csv has duplicate option values for {key[2]}/{key[3]}")
         if len(sequences) != len(set(sequences)):
-            raise ValueError(f"selection-option-observations.csv has duplicate option sequences for {key[1]}/{key[2]}")
+            raise ValueError(f"selection-option-observations.csv has duplicate option sequences for {key[2]}/{key[3]}")
         if len(evidence_locations) != len(set(evidence_locations)):
             raise ValueError(
-                f"selection-option-observations.csv must use a unique (证据路径, 证据定位) pair for each option of {key[1]}/{key[2]}"
+                f"selection-option-observations.csv must use a unique (证据路径, 证据定位) pair for each option of {key[2]}/{key[3]}"
             )
         set_types = {row.get("选项集合类型", "").strip() for _, row in entries}
         if len(set_types) != 1:
-            raise ValueError(f"selection-option-observations.csv mixes option set types for {key[1]}/{key[2]}")
+            raise ValueError(f"selection-option-observations.csv mixes option set types for {key[2]}/{key[3]}")
         summary_tokens = _split_option_tokens(selection_discovery[key].get("选项取值/输入值", ""))
         observed_tokens = set(normalized_values)
         absent = [value for value in values if _normalized(value) not in summary_tokens]
         if absent:
             raise ValueError(
-                f"page-discovery.csv selection summary for {key[1]}/{key[2]} does not list observed option value(s): {absent}"
+                f"page-discovery.csv selection summary for {key[2]}/{key[3]} does not list observed option value(s): {absent}"
             )
         if set_types == {"有限"}:
             totals = {int(row.get("可用选项总数", "")) for _, row in entries}
             if len(totals) != 1:
-                raise ValueError(f"selection-option-observations.csv finite option totals disagree for {key[1]}/{key[2]}")
+                raise ValueError(f"selection-option-observations.csv finite option totals disagree for {key[2]}/{key[3]}")
             total = next(iter(totals))
             if len(entries) != total:
                 raise ValueError(
-                    f"selection-option-observations.csv finite selection {key[1]}/{key[2]} records {len(entries)} option(s), expected {total}"
+                    f"selection-option-observations.csv finite selection {key[2]}/{key[3]} records {len(entries)} option(s), expected {total}"
                 )
             if sorted(sequences) != list(range(1, total + 1)):
                 raise ValueError(
-                    f"selection-option-observations.csv finite selection {key[1]}/{key[2]} must use contiguous sequences 1..{total}"
+                    f"selection-option-observations.csv finite selection {key[2]}/{key[3]} must use contiguous sequences 1..{total}"
                 )
             unobserved = sorted(summary_tokens - observed_tokens)
             if unobserved or len(summary_tokens) != total:
                 raise ValueError(
-                    f"selection-option-observations.csv finite selection {key[1]}/{key[2]} must exactly cover every "
+                    f"selection-option-observations.csv finite selection {key[2]}/{key[3]} must exactly cover every "
                     f"option listed by page-discovery.csv; total={total}, summary_count={len(summary_tokens)}, "
                     f"unobserved={unobserved}"
                 )
         else:
             if sorted(sequences) != list(range(1, len(entries) + 1)):
                 raise ValueError(
-                    f"selection-option-observations.csv dynamic selection {key[1]}/{key[2]} must use contiguous observed sequences"
+                    f"selection-option-observations.csv dynamic selection {key[2]}/{key[3]} must use contiguous observed sequences"
                 )
         counts[key] = len(entries)
     return counts
@@ -275,17 +333,17 @@ def validate_selection_plan_links(
     split_ids: Callable[[str], list[str]],
 ) -> None:
     """Bind every observed option to a distinct case owned by the exact control plan."""
-    plans_by_key: dict[tuple[str, str, str, str], list[dict[str, str]]] = {}
+    plans_by_key: dict[tuple[str, str, str, str, str], list[dict[str, str]]] = {}
     for plan in plan_rows:
         plans_by_key.setdefault(_selection_key(plan), []).append(plan)
 
-    options_by_key: dict[tuple[str, str, str, str], list[dict[str, str]]] = {}
+    options_by_key: dict[tuple[str, str, str, str, str], list[dict[str, str]]] = {}
     for option in option_rows:
         options_by_key.setdefault(_selection_key(option), []).append(option)
 
     for key, options in options_by_key.items():
         matching_plans = plans_by_key.get(key, [])
-        label = f"{key[1]}/{key[2]}"
+        label = f"{key[2]}/{key[3]}({key[1]})"
         if not matching_plans:
             raise ValueError(
                 f"selection-option-observations.csv {label} has no exactly matching element-case-plan.csv row"
@@ -337,7 +395,7 @@ def validate_selection_case_grounding(
         for case in case_rows
         if str(case.get("用例 ID", "")).strip()
     }
-    values_by_key: dict[tuple[str, str, str, str], set[str]] = {}
+    values_by_key: dict[tuple[str, str, str, str, str], set[str]] = {}
     for option in option_rows:
         values_by_key.setdefault(_selection_key(option), set()).add(_normalized(option.get("选项值", "")))
 
@@ -353,6 +411,7 @@ def validate_selection_case_grounding(
         element = option.get("元素名称/文案", "").strip()
         option_value = option.get("选项值", "").strip()
         normalized_option = _normalized(option_value)
+        expected_anchor = _normalized(option.get("预期结果锚点", ""))
         sibling_values = values_by_key[_selection_key(option)]
         for case_id in split_ids(option.get("关联用例ID", "")):
             case = cases_by_id.get(case_id)
@@ -369,17 +428,174 @@ def validate_selection_case_grounding(
                     f"generated case {case_id} for {page}/{element}/{option_value} must state the exact option value "
                     "in both 操作步骤 and 预期结果"
                 )
+            if not expected_anchor or expected_anchor not in expected:
+                raise ValueError(
+                    f"selection-option-observations.csv {page}/{element}/{option_value} 预期结果锚点 must "
+                    f"appear in the exact linked case {case_id} 预期结果 so observed page effects are not replaced "
+                    "by generic or unrelated outcomes"
+                )
 
 
-def validate_discovery_rows(rows: list[dict[str, str]], evidence_exists: Callable[[str], bool]) -> None:
+def validate_page_element_inventory(
+    inventory_rows: list[dict[str, str]],
+    discovery_rows: list[dict[str, str]],
+    evidence_exists: Callable[[str], bool],
+) -> None:
+    """Use an independently captured page inventory to detect discovery omissions."""
+    if not inventory_rows:
+        raise ValueError(
+            "page-element-inventory.csv must contain independently captured DOM/accessibility/trace elements before discovery can pass"
+        )
+
+    def identity(row: dict[str, str]) -> tuple[str, ...]:
+        return tuple(
+            _normalized(row.get(field, ""))
+            for field in [
+                "最小标题路径", "页面/入口", "角色/权限", "数据状态", "交互实例ID",
+                "元素名称/文案", "元素类型", "交互方式",
+            ]
+        )
+
+    inventory_identities: dict[tuple[str, ...], str] = {}
+    fingerprints: dict[str, str] = {}
+    for index, row in enumerate(inventory_rows, start=2):
+        label = f"page-element-inventory.csv row {index} ({row.get('页面/入口', '')}/{row.get('元素名称/文案', '')})"
+        required = [
+            "最小标题路径", "页面/入口", "角色/权限", "数据状态", "交互实例ID", "采集快照ID", "元素指纹", "元素名称/文案", "元素类型",
+            "交互方式", "可交互状态", "DOM/可访问性定位", "发现来源", "证据路径", "证据定位",
+        ]
+        missing = [field for field in required if not row.get(field, "").strip()]
+        if missing:
+            raise ValueError(f"{label} is missing inventory fields: {missing}")
+        source = row.get("发现来源", "")
+        if not _contains(source.lower(), {"dom", "可访问性", "accessibility", "trace", "控件树", "浏览器", "computer use"}):
+            raise ValueError(
+                f"{label} 发现来源 must be an independently captured DOM/accessibility/trace/control-tree source"
+            )
+        if not evidence_exists(row.get("证据路径", "")):
+            raise ValueError(f"{label} must reference an existing non-empty inventory evidence file")
+        fingerprint = _normalized(row.get("元素指纹", ""))
+        if fingerprint in fingerprints:
+            raise ValueError(f"{label} duplicates 元素指纹 already used by {fingerprints[fingerprint]}")
+        fingerprints[fingerprint] = label
+        key = identity(row)
+        if key in inventory_identities:
+            raise ValueError(f"{label} duplicates inventory identity already used by {inventory_identities[key]}")
+        inventory_identities[key] = label
+
+    discovery_identities = {identity(row) for row in discovery_rows}
+    inventory_identity_set = set(inventory_identities)
+    missing_discovery = sorted(inventory_identity_set - discovery_identities)
+    ungrounded_discovery = sorted(discovery_identities - inventory_identity_set)
+    if missing_discovery:
+        raise ValueError(
+            "page-discovery.csv omits element(s) captured by page-element-inventory.csv: "
+            f"{missing_discovery[:10]}"
+        )
+    if ungrounded_discovery:
+        raise ValueError(
+            "page-discovery.csv contains element(s) absent from the independent page inventory: "
+            f"{ungrounded_discovery[:10]}"
+        )
+
+
+def validate_discovery_rows(
+    rows: list[dict[str, str]],
+    evidence_exists: Callable[[str], bool],
+    evidence_fingerprint: Callable[[str], str | None] | None = None,
+) -> None:
     pagination_pages: set[str] = set()
+    evidence_locations: dict[tuple[str, str], str] = {}
+    image_evidence_owners: dict[str, str] = {}
+    interaction_owners: dict[str, str] = {}
     for index, row in enumerate(rows, start=2):
         combined = "\n".join([row.get("元素名称/文案", ""), row.get("元素类型", ""), row.get("交互方式", "")])
         label = f"page-discovery.csv row {index} ({row.get('页面/入口', '')}/{row.get('元素名称/文案', '')})"
-        required = ["页面/入口", "元素名称/文案", "元素类型", "交互方式", "完整点击路径", "预期/观察行为", "适用DFX维度", "适用DFX场景"]
+        required = [
+            "页面/入口", "角色/权限", "数据状态", "交互实例ID", "元素名称/文案", "元素类型",
+            "交互方式", "完整点击路径", "预期/观察行为", "操作步骤锚点", "预期结果锚点",
+            "适用DFX维度", "适用DFX场景",
+        ]
         missing = [field for field in required if not row.get(field, "").strip()]
         if missing:
             raise ValueError(f"{label} is missing full-discovery fields: {missing}")
+        step_anchor = _normalized(row.get("操作步骤锚点", ""))
+        result_anchor = _normalized(row.get("预期结果锚点", ""))
+        step_source = _normalized("\n".join([
+            row.get("元素名称/文案", ""), row.get("交互方式", ""), row.get("完整点击路径", ""),
+        ]))
+        result_source = _normalized("\n".join([
+            row.get("预期/观察行为", ""), row.get("联动/依赖变化", ""), row.get("结果分支/后续状态", ""),
+        ]))
+        generic_anchors = {"点击", "操作", "正常", "成功", "页面", "功能正常", "页面正常", "操作成功"}
+        if len(step_anchor) < 2 or step_anchor in generic_anchors or step_anchor not in step_source:
+            raise ValueError(f"{label} 操作步骤锚点 must be a meaningful phrase copied from the executed element/action/path")
+        if len(result_anchor) < 2 or result_anchor in generic_anchors or result_anchor not in result_source:
+            raise ValueError(f"{label} 预期结果锚点 must be a meaningful phrase copied from the actually observed result")
+        interaction_id = _normalized(row.get("交互实例ID", ""))
+        previous_interaction_owner = interaction_owners.get(interaction_id)
+        if previous_interaction_owner:
+            raise ValueError(
+                f"{label} reuses 交互实例ID already owned by {previous_interaction_owner}; "
+                "every role/data-state/action branch must have a unique stable interaction instance ID"
+            )
+        interaction_owners[interaction_id] = label
+        evidence = row.get("证据路径", "").strip()
+        evidence_locator = row.get("证据定位", "").strip()
+        if not evidence or not evidence_exists(evidence):
+            raise ValueError(f"{label} must reference existing evidence for the actually executed interaction")
+        if not evidence_locator:
+            raise ValueError(
+                f"{label} must record 证据定位 such as screenshot state/region, DOM or trace step, or video timestamp"
+            )
+        evidence_key = (_normalized(evidence), _normalized(evidence_locator))
+        previous_evidence_owner = evidence_locations.get(evidence_key)
+        if previous_evidence_owner:
+            raise ValueError(
+                f"{label} reuses the same evidence path+locator as {previous_evidence_owner}; "
+                "every interaction must have independently reviewable execution evidence"
+            )
+        evidence_locations[evidence_key] = label
+        evidence_digest = evidence_fingerprint(evidence) if evidence_fingerprint else None
+        is_image = bool(
+            IMAGE_EVIDENCE_RE.search(evidence)
+            or (evidence_digest and evidence_digest.startswith("image:"))
+        )
+        if is_image and not _is_static_observation_row(row):
+            image_key = evidence_digest or _normalized(evidence)
+            previous_image_owner = image_evidence_owners.get(image_key)
+            if previous_image_owner:
+                raise ValueError(
+                    f"{label} reuses static image evidence from {previous_image_owner}; a screenshot can prove only "
+                    "the interaction state it captured, so capture a distinct post-action image or use trace/video "
+                    "with unique locators"
+                )
+            image_evidence_owners[image_key] = label
+        execution_text = "\n".join(
+            [
+                row.get("完整点击路径", ""),
+                row.get("预期/观察行为", ""),
+                row.get("联动/依赖变化", ""),
+                row.get("结果分支/后续状态", ""),
+                row.get("未覆盖/待确认原因", ""),
+                row.get("备注", ""),
+            ]
+        ).lower()
+        incomplete = sorted(
+            {pattern.pattern for pattern in INCOMPLETE_DISCOVERY_PATTERNS if pattern.search(execution_text)}
+        )
+        if incomplete:
+            raise ValueError(
+                f"{label} still records an unexecuted/incomplete interaction {incomplete}; keep the batch in "
+                "DISCOVERY_REQUIRED instead of claiming coverage or generating cases"
+            )
+        coverage_status = row.get("覆盖状态", "").strip()
+        if coverage_status not in COMPLETED_DISCOVERY_STATUSES:
+            raise ValueError(
+                f"{label} must be actually executed and mark 覆盖状态=已覆盖 before the discovery gate can pass"
+            )
+        if row.get("未覆盖/待确认原因", "").strip():
+            raise ValueError(f"{label} is marked 已覆盖 and must leave 未覆盖/待确认原因 empty")
         if is_selection_control(row):
             if not row.get("选项取值/输入值", "").strip() or not row.get("联动/依赖变化", "").strip():
                 raise ValueError(f"{label} selection control must record a real selected value and dependency change")
@@ -398,9 +614,6 @@ def validate_discovery_rows(rows: list[dict[str, str]], evidence_exists: Callabl
                 raise ValueError(f"{label} mutation must use tagged test data")
             if not _contains(observed, {"成功", "回显", "生效", "持久化"}):
                 raise ValueError(f"{label} mutation must record success, persisted echo, or effective behavior")
-            evidence = row.get("证据路径", "").strip()
-            if not evidence or not evidence_exists(evidence):
-                raise ValueError(f"{label} mutation must reference existing evidence")
     for page in pagination_pages:
         page_text = "\n".join(
             "\n".join([row.get("元素名称/文案", ""), row.get("元素类型", ""), row.get("交互方式", "")])
@@ -425,7 +638,7 @@ def validate_operation_plan_rows(plan_rows: list[dict[str, str]]) -> bool:
         execution_state = row.get("执行状态", "").strip()
         label = f"element-case-plan.csv row {index} ({row.get('页面/入口', '')}/{row.get('元素名称/文案', '')})"
         missing_design = [
-            field for field in ["适用DFX维度", "适用DFX场景", "测试设计方向"]
+            field for field in ["交互实例ID", "适用DFX维度", "适用DFX场景", "测试设计方向"]
             if not row.get(field, "").strip()
         ]
         if missing_design:
@@ -518,9 +731,14 @@ def validate_mutation_discovery_evidence(
             continue
         page = plan.get("页面/入口", "").strip()
         element = plan.get("元素名称/文案", "").strip()
+        interaction_id = plan.get("交互实例ID", "").strip()
+        element_type = plan.get("元素类型", "").strip()
         matches = [
             row for row in discovery_rows
-            if row.get("页面/入口", "").strip() == page and row.get("元素名称/文案", "").strip() == element
+            if row.get("交互实例ID", "").strip() == interaction_id
+            and row.get("页面/入口", "").strip() == page
+            and row.get("元素名称/文案", "").strip() == element
+            and row.get("元素类型", "").strip() == element_type
         ]
         label = f"element-case-plan.csv row {index} ({page}/{element})"
         if not matches:
@@ -544,10 +762,17 @@ def validate_lifecycle_rows(
     plan_rows: list[dict[str, str]] | None = None,
 ) -> None:
     if not has_mutation:
+        if lifecycle_rows:
+            raise ValueError(
+                "test-data-lifecycle.csv contains rows but element-case-plan.csv has no persisted mutation owner; "
+                "do not wrap filters, selection, cancel, close, or view actions as lifecycle data"
+            )
         return
     if not lifecycle_rows:
         raise ValueError("test-data-lifecycle.csv must record AI_TEST/CODEX_TEST CRUD/config lifecycle before writing cases")
     for index, row in enumerate(lifecycle_rows, start=2):
+        if not row.get("交互实例ID", "").strip():
+            raise ValueError(f"test-data-lifecycle.csv row {index} must record the exact 交互实例ID mutation owner")
         combined = "\n".join(row.values())
         if not contains_any(combined, ["AI_TEST", "CODEX_TEST", "用户提供测试数据"]):
             raise ValueError(f"test-data-lifecycle.csv row {index} must bind to AI_TEST/CODEX_TEST or user-provided test data")
@@ -555,6 +780,29 @@ def validate_lifecycle_rows(
             if not row.get("配置生效验证点", "").strip():
                 raise ValueError(f"test-data-lifecycle.csv row {index} must record actual configuration effect verification")
     mutation_plan_rows = [row for row in (plan_rows or []) if row.get("操作类别", "").strip() in MUTATION_CATEGORIES]
+    mutation_owner_keys = {
+        (
+            row.get("交互实例ID", "").strip(),
+            row.get("页面/入口", "").strip(),
+            row.get("元素名称/文案", "").strip(),
+        )
+        for row in mutation_plan_rows
+    }
+    extra_lifecycle_rows = [
+        f"row {index} ({row.get('关联页面/入口', '')}/{row.get('修改项/元素', '')})"
+        for index, row in enumerate(lifecycle_rows, start=2)
+        if (
+            row.get("交互实例ID", "").strip(),
+            row.get("关联页面/入口", "").strip(),
+            row.get("修改项/元素", "").strip(),
+        )
+        not in mutation_owner_keys
+    ]
+    if extra_lifecycle_rows:
+        raise ValueError(
+            "test-data-lifecycle.csv contains rows with no persisted mutation owner in element-case-plan.csv: "
+            f"{extra_lifecycle_rows[:10]}; do not wrap filters, selection, cancel, close, or view actions as lifecycle data"
+        )
     fields_by_category = {
         "创建": ["创建结果", "查看结果", "实际生效结果"],
         "编辑": ["创建结果", "查看结果", "编辑前值", "编辑后值", "编辑结果", "保存后回显", "实际生效结果"],
@@ -562,12 +810,38 @@ def validate_lifecycle_rows(
         "状态变更": ["创建结果", "查看结果", "编辑前值", "编辑后值", "编辑结果", "保存后回显", "实际生效结果"],
         "删除": ["创建结果", "查看结果", "删除取消结果", "删除确认结果", "清理状态"],
     }
+    def ids(value: str) -> set[str]:
+        return {part.strip() for part in re.split(r"[,，;；\s]+", value or "") if part.strip()}
+
+    create_objects: dict[str, set[str]] = {}
+    for create_plan in [row for row in mutation_plan_rows if row.get("操作类别", "").strip() == "创建"]:
+        interaction_id = create_plan.get("交互实例ID", "").strip()
+        planned_create_ids = ids(create_plan.get("计划用例ID", ""))
+        matching_create_rows = [
+            row for row in lifecycle_rows
+            if row.get("交互实例ID", "").strip() == interaction_id
+            and row.get("关联页面/入口", "").strip() == create_plan.get("页面/入口", "").strip()
+            and row.get("修改项/元素", "").strip() == create_plan.get("元素名称/文案", "").strip()
+        ]
+        for lifecycle in matching_create_rows:
+            data_id = lifecycle.get("测试数据ID/名称", "").strip()
+            owner_ids = ids(lifecycle.get("创建步骤关联用例", ""))
+            if not data_id or not owner_ids or not owner_ids.issubset(planned_create_ids):
+                raise ValueError(
+                    f"test-data-lifecycle.csv create owner {interaction_id} must bind 测试数据ID/名称 and "
+                    "创建步骤关联用例 to the exact create plan IDs"
+                )
+            create_objects.setdefault(data_id, set()).update(owner_ids)
+
     for plan in mutation_plan_rows:
+        interaction_id = plan.get("交互实例ID", "").strip()
         page = plan.get("页面/入口", "").strip()
         element = plan.get("元素名称/文案", "").strip()
         matching = [
             row for row in lifecycle_rows
-            if row.get("关联页面/入口", "").strip() == page and row.get("修改项/元素", "").strip() == element
+            if row.get("交互实例ID", "").strip() == interaction_id
+            and row.get("关联页面/入口", "").strip() == page
+            and row.get("修改项/元素", "").strip() == element
         ]
         if not matching:
             raise ValueError(
@@ -581,6 +855,14 @@ def validate_lifecycle_rows(
                 raise ValueError(f"test-data-lifecycle.csv {page}/{element} is missing {missing} for 操作类别={category}")
             if category in {"编辑", "配置", "状态变更"} and row.get("编辑前值", "").strip() == row.get("编辑后值", "").strip():
                 raise ValueError(f"test-data-lifecycle.csv {page}/{element} 编辑前值 and 编辑后值 must differ")
+            if category != "创建" and plan.get("数据策略", "").strip() == "本次创建测试数据":
+                data_id = row.get("测试数据ID/名称", "").strip()
+                owner_ids = ids(row.get("创建步骤关联用例", ""))
+                if data_id not in create_objects or not owner_ids or owner_ids != create_objects[data_id]:
+                    raise ValueError(
+                        f"test-data-lifecycle.csv {page}/{element} uses 本次创建测试数据 but does not reference "
+                        "the same 测试数据ID/名称 and exact 创建步骤关联用例 as its create owner"
+                    )
 
 
 def risk_page_verification_state(

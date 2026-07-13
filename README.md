@@ -76,17 +76,17 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
 
 - 测试策略以 `DFX维度` 和 `DFX场景` 为主字段，`场景类型`、`正向/反向` 已废弃；详细矩阵见 `docs/test-design/rules/dfx-test-strategy.md`。
 - DFX 是扩展检查矩阵，不是用例生成主轴；必须先按页面元素和交互路径建立覆盖骨架，再用 DFX 扩展功能、异常、边界、权限、状态、数据一致性、性能、风险和自动化建议。
-- 页面实探后必须沉淀 `element-case-plan.csv` 和 `test-data-lifecycle.csv`；`应生成用例数` 按元素类型 × DFX 最低预算计算，真实新增/编辑/删除形成测试数据生命周期闭环。
+- 页面实探前先从 DOM/可访问性树/trace/控件树独立采集 `page-element-inventory.csv`，再按稳定 `交互实例ID` 执行并写入 `page-discovery.csv`；两者必须双向一致。实探后沉淀 `element-case-plan.csv` 和 `test-data-lifecycle.csv`；`应生成用例数` 按元素类型 × DFX 最低预算计算，真实新增/编辑/删除形成测试数据生命周期闭环。
 - 配置项保存类用例必须验证保存后回显和实际生效，不能只写点击保存或提示成功。
-- 生成功能测试用例分片前先运行 `prepare-function-case-generation` 清理旧分片和旧 manifest；功能用例按每 10 条一个 `artifacts/data/function_cases_part_001.json` 三位编号分片生成，并同步 `function_cases_manifest.json`。
+- 生成功能测试用例分片前先运行 `prepare-function-case-generation` 清理旧分片和旧 manifest；功能用例按功能点感知、每片 1–10 条生成从 `artifacts/data/function_cases_part_001.json` 开始连续无断号的三位编号分片，同功能点可容纳时不得跨片，并同步 `function_cases_manifest.json`。
 - 功能用例 JSON 只允许标准字段，禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected`、英文模板或泛化占位文本；Excel 数据按 Sheet 分文件输出，避免单个脚本或 JSON 承载过多内容。
 - 七个 Sheet JSON 必须使用目标 Sheet 的精确表头且至少有一个非空值；错误字段在 cases 门禁直接失败，不延迟到 Excel 组装阶段。
 - 先运行 `pipeline-status` 获取事实派生的下一步，再按 `discovery → plan → risk → cases → delivery` 逐阶段执行；风险只阻塞 risk/cases，不阻塞元素计划。没有模型不理解项时运行 `record-risk-none`，不伪造用户确认。
 - 日常修改运行 `scripts/validate-test-design.ps1 -Mode Fast`；提交、CI 和发布运行 `-Mode Full`。
 - `功能测试用例` 不写性能规格测试或 `DFP性能` 场景；性能、并发、大数据量、资源监控和极端压力进入 `性能测试设计`、风险或自动化建议。
-- 选择类控件不得只展开；有限集合的每个可选项必须实际选择，真实禁用项必须尝试并记录阻塞证据，全部写入 `selection-option-observations.csv`；动态集合记录覆盖策略和联动；分页必须拆出每页条数、翻页/跳转、边界/禁用态；新增/编辑/删除必须绑定本次创建或用户提供的测试数据。
-- 页面可验证问题必须由模型自行操作，未完成时退回 discovery；不同用例不得复用相同操作步骤与预期结果，标题参数必须在步骤和预期中落地。
-- 页面实探必须记录所有可点击、可输入、可选择、可测试元素，并写入 `page-discovery.csv`、页面元素覆盖清单和产品版图。
+- 选择类有限集合逐项实际选择并写入 `selection-option-observations.csv`；每项 `预期结果锚点` 取自真实页面变化、不能只填选项值，并进入关联用例预期。创建对象后续生命周期复用同一测试数据 ID 和创建 owner 用例，各行绑定对应 mutation plan 交互实例 ID。
+- 页面可验证问题必须由模型自行操作，未完成时退回 discovery；不同用例在折叠测试实例编号后也不得复用相同操作步骤或相同预期结果，标题参数必须在步骤和预期中落地。
+- 页面实探必须记录所有可点击、可输入、可选择、可测试元素；独立 inventory、实探、页面元素覆盖清单和产品版图必须一致。证据必须是当前 run-dir `artifacts/` 内的非空文件，静态截图按内容去重。
 - 已有数据只能查看和只读深探；敏感操作只允许作用于本次创建且带测试标识的数据。
 - 客户交付件放在 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。
 - 内部资产归档到 `docs/test-assets/modules/`、`docs/test-assets/imports/` 和 `docs/test-assets/product-map.xlsx`。

@@ -91,7 +91,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
 - 导入副本：`docs/test-assets/imports/`
 - 批次账本：`docs/test-assets/batch-runs/`
 
-大范围任务必须建立 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/`，并维护 `batch-scope.json`、`batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv`、`selection-option-observations.csv`、结构化计划、生命周期和 `artifacts/`。
+大范围任务必须建立 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/`，并维护 `batch-scope.json`、`batch-plan.md`、`batch-status.csv`、`batch-review.md`、独立采集的 `page-element-inventory.csv`、带稳定交互实例 ID 的 `page-discovery.csv`、`selection-option-observations.csv`、结构化计划、生命周期和 `artifacts/`。页面证据必须是当前批次 `artifacts/` 内非空文件。
 页面实探或批次任务开始前，先运行 `powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-run --project-root . --run-id <YYYYMMDD_任务标识> --module-path "一级模块>二级菜单>三级菜单" --product-name "<产品/系统名称>" --batch-id BATCH-001` 初始化标准批次账本和 `batch-scope.json`；已存在批次使用 `--resume` 并传入原产品名，不得重复初始化覆盖；传入 `--page-discovery` 收口时必须同时传入 `--batch-status`。
 
 ## 自检命令

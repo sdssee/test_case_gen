@@ -111,8 +111,8 @@ def validate_function_case_part(path: Path, planned_ids: set[str] | None = None)
         raise ValueError(f"{path} must use function_cases_part_001.json naming")
     data = json.loads(path.read_text(encoding="utf-8-sig"))
     cases = _case_rows(data, str(path))
-    if not isinstance(cases, list) or len(cases) > MAX_FUNCTION_CASES_PER_PART:
-        raise ValueError(f"{path} must contain at most {MAX_FUNCTION_CASES_PER_PART} cases")
+    if not isinstance(cases, list) or not (1 <= len(cases) <= MAX_FUNCTION_CASES_PER_PART):
+        raise ValueError(f"{path} must contain 1..{MAX_FUNCTION_CASES_PER_PART} cases")
     seen_ids: set[str] = set()
     for index, case in enumerate(cases, start=1):
         validate_function_case_schema(case, f"{path.name} case {index}", planned_ids)

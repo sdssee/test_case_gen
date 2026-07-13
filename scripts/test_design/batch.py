@@ -17,13 +17,22 @@ from .contracts.function_cases import (
     MAX_FUNCTION_CASES_PER_PART,
 )
 from .validators.function_cases import validate_function_case_part, validate_sheet_data_file
-from .validators.case_collection import validate_case_collection, validate_plan_function_point_alignment
+from .validators.case_collection import (
+    derived_case_quality_counts,
+    validate_case_collection,
+    validate_contiguous_function_point_groups,
+    validate_discovery_plan_case_alignment,
+    validate_function_point_aware_shards,
+    validate_plan_case_order_alignment,
+    validate_plan_function_point_alignment,
+)
 from .validation_cache import cache_hit, fingerprint, record_success
 from .validators.batch_ledgers import (
     is_selection_control,
     risk_confirmation_state,
     validate_single_batch_scope,
     validate_lifecycle_rows,
+    validate_page_element_inventory,
     validate_discovery_rows,
     validate_mutation_discovery_evidence,
     validate_operation_plan_rows,
@@ -134,6 +143,7 @@ def write_single_csv_row(path: Path, values: dict[str, str]) -> None:
 
 CSV_REQUIRED_FILES = {
     "batch-status.csv": "batch-status-template.csv",
+    "page-element-inventory.csv": "page-element-inventory-template.csv",
     "page-discovery.csv": "page-discovery-template.csv",
     "selection-option-observations.csv": "selection-option-observations-template.csv",
     "element-case-plan.csv": "element-case-plan-template.csv",
@@ -246,12 +256,36 @@ def infer_operation_category(row: dict[str, str]) -> str:
 
 def migrate_structured_batch_ledgers(run_dir: Path, templates_dir: Path) -> None:
     migrations = {
+        "page-discovery.csv": "page-discovery-template.csv",
+        "selection-option-observations.csv": "selection-option-observations-template.csv",
         "element-case-plan.csv": "element-case-plan-template.csv",
         "test-data-lifecycle.csv": "test-data-lifecycle-template.csv",
     }
-    removed_fields = {
-        "element-case-plan.csv": {"操作类别", "验证要求", "数据策略", "执行状态"},
-        "test-data-lifecycle.csv": {"关联页面/入口", "修改项/元素", "保存后回显", "实际生效结果"},
+    compatible_missing_field_sets = {
+        "page-discovery.csv": [
+            {"证据定位"},
+            {"交互实例ID"},
+            {"证据定位", "交互实例ID"},
+            {"操作步骤锚点", "预期结果锚点"},
+            {"证据定位", "操作步骤锚点", "预期结果锚点"},
+            {"交互实例ID", "操作步骤锚点", "预期结果锚点"},
+            {"证据定位", "交互实例ID", "操作步骤锚点", "预期结果锚点"},
+        ],
+        "selection-option-observations.csv": [
+            {"交互实例ID"},
+            {"预期结果锚点"},
+            {"交互实例ID", "预期结果锚点"},
+        ],
+        "element-case-plan.csv": [
+            {"交互实例ID"},
+            {"操作类别", "验证要求", "数据策略", "执行状态"},
+            {"交互实例ID", "操作类别", "验证要求", "数据策略", "执行状态"},
+        ],
+        "test-data-lifecycle.csv": [
+            {"关联页面/入口", "修改项/元素", "保存后回显", "实际生效结果"},
+            {"交互实例ID"},
+            {"交互实例ID", "关联页面/入口", "修改项/元素", "保存后回显", "实际生效结果"},
+        ],
     }
     pending: list[tuple[Path, list[str], list[dict[str, str]], str]] = []
     for filename, template_name in migrations.items():
@@ -263,8 +297,11 @@ def migrate_structured_batch_ledgers(run_dir: Path, templates_dir: Path) -> None
             rows = list(reader)
         if current_headers == expected_headers:
             continue
-        known_legacy_headers = [header for header in expected_headers if header not in removed_fields[filename]]
-        if current_headers != known_legacy_headers:
+        known_legacy_headers = [
+            [header for header in expected_headers if header not in missing_fields]
+            for missing_fields in compatible_missing_field_sets[filename]
+        ]
+        if current_headers not in known_legacy_headers:
             raise ValueError(f"Cannot automatically migrate unsupported {filename} header: {current_headers}")
         pending.append((path, expected_headers, rows, filename))
 
@@ -275,7 +312,23 @@ def migrate_structured_batch_ledgers(run_dir: Path, templates_dir: Path) -> None
         migrated_rows: list[dict[str, str]] = []
         for old in rows:
             row = {header: old.get(header, "") for header in expected_headers}
-            if filename == "element-case-plan.csv":
+            if filename == "page-discovery.csv":
+                row["证据定位"] = ""
+                row["交互实例ID"] = old.get("交互实例ID", "")
+                row["操作步骤锚点"] = old.get("操作步骤锚点", "")
+                row["预期结果锚点"] = old.get("预期结果锚点", "")
+                row["备注"] = (
+                    ((old.get("备注", "") + "；") if old.get("备注") else "")
+                    + "旧账本自动迁移：必须补录交互实例ID、步骤/结果锚点和独立证据定位，不继承或伪造已执行事实"
+                )
+            elif filename == "selection-option-observations.csv":
+                row["交互实例ID"] = old.get("交互实例ID", "")
+                row["预期结果锚点"] = old.get("预期结果锚点", "")
+                row["备注"] = (
+                    ((old.get("备注", "") + "；") if old.get("备注") else "")
+                    + "旧账本自动迁移：需按 page-discovery.csv 补录交互实例ID，并从真实页面结果补录预期结果锚点"
+                )
+            elif filename == "element-case-plan.csv":
                 category = infer_operation_category(old)
                 required = {
                     "创建": "回显,持久化",
@@ -286,15 +339,17 @@ def migrate_structured_batch_ledgers(run_dir: Path, templates_dir: Path) -> None
                 }.get(category, "结果分支")
                 row.update(
                     {
-                        "操作类别": category,
-                        "验证要求": required,
-                        "数据策略": "本次创建测试数据" if category in {"创建", "编辑", "删除", "配置", "状态变更"} else "无数据变更",
-                        "执行状态": "待执行" if any(old.values()) else "不适用",
+                        "交互实例ID": old.get("交互实例ID", ""),
+                        "操作类别": old.get("操作类别", "") or category,
+                        "验证要求": old.get("验证要求", "") or required,
+                        "数据策略": old.get("数据策略", "") or ("本次创建测试数据" if category in {"创建", "编辑", "删除", "配置", "状态变更"} else "无数据变更"),
+                        "执行状态": old.get("执行状态", "") or ("待执行" if any(old.values()) else "不适用"),
                         "备注": ((old.get("备注", "") + "；") if old.get("备注") else "") + "旧账本自动迁移，需按结构化字段复核",
                     }
                 )
             else:
-                row["备注"] = ((old.get("备注", "") + "；") if old.get("备注") else "") + "旧账本自动迁移，需逐修改项补充页面、元素、回显和生效证据"
+                row["交互实例ID"] = old.get("交互实例ID", "")
+                row["备注"] = ((old.get("备注", "") + "；") if old.get("备注") else "") + "旧账本自动迁移，需逐修改项补充交互实例ID、页面、元素、回显和生效证据"
             migrated_rows.append(row)
         temporary = temporary_sibling(path)
         try:
@@ -335,11 +390,47 @@ def evidence_path_candidates(run_dir: Path, value: str) -> list[Path]:
     if not raw or raw in {"待填写", "待补充", "无"}:
         return []
     path = Path(raw)
-    return [path] if path.is_absolute() else [run_dir / path, run_dir.parents[3] / path]
+    if path.is_absolute():
+        return [path]
+    return [run_dir / path, run_dir.parents[3] / path]
+
+
+def resolved_evidence_file(run_dir: Path, value: str) -> Path | None:
+    allowed_root = (run_dir.resolve() / "artifacts").resolve()
+    for candidate in evidence_path_candidates(run_dir, value):
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(allowed_root)
+        except (OSError, ValueError):
+            continue
+        if resolved.is_file() and resolved.stat().st_size > 0:
+            return resolved
+    return None
 
 
 def evidence_path_exists(run_dir: Path, value: str) -> bool:
-    return any(candidate.exists() for candidate in evidence_path_candidates(run_dir, value))
+    return resolved_evidence_file(run_dir, value) is not None
+
+
+def evidence_content_fingerprint(run_dir: Path, value: str) -> str | None:
+    path = resolved_evidence_file(run_dir, value)
+    if path is None:
+        return None
+    digest = hashlib.sha256()
+    prefix = b""
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            if not prefix:
+                prefix = chunk[:32]
+            digest.update(chunk)
+    lowered = prefix.lstrip().lower()
+    is_image = bool(
+        re.search(r"\.(?:png|jpe?g|gif|bmp|webp|svg|tiff?)$", path.name, re.IGNORECASE)
+        or prefix.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"BM", b"II*\x00", b"MM\x00*"))
+        or (prefix.startswith(b"RIFF") and prefix[8:12] == b"WEBP")
+        or lowered.startswith((b"<svg", b"<?xml")) and b"<svg" in lowered
+    )
+    return f"{'image' if is_image else 'file'}:{digest.hexdigest()}"
 
 
 def contains_any(text: str, markers: list[str]) -> bool:
@@ -377,12 +468,13 @@ def element_is_planned(discovery: dict[str, str], plan_rows: list[dict[str, str]
         return True
     for row in plan_rows:
         same_leaf = normalized_text(discovery.get("最小标题路径", "")) == normalized_text(row.get("最小标题路径", ""))
+        same_interaction = normalized_text(discovery.get("交互实例ID", "")) == normalized_text(row.get("交互实例ID", ""))
         same_page = normalized_text(discovery.get("页面/入口", "")) == normalized_text(row.get("页面/入口", ""))
         same_name = name == normalized_text(row.get("元素名称/文案", ""))
         discovery_type = normalized_text(discovery.get("元素类型", ""))
         plan_type = normalized_text(row.get("元素类型", ""))
         same_type = bool(discovery_type and plan_type and discovery_type == plan_type)
-        if same_leaf and same_page and same_name and same_type:
+        if same_leaf and same_interaction and same_page and same_name and same_type:
             return True
     return False
 
@@ -462,6 +554,13 @@ def manifest_parts(data_dir: Path) -> list[Path]:
     if not isinstance(raw_parts, list) or not raw_parts:
         raise ValueError(f"{manifest} must contain a non-empty parts list")
     result: list[Path] = []
+    expected_names = [f"function_cases_part_{index:03d}.json" for index in range(1, len(raw_parts) + 1)]
+    actual_names = [str(item).strip() for item in raw_parts]
+    if actual_names != expected_names:
+        raise ValueError(
+            f"{manifest} parts must be unique, sequential, and ordered as 001..N; "
+            f"expected={expected_names}, actual={actual_names}"
+        )
     for item in raw_parts:
         name = str(item).strip()
         if not FUNCTION_CASE_PART_RE.match(name):
@@ -555,7 +654,7 @@ def validation_input_paths(run_dir: Path, phase: str) -> list[Path]:
             run_dir / "artifacts" / "screenshots",
         ]
     )
-    for ledger_name in ["page-discovery.csv", "selection-option-observations.csv", "risk-confirmation.csv"]:
+    for ledger_name in ["page-element-inventory.csv", "page-discovery.csv", "selection-option-observations.csv", "risk-confirmation.csv"]:
         ledger = run_dir / ledger_name
         if not ledger.exists():
             continue
@@ -603,7 +702,7 @@ def generation_source_paths(run_dir: Path) -> list[Path]:
     if rule_dir.exists():
         paths.extend(rule_dir.glob("*.md"))
         paths.extend(rule_dir.glob("*.json"))
-    for ledger_name in ["page-discovery.csv", "selection-option-observations.csv", "risk-confirmation.csv"]:
+    for ledger_name in ["page-element-inventory.csv", "page-discovery.csv", "selection-option-observations.csv", "risk-confirmation.csv"]:
         ledger = run_dir / ledger_name
         if not ledger.exists():
             continue
@@ -763,6 +862,11 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
     }
 
     batch_rows = read_csv_exact(run_dir / "batch-status.csv", expected_headers["batch-status.csv"], "batch-status.csv")
+    inventory_rows = read_csv_exact(
+        run_dir / "page-element-inventory.csv",
+        expected_headers["page-element-inventory.csv"],
+        "page-element-inventory.csv",
+    )
     discovery_rows = read_csv_exact(run_dir / "page-discovery.csv", expected_headers["page-discovery.csv"], "page-discovery.csv")
     selection_option_rows = read_csv_exact(
         run_dir / "selection-option-observations.csv",
@@ -779,6 +883,7 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
     run_batch_id, run_leaf_path = validate_single_batch_scope(
         batch_rows,
         {
+            "page-element-inventory.csv": inventory_rows,
             "page-discovery.csv": discovery_rows,
             "selection-option-observations.csv": selection_option_rows,
             "element-case-plan.csv": plan_rows,
@@ -799,7 +904,20 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
     if phase in {"discovery", "plan", "risk", "cases"} and not interactive_rows:
         raise ValueError("page-discovery.csv must contain clickable/input/selectable/testable elements, not only static text")
     if phase in {"discovery", "plan", "risk", "cases"}:
-        validate_discovery_rows(interactive_rows, lambda value: evidence_path_exists(run_dir, value))
+        real_inventory_rows = [
+            row for row in inventory_rows
+            if not is_template_or_empty_row(row, ["页面/入口", "元素指纹", "元素名称/文案", "元素类型"])
+        ]
+        validate_discovery_rows(
+            interactive_rows,
+            lambda value: evidence_path_exists(run_dir, value),
+            lambda value: evidence_content_fingerprint(run_dir, value),
+        )
+        validate_page_element_inventory(
+            real_inventory_rows,
+            interactive_rows,
+            lambda value: evidence_path_exists(run_dir, value),
+        )
         real_selection_option_rows = [
             row for row in selection_option_rows
             if not is_template_or_empty_row(row, ["页面/入口", "元素名称/文案", "选项值"])
@@ -808,6 +926,7 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
             interactive_rows,
             real_selection_option_rows,
             lambda value: evidence_path_exists(run_dir, value),
+            lambda value: evidence_content_fingerprint(run_dir, value),
         )
 
     confirmed_risk_rows: list[dict[str, str]] = []
@@ -828,6 +947,17 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
         if missing_plan:
             preview = ", ".join(missing_plan[:10])
             raise ValueError(f"element-case-plan.csv is missing interactive page elements from page-discovery.csv: {preview}")
+
+        unobserved_plan = [
+            f"{row.get('页面/入口', '')}/{row.get('元素名称/文案', '')}/{row.get('元素类型', '')}"
+            for row in real_plan_rows
+            if not element_is_planned(row, interactive_rows)
+        ]
+        if unobserved_plan:
+            raise ValueError(
+                "element-case-plan.csv contains elements with no exact page-discovery.csv fact; execute and "
+                f"record them before planning cases: {unobserved_plan[:10]}"
+            )
 
         computed_min_total = 0
         declared_total = 0
@@ -913,24 +1043,16 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
         parts = manifest_parts(data_dir)
         planned_ids = planned_case_ids(plan_rows)
         part_counts = [validate_function_case_part(path, planned_ids) for path in parts]
-        invalid_nonfinal = [
-            f"{path.name}={count}"
-            for path, count in zip(parts[:-1], part_counts[:-1])
-            if count != MAX_FUNCTION_CASES_PER_PART
-        ]
-        if invalid_nonfinal:
-            raise ValueError(
-                "Every function case shard except the final shard must contain exactly "
-                f"{MAX_FUNCTION_CASES_PER_PART} cases: {invalid_nonfinal}"
-            )
         case_count = sum(part_counts)
         actual_case_ids: set[str] = set()
         duplicate_case_ids: set[str] = set()
         actual_case_rows: list[dict[str, object]] = []
+        shard_case_rows: list[list[dict[str, object]]] = []
         for path in parts:
             with path.open("r", encoding="utf-8-sig") as fp:
                 payload = json.load(fp)
             case_rows = payload.get("cases") if isinstance(payload, dict) else payload
+            current_shard_rows: list[dict[str, object]] = []
             for item in case_rows:
                 if not isinstance(item, dict):
                     continue
@@ -939,21 +1061,40 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
                     duplicate_case_ids.add(case_id)
                 actual_case_ids.add(case_id)
                 actual_case_rows.append(item)
+                current_shard_rows.append(item)
+            shard_case_rows.append(current_shard_rows)
         if duplicate_case_ids:
             raise ValueError(f"function case IDs must be unique across all manifest shards: {sorted(duplicate_case_ids)[:10]}")
         validate_case_collection(actual_case_rows, label="function case manifest")
+        validate_contiguous_function_point_groups(actual_case_rows, label="function case manifest")
+        validate_function_point_aware_shards(
+            shard_case_rows,
+            label="function case manifest",
+            max_per_shard=MAX_FUNCTION_CASES_PER_PART,
+        )
         missing_planned_case_ids = sorted(planned_case_ids(plan_rows) - actual_case_ids)
         if missing_planned_case_ids:
             raise ValueError(f"planned case IDs are missing from current function shards: {missing_planned_case_ids[:10]}")
         for index, row in enumerate(real_plan_rows, start=2):
-            planned_for_row = set(split_plan_values(row.get("计划用例ID", "")))
-            actual_for_row = set(split_plan_values(row.get("实际用例ID", "")))
+            planned_for_row = split_plan_values(row.get("计划用例ID", ""))
+            actual_for_row = split_plan_values(row.get("实际用例ID", ""))
             if actual_for_row != planned_for_row:
                 raise ValueError(
                     f"element-case-plan.csv row {index} 实际用例ID must exactly match generated 计划用例ID; "
-                    f"planned={sorted(planned_for_row)}, actual={sorted(actual_for_row)}"
+                    f"planned={planned_for_row}, actual={actual_for_row}"
                 )
         validate_plan_function_point_alignment(
+            real_plan_rows,
+            actual_case_rows,
+            split_ids=split_plan_values,
+        )
+        validate_plan_case_order_alignment(
+            real_plan_rows,
+            actual_case_rows,
+            split_ids=split_plan_values,
+        )
+        validate_discovery_plan_case_alignment(
+            interactive_rows,
             real_plan_rows,
             actual_case_rows,
             split_ids=split_plan_values,
@@ -964,6 +1105,20 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
             raise ValueError(
                 f"risk-confirmation.csv references case IDs not present in current function shards: {unknown_risk_case_ids[:10]}"
             )
+        known_risk_ids = {
+            row.get("风险ID", "").strip()
+            for row in confirmed_risk_rows
+            if row.get("风险ID", "").strip() and row.get("风险ID", "").strip() != "RISK-NONE"
+        }
+        case_risk_ids = {
+            risk_id
+            for case in actual_case_rows
+            for risk_id in split_plan_values(str(case.get("关联风险", "")))
+            if risk_id and risk_id != "RISK-NONE"
+        }
+        unknown_case_risks = sorted(case_risk_ids - known_risk_ids)
+        if unknown_case_risks:
+            raise ValueError(f"function cases reference risks missing from risk-confirmation.csv: {unknown_case_risks[:10]}")
         for index, row in enumerate(confirmed_risk_rows, start=2):
             if row.get("风险ID", "").strip() == "RISK-NONE":
                 continue
@@ -974,6 +1129,17 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
                 raise ValueError(
                     f"risk-confirmation.csv row {index} must link generated case IDs or explicitly land in "
                     "性能测试设计/自动化建议/仅记录风险"
+                )
+            linked_set = set(linked)
+            case_side = {
+                str(case.get("用例 ID", "")).strip()
+                for case in actual_case_rows
+                if row.get("风险ID", "").strip() in split_plan_values(str(case.get("关联风险", "")))
+            }
+            if linked_set != case_side:
+                raise ValueError(
+                    f"risk-confirmation.csv row {index} 关联用例ID must exactly match cases declaring "
+                    f"关联风险={row.get('风险ID', '')}; ledger={sorted(linked_set)}, cases={sorted(case_side)}"
                 )
         with (data_dir / FUNCTION_CASE_MANIFEST).open("r", encoding="utf-8-sig") as fp:
             manifest_data = json.load(fp)
@@ -1008,24 +1174,49 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
 
     if batch_rows:
         for index, status_row in enumerate(batch_rows, start=2):
-            if phase in {"plan", "risk", "cases"}:
-                if status_row.get("状态") == "待开始" or any(
-                    (status_row.get(field, "") or "0") == "0" for field in ["页面数", "元素总数"]
-                ):
+            if status_row.get("状态") == "待开始" or any(
+                (status_row.get(field, "") or "0") == "0" for field in ["页面数", "元素总数"]
+            ):
+                raise ValueError(
+                    f"batch-status.csv row {index} is still in the initial state; update page and element counts before continuing"
+                )
+            batch_id = status_row.get("批次ID", "").strip()
+            scoped = [row for row in interactive_rows if not batch_id or row.get("批次ID", "").strip() == batch_id]
+            expected_pages = len({row.get("页面/入口", "").strip() for row in scoped if row.get("页面/入口", "").strip()})
+            expected_elements = len(scoped)
+            if int(status_row.get("页面数", "0")) != expected_pages or int(status_row.get("元素总数", "0")) != expected_elements:
+                raise ValueError(
+                    f"batch-status.csv row {index} counts must match discovery facts: "
+                    f"页面数={expected_pages}, 元素总数={expected_elements}"
+                )
+            expected_covered = sum(row.get("覆盖状态", "").strip() == "已覆盖" for row in scoped)
+            expected_pending = expected_elements - expected_covered
+            if int(status_row.get("已覆盖元素数", "0")) != expected_covered:
+                raise ValueError(
+                    f"batch-status.csv row {index} 已覆盖元素数 must be derived from page-discovery.csv: "
+                    f"{expected_covered}"
+                )
+            if int(status_row.get("待确认元素数", "0")) != expected_pending:
+                raise ValueError(
+                    f"batch-status.csv row {index} 待确认元素数 must be derived from page-discovery.csv: "
+                    f"{expected_pending}"
+                )
+            if phase == "cases" and expected_covered != expected_elements:
+                raise ValueError("cases cannot be generated while any interactive discovery element is not actually covered")
+            if phase == "cases" and int(status_row.get("功能用例数", "0")) != case_count:
+                raise ValueError(f"batch-status.csv row {index} 功能用例数 must match manifest cases: {case_count}")
+            if phase == "cases":
+                derived_counts = derived_case_quality_counts(actual_case_rows)
+                mismatches = {
+                    field: (int(status_row.get(field, "0") or "0"), expected)
+                    for field, expected in derived_counts.items()
+                    if int(status_row.get(field, "0") or "0") != expected
+                }
+                if mismatches:
                     raise ValueError(
-                        f"batch-status.csv row {index} is still in the initial state; update page and element counts before continuing"
+                        f"batch-status.csv row {index} quality-direction counts must be derived from manifest cases: "
+                        f"{mismatches}"
                     )
-                batch_id = status_row.get("批次ID", "").strip()
-                scoped = [row for row in interactive_rows if not batch_id or row.get("批次ID", "").strip() == batch_id]
-                expected_pages = len({row.get("页面/入口", "").strip() for row in scoped if row.get("页面/入口", "").strip()})
-                expected_elements = len(scoped)
-                if int(status_row.get("页面数", "0")) != expected_pages or int(status_row.get("元素总数", "0")) != expected_elements:
-                    raise ValueError(
-                        f"batch-status.csv row {index} counts must match discovery facts: "
-                        f"页面数={expected_pages}, 元素总数={expected_elements}"
-                    )
-                if phase == "cases" and int(status_row.get("功能用例数", "0")) != case_count:
-                    raise ValueError(f"batch-status.csv row {index} 功能用例数 must match manifest cases: {case_count}")
 
     if use_cache:
         record_success(run_dir, phase, current_fingerprint, input_paths)
@@ -1050,6 +1241,7 @@ def init_batch_run(
         "batch-plan.md": templates_dir / "batch-plan-template.md",
         "batch-status.csv": templates_dir / "batch-status-template.csv",
         "batch-review.md": templates_dir / "batch-review-template.md",
+        "page-element-inventory.csv": templates_dir / "page-element-inventory-template.csv",
         "page-discovery.csv": templates_dir / "page-discovery-template.csv",
         "selection-option-observations.csv": templates_dir / "selection-option-observations-template.csv",
         "element-case-plan.csv": templates_dir / "element-case-plan-template.csv",
@@ -1103,6 +1295,21 @@ def init_batch_run(
                 )
                 missing_run_files.remove("selection-option-observations.csv")
                 print(f"Added missing selection-option-observations.csv to legacy batch run: {run_dir}")
+            if "page-element-inventory.csv" in missing_run_files:
+                copy_template_if_missing(
+                    required_templates["page-element-inventory.csv"],
+                    run_dir / "page-element-inventory.csv",
+                )
+                write_single_csv_row(
+                    run_dir / "page-element-inventory.csv",
+                    {
+                        "批次ID": batch_id,
+                        "最小标题路径": resume_leaf_path,
+                        "备注": "由 --resume 补齐；必须从 DOM/可访问性树/trace/控件树重新采集，不伪造历史页面元素",
+                    },
+                )
+                missing_run_files.remove("page-element-inventory.csv")
+                print(f"Added missing page-element-inventory.csv to legacy batch run: {run_dir}")
             if "risk-confirmation.csv" in missing_run_files:
                 copy_template_if_missing(required_templates["risk-confirmation.csv"], run_dir / "risk-confirmation.csv")
                 write_single_csv_row(
@@ -1271,7 +1478,15 @@ def init_batch_run(
             "覆盖质量自检": "未通过",
             "导入文件已生成": "否",
             "最小标题路径": leaf_path,
-            "下一步动作": "开始页面实探并补充 page-discovery.csv",
+            "下一步动作": "先独立采集 page-element-inventory.csv，再按交互实例ID执行页面实探并补充 page-discovery.csv",
+        },
+    )
+    write_single_csv_row(
+        run_dir / "page-element-inventory.csv",
+        {
+            "批次ID": batch_id,
+            "最小标题路径": leaf_path,
+            "备注": "先独立采集 DOM/可访问性树/浏览器 trace/桌面控件树，再与 page-discovery.csv 双向对账",
         },
     )
     write_single_csv_row(
@@ -1344,7 +1559,7 @@ def init_batch_run(
         f"- 产品/系统：{product}\n"
         f"- 模块路径：{leaf_path}\n"
         f"- 批次ID：{batch_id}\n"
-        "- 执行要求：先补全 page-discovery.csv，再生成测试设计、导入文件和 batch-status.csv 覆盖数据。\n"
+        "- 执行要求：先独立采集 page-element-inventory.csv，再按交互实例ID补全 page-discovery.csv，之后生成测试设计、导入文件和 batch-status.csv 覆盖数据。\n"
     )
     for markdown_name in ["batch-plan.md", "batch-review.md"]:
         markdown_path = run_dir / markdown_name

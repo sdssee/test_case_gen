@@ -16,6 +16,7 @@
 - `batch-plan.md`
 - `batch-status.csv`
 - `batch-review.md`
+- `page-element-inventory.csv`
 - `page-discovery.csv`
 - `selection-option-observations.csv`
 - `element-case-plan.csv`
@@ -41,16 +42,18 @@
 - `batch-status.csv` 覆盖质量自检。
 
 `batch-status.csv` 必须记录最小标题路径、页面数、元素总数、已覆盖元素数、待确认元素数、功能用例数、性能场景数、异常用例数、边界用例数、权限/状态用例数、数据一致性用例数、导入文件路径、导入文件已生成。
+页面数、元素总数、覆盖数和待确认数从 discovery 精确派生；功能用例数从 manifest 派生；异常、边界、权限/状态、数据一致性四类按明确 DFX taxonomy 派生、允许重叠，不得人工估算或用宽泛词计数。
 
 阶段性门禁必须按顺序执行：
 
-1. 页面发现后运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery`，校验 `page-discovery.csv` 表头、列数、真实可交互元素、`batch-status.csv` 状态和 `selection-option-observations.csv`。选择控件为有限集合时必须每个选项一行且每个可选项实际选择；真实禁用项必须尝试并记录具体阻塞状态与独立证据；动态集合必须逐行记录已选项并提供明确覆盖策略。
+1. 先从 DOM/可访问性树/trace/控件树独立采集 `page-element-inventory.csv`，再执行页面交互；页面发现后运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery`，校验 inventory 与 discovery 双向一致、`交互实例ID` 传递、每个交互真实执行、当前批次 `artifacts/` 内存在非空证据文件和唯一定位、`batch-status.csv` 派生状态及逐选项账本。内容相同的静态截图即使改名也不得复用；有限选择集合必须每个选项一行且实际选择，每行 `预期结果锚点` 必须进入精确关联用例预期；数据不足或未执行必须退回 discovery。
 2. 先默认完成全部页面、元素、交互路径和 CRUD 生效闭环并通过 plan 门禁；随后仅把模型仍无法理解的业务语义、规则歧义或页面无法观察项写入 `risk-confirmation.csv`。真实风险必须声明页面可验证性、实际页面验证动作与结果、不可验证或外部依赖原因和证据；“仅查看/未逐项点击/权限未知”不算外部阻塞，可页面验证或验证未完成时必须退回 discovery。真实确认项由用户确认后更新为 `已确认/否`；没有模型不理解项时由模型运行 `record-risk-none` 写入唯一的 `RISK-NONE/无需用户确认/否`，不得伪造用户确认。
 3. 功能用例分片生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <batch-run-dir>`，清理旧分片和旧 manifest，确保本轮只保留当前批次有效 JSON。
-4. 功能用例分片、Sheet JSON 和正式 Excel 生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase cases`，先校验 `function_cases_manifest.json`、三位编号分片、标准字段、跨分片重复步骤/预期、标题参数落地、选项值落地、计划功能点一致和每片最多 10 条，再校验 Sheet 分文件、计划用例数量和实际分片数量一致。
+4. 功能用例分片、Sheet JSON 和正式 Excel 生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase cases`，先校验 `function_cases_manifest.json`、功能点感知三位编号分片、步骤与预期分别唯一、确定性 oracle、标题参数落地、逐选项落地、实探→计划→用例精确归属、owner 顺序和功能点单区块，再校验 Sheet 分文件、计划用例数量和实际分片数量一致。
 5. 严格按 `discovery → plan → risk → cases → delivery` 累积门禁执行；任一阶段失败时回到当前阶段补充页面深探、元素计划、逐修改项生命周期、模型不理解项确认或用例分片，禁止降低预算、删除元素或跳过 DFX 绕过门禁。
+   本次创建对象的后续生命周期必须复用同一测试数据 ID 和创建 owner 用例；每行用其对应 mutation plan 的 `交互实例ID` 精确归属。
 6. `element-case-plan.csv` 必须填写 `操作类别`、`验证要求`、`数据策略`、`执行状态`。创建、编辑、删除、配置、状态变更必须使用本次创建或用户提供测试数据并标记实际执行完成；编辑/配置/状态变更的每个修改项必须在 `test-data-lifecycle.csv` 独立一行记录保存后回显和实际生效结果。
-7. 生成用例前运行 `prepare-function-case-generation`；该命令先通过 risk 门禁，再清理旧分片、manifest 和七个 Sheet JSON，并生成绑定当前 discovery/plan/lifecycle/risk 哈希的 `generation-session.json`。manifest 必须携带同一 session ID 和 source fingerprint，避免新旧轮次混装或上游变化后继续复用旧用例。
+7. 生成用例前运行 `prepare-function-case-generation`；该命令先通过 risk 门禁，再清理旧分片、manifest 和七个 Sheet JSON，并生成绑定当前 inventory/discovery/逐选项/plan/lifecycle/risk 语义与证据哈希的 `generation-session.json`。manifest 必须携带同一 session ID 和 source fingerprint，避免新旧轮次混装或上游变化后继续复用旧用例。
 
 当前独立批次覆盖质量自检通过后，才能初始化下一批的独立 run-dir。所有批次完成后，任务级汇总只读取各批归档、receipt 和用例 ID，生成跨模块汇总、回归范围、风险清单和客户总览，不得把多个批次重新合并到一个 manifest 或重新生成各批完整用例。
 
@@ -60,7 +63,7 @@
 
 ## 文件格式门禁
 
-- `batch-scope.json`、`batch-status.csv`、`page-discovery.csv`、`selection-option-observations.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 和 `risk-confirmation.csv` 必须由初始化工具生成或复制标准模板，禁止自定义精简表头或改写产品/批次范围。
+- `batch-scope.json`、`batch-status.csv`、`page-element-inventory.csv`、`page-discovery.csv`、`selection-option-observations.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 和 `risk-confirmation.csv` 必须由初始化工具生成或复制标准模板，禁止自定义精简表头或改写产品/批次范围。
 - `page-discovery.csv`、`element-case-plan.csv` 和 `test-data-lifecycle.csv` 必须使用 CSV writer 或等价结构化方式写入，保证每行列数与表头一致，防止字段错位。
 - `batch-plan.md` 不得仍标记已完成批次为执行中或待开始；页面清单数量必须与 `batch-status.csv` 页面数一致。
 - `complete-deliverables` 必须把已完成批次的状态、覆盖数量、归档路径、导入路径、质量自检和遗留问题自动回填到 `batch-review.md` 的唯一完成行；空模板行、重复批次行或与 `batch-status.csv` 不一致的评审行必须拒绝交付。
@@ -69,10 +72,11 @@
 
 - 禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件。
 - 脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 `artifacts/scripts/`。
+- `artifacts/scripts/` 不得保留 `fix_*`、`repair_*`、`patch_*`、`debug_*`、`check_*` 等补丁链，也不得出现 `gen_all_cases.py` 或内联多条用例正文的聚合脚本；生成脚本超过 12 个视为过程失控，必须回到正式账本/分片做确定性重生成。
 - 当前批次 Python 临时脚本或 JSON 数据分片也不得过大；单个 Python 建议小于 200KB，单个 JSON/CSV/Markdown/TXT 中间文件建议小于 256KB，超过时必须继续按最小标题路径或页面域分片。
 - 不得把大量用例正文、步骤、预期结果或页面元素清单内联到一个 Python 列表/字典或一个 JSON 文件中；Python 只保留模板填充逻辑，数据优先来自当前批次正式 Excel、`page-discovery.csv`、`batch-status.csv` 或小型分片。
 - Excel 数据必须按 Sheet 分文件输出到 `artifacts/data/`：`overview.json`、`requirements.json`、`scenarios.json`、`performance.json`、`risks.json`、`automation.json`、`page_elements.json` 等；功能用例必须按 `function_cases_part_001.json`、`function_cases_part_002.json` 分片，每个分片最多 10 条。
-- 功能用例分片必须同步写 `function_cases_manifest.json`，禁止保留 `function_cases_part_01.json`、旧批次分片或未被 manifest 引用的分片。
+- 功能用例分片必须同步写 `function_cases_manifest.json`；每片必须包含 1–10 条用例，文件名从 `function_cases_part_001.json` 开始连续无断号，禁止空分片、`function_cases_part_01.json`、旧批次分片或未被 manifest 引用的分片。
 - 功能用例分片字段必须使用标准字段，禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected` 等错字段、旧字段或英文模板字段进入 JSON 和 Excel。
 - Sheet 构建脚本必须按职责拆分，`assemble_workbook.py` 只负责复制模板、调用 Sheet 写入和保存，禁止一个大脚本内联全部 Sheet 数据和用例正文。
 - 当前批次 Python 临时脚本写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取。

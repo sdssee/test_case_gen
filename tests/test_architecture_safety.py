@@ -135,13 +135,94 @@ class ArchitectureSafetyTests(unittest.TestCase):
     def write_csv_rows(self, path: Path, rows: list[dict[str, str]]) -> None:
         with path.open("r", encoding="utf-8-sig", newline="") as stream:
             headers = next(csv.reader(stream))
+        normalized_rows: list[dict[str, str]] = []
+        for index, values in enumerate(rows, start=1):
+            current = dict(values)
+            if "交互实例ID" in headers and not current.get("交互实例ID"):
+                current["交互实例ID"] = f"INT-{index:03d}"
+            if "角色/权限" in headers and not current.get("角色/权限"):
+                current["角色/权限"] = "管理员"
+            if "数据状态" in headers and not current.get("数据状态"):
+                current["数据状态"] = "有数据"
+            if "预期结果锚点" in headers and not current.get("预期结果锚点"):
+                observed = "\n".join([current.get("预期/观察行为", ""), current.get("结果分支/后续状态", "")])
+                current["预期结果锚点"] = (
+                    "弹窗" if path.name == "page-discovery.csv" and "弹窗" in observed
+                    else current.get("结果分支/后续状态", "") or current.get("选择后页面变化", "")
+                )
+            if "操作步骤锚点" in headers and not current.get("操作步骤锚点"):
+                current["操作步骤锚点"] = current.get("元素名称/文案", "")
+            normalized_rows.append(current)
         with path.open("w", encoding="utf-8-sig", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=headers)
             writer.writeheader()
-            for values in rows:
+            for values in normalized_rows:
                 row = {header: "" for header in headers}
                 row.update(values)
                 writer.writerow(row)
+        if path.name == "page-discovery.csv":
+            inventory_path = path.with_name("page-element-inventory.csv")
+            if inventory_path.exists():
+                with inventory_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                    inventory_headers = next(csv.reader(stream))
+                seen: set[tuple[str, ...]] = set()
+                inventory_rows: list[dict[str, str]] = []
+                for index, row in enumerate(normalized_rows, start=1):
+                    identity = tuple(
+                        row.get(field, "")
+                        for field in [
+                            "最小标题路径", "页面/入口", "角色/权限", "数据状态", "交互实例ID",
+                            "元素名称/文案", "元素类型", "交互方式",
+                        ]
+                    )
+                    if not row.get("元素名称/文案") or identity in seen:
+                        continue
+                    seen.add(identity)
+                    inventory_rows.append(
+                        {
+                            "批次ID": row.get("批次ID", "BATCH-001"),
+                            "最小标题路径": row.get("最小标题路径", ""),
+                            "页面/入口": row.get("页面/入口", ""),
+                            "角色/权限": row.get("角色/权限", ""),
+                            "数据状态": row.get("数据状态", ""),
+                            "交互实例ID": row.get("交互实例ID", ""),
+                            "采集快照ID": "SNAP-001",
+                            "元素指纹": f"EL-{index:03d}",
+                            "元素名称/文案": row.get("元素名称/文案", ""),
+                            "元素类型": row.get("元素类型", ""),
+                            "交互方式": row.get("交互方式", ""),
+                            "可交互状态": "可操作",
+                            "DOM/可访问性定位": f"test://element/{index}",
+                            "发现来源": "DOM测试快照",
+                            "证据路径": row.get("证据路径", ""),
+                            "证据定位": row.get("证据定位", "") or f"测试快照元素{index}",
+                            "备注": "测试夹具自动生成的独立元素清单",
+                        }
+                    )
+                with inventory_path.open("w", encoding="utf-8-sig", newline="") as stream:
+                    writer = csv.DictWriter(stream, fieldnames=inventory_headers)
+                    writer.writeheader()
+                    writer.writerows(inventory_rows)
+            status_path = path.with_name("batch-status.csv")
+            if status_path.exists() and normalized_rows:
+                with status_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                    reader = csv.DictReader(stream)
+                    status_headers = list(reader.fieldnames or [])
+                    status_rows = list(reader)
+                if status_rows:
+                    status_rows[0].update(
+                        {
+                            "状态": "执行中",
+                            "页面数": str(len({row.get("页面/入口", "") for row in normalized_rows if row.get("页面/入口")})),
+                            "元素总数": str(len([row for row in normalized_rows if row.get("元素名称/文案")])),
+                            "已覆盖元素数": str(sum(row.get("覆盖状态") == "已覆盖" for row in normalized_rows)),
+                            "待确认元素数": str(sum(row.get("覆盖状态") != "已覆盖" for row in normalized_rows)),
+                        }
+                    )
+                    with status_path.open("w", encoding="utf-8-sig", newline="") as stream:
+                        writer = csv.DictWriter(stream, fieldnames=status_headers)
+                        writer.writeheader()
+                        writer.writerows(status_rows)
 
     def write_valid_sheet_files(self, data_dir: Path) -> None:
         for filename, headers in SHEET_DATA_HEADERS.items():
@@ -150,6 +231,8 @@ class ArchitectureSafetyTests(unittest.TestCase):
 
     def make_valid_plan_run(self, project_root: Path, run_id: str = "risk-probe") -> Path:
         run_dir = TOOLS.init_batch_run(project_root, run_id, "产品>模块>页面", "BATCH-001", "产品")
+        evidence = run_dir / "artifacts" / "screenshots" / "danger-action.txt"
+        evidence.write_text("已点击危险操作按钮，确认弹窗打开；关闭后页面数据不变", encoding="utf-8")
         self.write_csv_rows(
             run_dir / "page-discovery.csv",
             [
@@ -162,8 +245,12 @@ class ArchitectureSafetyTests(unittest.TestCase):
                     "交互方式": "点击",
                     "完整点击路径": "系统>模块>页面>危险操作按钮",
                     "预期/观察行为": "打开确认弹窗",
+                    "结果分支/后续状态": "关闭确认弹窗后返回风险页面且数据不变",
                     "适用DFX维度": "DFT功能",
                     "适用DFX场景": "正向流程",
+                    "覆盖状态": "已覆盖",
+                    "证据路径": "artifacts/screenshots/danger-action.txt",
+                    "证据定位": "文本证据第1行：弹窗打开与关闭恢复结果",
                 }
             ],
         )
@@ -212,7 +299,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
             ("缩小浏览器窗口后点击关闭按钮", "小窗口下弹窗仍可关闭且页面布局未错乱"),
             ("切换浏览器页签再返回并点击取消", "页签切换后弹窗状态保留且可正常取消"),
             ("等待三秒后点击关闭按钮", "等待期间弹窗保持稳定且随后正常关闭"),
-            ("连续双击关闭按钮", "弹窗只关闭一次且页面无重复操作或报错"),
+            ("连续双击关闭按钮", "弹窗只关闭一次，页面未重复提交且未报错"),
         ][(suffix - 1) % 10]
         return {
             "用例 ID": case_id,
@@ -258,19 +345,23 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 "结果分支/后续状态": "列表刷新并持久化删除结果",
                 "适用DFX维度": "DFT功能",
                 "适用DFX场景": "正向流程",
+                "覆盖状态": "已覆盖",
+                "证据路径": "artifacts/screenshots/delete-success.txt",
+                "证据定位": "文本证据第1行：删除结果",
             }
+            evidence = run_dir / "artifacts" / "screenshots" / "delete-success.txt"
+            evidence.write_text("待补数据来源验证", encoding="utf-8")
             self.write_csv_rows(run_dir / "page-discovery.csv", [row])
             with self.assertRaisesRegex(ValueError, "tagged test data"):
                 TOOLS.validate_batch_artifacts(run_dir, "discovery")
 
             row["测试数据来源"] = "本次创建 CODEX_TEST_DELETE_001"
+            evidence.unlink()
             self.write_csv_rows(run_dir / "page-discovery.csv", [row])
             with self.assertRaisesRegex(ValueError, "existing evidence"):
                 TOOLS.validate_batch_artifacts(run_dir, "discovery")
 
-            evidence = run_dir / "artifacts" / "screenshots" / "delete-success.txt"
             evidence.write_text("CODEX_TEST_DELETE_001 删除成功并从列表消失", encoding="utf-8")
-            row["证据路径"] = "artifacts/screenshots/delete-success.txt"
             self.write_csv_rows(run_dir / "page-discovery.csv", [row])
             TOOLS.validate_batch_artifacts(run_dir, "discovery")
 
@@ -290,6 +381,8 @@ class ArchitectureSafetyTests(unittest.TestCase):
                     "完整点击路径": "系统>模块>风险页面>缓存动作图标",
                     "预期/观察行为": "操作成功并持久化",
                     "结果分支/后续状态": "关联页面状态更新",
+                    "操作步骤锚点": "缓存动作图标",
+                    "预期结果锚点": "关联页面状态更新",
                 }
             )
             self.write_csv_rows(discovery_path, [discovery])
@@ -309,7 +402,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
                     "计划用例ID": ",".join(ids),
                     "操作类别": "状态变更",
                     "验证要求": "回显,持久化,实际生效",
-                    "数据策略": "本次创建测试数据",
+                    "数据策略": "用户提供测试数据",
                     "执行状态": "已完成",
                     "是否涉及CRUD闭环": "是",
                 }
@@ -559,6 +652,8 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 first = next(csv.DictReader(stream))
             second = dict(first)
             second["页面/入口"] = "另一个页面"
+            second["交互实例ID"] = "INT-002"
+            second["证据定位"] = "文本证据第2行：另一个页面同名按钮"
             self.write_csv_rows(discovery_path, [first, second])
             with self.assertRaisesRegex(ValueError, "missing interactive page elements"):
                 TOOLS.validate_batch_artifacts(run_dir, "plan")
@@ -602,6 +697,8 @@ class ArchitectureSafetyTests(unittest.TestCase):
                         "预期/观察行为": "保存成功并持久化回显",
                         "测试数据来源": "AI_TEST_EVIDENCE_001",
                         "证据路径": relative_evidence,
+                        "证据定位": "文本证据第1行：保存后持久化回显",
+                        "覆盖状态": "已覆盖",
                     }
                 ],
             )
@@ -748,12 +845,6 @@ class ArchitectureSafetyTests(unittest.TestCase):
             discovery.update({"是否已生成用例": "是", "关联用例ID": ",".join(ids), "覆盖状态": "已覆盖"})
             self.write_csv_rows(discovery_path, [discovery])
 
-            lifecycle_path = run_dir / "test-data-lifecycle.csv"
-            with lifecycle_path.open("r", encoding="utf-8-sig", newline="") as stream:
-                lifecycle = next(csv.DictReader(stream))
-            lifecycle["创建步骤关联用例"] = ids[0]
-            self.write_csv_rows(lifecycle_path, [lifecycle])
-
             status_path = run_dir / "batch-status.csv"
             with status_path.open("r", encoding="utf-8-sig", newline="") as stream:
                 status = next(csv.DictReader(stream))
@@ -869,7 +960,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
                     "测试设计方向": "编辑危险操作状态并验证保存回显和实际生效",
                     "操作类别": "编辑",
                     "验证要求": "回显,持久化,实际生效",
-                    "数据策略": "本次创建测试数据",
+                    "数据策略": "用户提供测试数据",
                     "是否涉及CRUD闭环": "是",
                     "应生成用例数": "5",
                     "计划用例ID": ",".join(f"TC-EDIT-{index:03d}" for index in range(1, 6)),
@@ -886,6 +977,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
                     "测试数据来源": "AI_TEST_EDIT_001",
                     "预期/观察行为": "编辑成功并持久化回显",
                     "结果分支/后续状态": "依赖功能按编辑后值实际生效",
+                    "预期结果锚点": "编辑后值实际生效",
                     "证据路径": "artifacts/screenshots/edit-success.txt",
                 }
             )
@@ -910,7 +1002,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 "清理状态": "待清理",
             }
             self.write_csv_rows(lifecycle_path, [lifecycle])
-            with self.assertRaisesRegex(ValueError, "record every mutating item separately"):
+            with self.assertRaisesRegex(ValueError, "no persisted mutation owner"):
                 TOOLS.validate_batch_artifacts(run_dir, "plan")
             lifecycle["关联页面/入口"] = "风险页面"
             self.write_csv_rows(lifecycle_path, [lifecycle])
@@ -991,6 +1083,11 @@ class ArchitectureSafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must be a JSON object"):
                 TOOLS.validate_batch_artifacts(run_dir, "cases")
             manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False), encoding="utf-8")
+            discovery_path = run_dir / "page-discovery.csv"
+            with discovery_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                discovery = next(csv.DictReader(stream))
+            discovery.update({"是否已生成用例": "是", "关联用例ID": ",".join(ids)})
+            self.write_csv_rows(discovery_path, [discovery])
             self.write_valid_sheet_files(data_dir)
             (data_dir / "overview.json").write_text('[{"错误字段":"正式数据"}]', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "exact target Sheet headers"):

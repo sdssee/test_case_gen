@@ -4,7 +4,7 @@
 
 ## 版本
 
-- framework_version: 2.2.0
+- framework_version: 2.3.0
 - asset_schema_version: 2.0.0
 
 ## 升级类型
@@ -53,7 +53,7 @@
 
 ## 升级后校验
 
-2.2.0 增加逐选项实探账本、页面可验证问题自动退回 discovery、跨分片重复正文与标题参数门禁、JSON/正式表/导入表逐字段一致性、计划功能点防串位、临时选择/取消误判拦截、`batch-scope.json` 产品范围固化和 catalog 空文档/产品冲突校验。产品事实 schema 仍为 2.0.0；既有批次继续执行前使用 `init-batch-run --resume --product-name "<原产品名>"` 补齐新账本与 scope，不批量改写历史事实。
+2.3.0 新增独立 `page-element-inventory.csv`，并为 discovery、逐选项、元素计划和生命周期增加稳定 `交互实例ID`；逐选项新增 `预期结果锚点`，生命周期按同一测试数据 ID 与创建 owner 用例绑定。证据必须是当前 run-dir `artifacts/` 内非空文件，静态截图按内容哈希去重，复制改名不能复用。同时增加未执行/数据不足退回 discovery、折叠测试实例编号后步骤和预期分别唯一、确定性 oracle、实探→计划→用例精确归属、状态分类计数派生、功能点单区块、001..N 非空连续分片、JSON→正式表→导入表确定性字段逐行有序一致，以及聚合/补丁脚本膨胀拦截。既有批次继续执行前使用 `init-batch-run --resume --product-name "<原产品名>"` 生成备份并补充空模板/空列；迁移不会伪造 inventory、实例 ID、结果锚点或证据，必须重新独立盘点、补录并把真实证据迁入当前 artifacts 后复核。产品事实 schema 仍为 2.0.0。
 
 外网生成升级包：
 

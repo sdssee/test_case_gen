@@ -715,6 +715,7 @@ def main() -> int:
     batch_plan_template = batch_templates_dir / "batch-plan-template.md"
     batch_status_template = batch_templates_dir / "batch-status-template.csv"
     batch_review_template = batch_templates_dir / "batch-review-template.md"
+    page_element_inventory_template = batch_templates_dir / "page-element-inventory-template.csv"
     page_discovery_template = batch_templates_dir / "page-discovery-template.csv"
     selection_option_observations_template = batch_templates_dir / "selection-option-observations-template.csv"
     element_case_plan_template = batch_templates_dir / "element-case-plan-template.csv"
@@ -725,6 +726,7 @@ def main() -> int:
         batch_plan_template,
         batch_status_template,
         batch_review_template,
+        page_element_inventory_template,
         page_discovery_template,
         selection_option_observations_template,
         element_case_plan_template,
@@ -747,6 +749,17 @@ def main() -> int:
         batch_status_rows = list(csv.reader(fp))
     if len(batch_status_rows) < 2 or len(batch_status_rows[1]) != len(batch_status_rows[0]):
         fail("batch-status-template.csv sample row must have the same column count as its header")
+
+    expected_page_element_inventory_header = (
+        "批次ID,最小标题路径,页面/入口,角色/权限,数据状态,交互实例ID,采集快照ID,元素指纹,元素名称/文案,元素类型,交互方式,"
+        "可交互状态,DOM/可访问性定位,发现来源,证据路径,证据定位,备注"
+    )
+    if read_text(page_element_inventory_template).splitlines()[0] != expected_page_element_inventory_header:
+        fail("page-element-inventory-template.csv header changed unexpectedly")
+    with page_element_inventory_template.open("r", encoding="utf-8-sig", newline="") as fp:
+        inventory_rows = list(csv.reader(fp))
+    if len(inventory_rows) < 2 or len(inventory_rows[1]) != len(inventory_rows[0]):
+        fail("page-element-inventory-template.csv sample row must have the same column count as its header")
 
     required_markers = [
         "正式测试设计",
@@ -1155,8 +1168,8 @@ def main() -> int:
     assert_contains(batch_review_template, ["批次执行复盘", "页面数", "元素总数", "导入文件路径", "最终交付约束", "不得重新生成各批完整用例"])
     expected_page_discovery_header = (
         "批次ID,一级模块,二级菜单,三级菜单/页面域,最小标题路径,页面/入口,菜单路径/URL,发现方式,角色/权限,数据状态,"
-        "元素名称/文案,元素类型,交互方式,适用DFX维度,适用DFX场景,选项取值/输入值,联动/依赖变化,结果分支/后续状态,完整点击路径,预期/观察行为,业务依据/规则来源,测试数据来源,"
-        "是否已生成用例,关联用例ID,覆盖状态,未覆盖/待确认原因,证据路径,备注"
+        "交互实例ID,元素名称/文案,元素类型,交互方式,适用DFX维度,适用DFX场景,选项取值/输入值,联动/依赖变化,结果分支/后续状态,完整点击路径,预期/观察行为,操作步骤锚点,预期结果锚点,业务依据/规则来源,测试数据来源,"
+        "是否已生成用例,关联用例ID,覆盖状态,未覆盖/待确认原因,证据路径,证据定位,备注"
     )
     actual_page_discovery_header = read_text(page_discovery_template).splitlines()[0]
     if actual_page_discovery_header != expected_page_discovery_header:
@@ -1166,8 +1179,8 @@ def main() -> int:
     if len(page_discovery_rows) < 2 or len(page_discovery_rows[1]) != len(page_discovery_rows[0]):
         fail("page-discovery-template.csv sample row must have the same column count as its header")
     expected_selection_option_observations_header = (
-        "批次ID,最小标题路径,页面/入口,元素名称/文案,元素类型,选项值,选项序号,可用选项总数,选项集合类型,"
-        "是否实际选择,选择前状态,选择后页面变化,联动/依赖变化,结果分支/后续状态,恢复/清空结果,覆盖策略,"
+        "批次ID,最小标题路径,交互实例ID,页面/入口,元素名称/文案,元素类型,选项值,选项序号,可用选项总数,选项集合类型,"
+        "是否实际选择,选择前状态,选择后页面变化,联动/依赖变化,结果分支/后续状态,预期结果锚点,恢复/清空结果,覆盖策略,"
         "证据路径,证据定位,阻塞原因,关联用例ID,备注"
     )
     if read_text(selection_option_observations_template).splitlines()[0] != expected_selection_option_observations_header:
@@ -1180,7 +1193,7 @@ def main() -> int:
     ):
         fail("selection-option-observations-template.csv sample row must have the same column count as its header")
     expected_element_case_plan_header = (
-        "批次ID,最小标题路径,页面/入口,功能点,元素名称/文案,元素类型,交互方式,业务路径,数据状态,"
+        "批次ID,最小标题路径,交互实例ID,页面/入口,功能点,元素名称/文案,元素类型,交互方式,业务路径,数据状态,"
         "适用DFX维度,适用DFX场景,测试设计方向,应生成用例数,计划用例ID,实际用例ID,"
         "操作类别,验证要求,数据策略,执行状态,是否必须真实执行,是否涉及配置生效,是否涉及CRUD闭环,未生成原因,备注"
     )
@@ -1191,7 +1204,7 @@ def main() -> int:
     if len(element_case_plan_rows) < 2 or len(element_case_plan_rows[1]) != len(element_case_plan_rows[0]):
         fail("element-case-plan-template.csv sample row must have the same column count as its header")
     expected_test_data_lifecycle_header = (
-        "批次ID,最小标题路径,关联页面/入口,修改项/元素,测试数据ID/名称,数据类型,创建入口,创建步骤关联用例,创建结果,查看结果,"
+        "批次ID,最小标题路径,交互实例ID,关联页面/入口,修改项/元素,测试数据ID/名称,数据类型,创建入口,创建步骤关联用例,创建结果,查看结果,"
         "编辑前值,编辑后值,编辑结果,保存后回显,实际生效结果,配置生效验证点,删除取消结果,删除确认结果,清理状态,保留原因,备注"
     )
     if read_text(test_data_lifecycle_template).splitlines()[0] != expected_test_data_lifecycle_header:
@@ -1325,6 +1338,34 @@ def main() -> int:
     assert_contains(repo_root / ".codebuddy" / "rules" / "test-design-rule.md", ["docs/test-design/rules/dfx-test-strategy.md"])
     assert_contains(repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc", ["docs/test-design/rules/dfx-test-strategy.md"])
     assert_contains(repo_root / "docs" / "test-design" / "excel-template-spec.md", ["DFX 12 维度", "dfx-test-strategy.md"])
+    assert_contains(
+        repo_root / "docs" / "test-design" / "rules" / "page-discovery.md",
+        ["page-element-inventory.csv", "交互实例ID", "artifacts/", "非空文件", "改名", "双向一一对应"],
+    )
+    assert_contains(
+        repo_root / "docs" / "test-design" / "rules" / "batch-run.md",
+        ["page-element-inventory.csv", "交互实例ID", "1–10 条", "连续无断号", "预期结果锚点"],
+    )
+    assert_contains(
+        repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
+        ["page-element-inventory.csv", "交互实例ID", "非空证据文件", "测试数据 ID", "创建 owner"],
+    )
+    assert_contains(
+        repo_root / "docs" / "test-assets" / "batch-runs" / "templates" / "batch-plan-template.md",
+        ["page-element-inventory.csv", "交互实例ID", "非空证据文件", "内容相同"],
+    )
+    assert_contains(
+        repo_root / "docs" / "test-design" / "rules" / "case-design.md",
+        ["1–10 条", "连续无断号", "非空", "异常、边界、权限/状态、数据一致性用例数", "确定性映射字段"],
+    )
+    assert_contains(
+        repo_root / "docs" / "test-design" / "rules" / "import-template.md",
+        ["测试用例序号", "测试类型", "测试用例级别", "执行方式", "测试用例说明", "标签", "备注", "逐行"],
+    )
+    assert_contains(
+        repo_root / "docs" / "UPGRADE.md",
+        ["page-element-inventory.csv", "交互实例ID", "重新独立盘点", "非空文件", "001"],
+    )
     dfx_pre_eval_markers = [
         "正式写测试用例前",
         "DFX 覆盖评估",
@@ -1372,10 +1413,13 @@ def main() -> int:
             "assert_dropdown_validations_cover_rows",
             "MULTI_LEAF_SEPARATORS",
             "BATCH_EXPECTED_HEADERS",
+            "PAGE_ELEMENT_INVENTORY_EXPECTED_HEADERS",
             "PAGE_DISCOVERY_EXPECTED_HEADERS",
+            "SELECTION_OPTION_OBSERVATIONS_EXPECTED_HEADERS",
             "ELEMENT_CASE_PLAN_EXPECTED_HEADERS",
             "TEST_DATA_LIFECYCLE_EXPECTED_HEADERS",
             "validate_element_case_plan_and_lifecycle",
+            "validate_completed_batch_workbook_semantics",
             "validate_sheet_split_artifacts",
             "csv_rows_with_exact_header",
             "assert_no_sensitive_values",

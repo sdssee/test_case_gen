@@ -99,7 +99,7 @@ def validate_delivery_receipt(
 def derive_pipeline_status(run_dir: Path) -> dict[str, object]:
     run_dir = run_dir.resolve()
     for phase, state, action in [
-        ("discovery", "DISCOVERY_REQUIRED", "继续默认全量深探并补全 page-discovery.csv"),
+        ("discovery", "DISCOVERY_REQUIRED", "继续默认全量深探，先补全 page-element-inventory.csv，再按交互实例ID补全 page-discovery.csv"),
         ("plan", "PLAN_REQUIRED", "补全结构化元素计划与逐修改项生命周期证据"),
     ]:
         try:

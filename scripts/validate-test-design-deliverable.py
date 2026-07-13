@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import posixpath
 import re
 import sys
@@ -12,17 +14,33 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from test_design.fact_store import validate_catalog
+from test_design.paths import module_names
 from test_design.contracts.function_cases import (
     FUNCTION_CASE_FORBIDDEN_FIELDS,
     FUNCTION_CASE_PART_RE,
     FUNCTION_CASE_REQUIRED_FIELDS,
     MAX_FUNCTION_CASES_PER_PART,
 )
-from test_design.validators.batch_ledgers import validate_lifecycle_rows, validate_operation_plan_rows
+from test_design.validators.batch_ledgers import (
+    validate_discovery_rows,
+    validate_lifecycle_rows,
+    validate_operation_plan_rows,
+    validate_page_element_inventory,
+    validate_selection_case_grounding,
+    validate_selection_option_rows,
+    validate_selection_plan_links,
+)
 from test_design.validators.case_collection import (
+    derived_case_quality_counts,
     transfer_counter,
     validate_case_collection,
     validate_case_field_parity,
+    validate_case_order_parity,
+    validate_contiguous_function_point_groups,
+    validate_discovery_plan_case_alignment,
+    validate_function_point_aware_shards,
+    validate_plan_case_order_alignment,
+    validate_plan_function_point_alignment,
 )
 
 NS = {
@@ -216,7 +234,10 @@ NON_MUTATING_BLOCK_MARKERS = ["禁用", "不可点击", "置灰", "校验失败"
 MIN_FUNCTION_CASES_PER_GENERATED_ELEMENT = 0.7
 
 IMPORT_REQUIRED_FIELDS = ["一级模块名称", "二级模块名称", "三级模块名称", "测试用例名称", "测试类型", "测试用例级别", "执行方式"]
-IMPORT_AUTO_FIELDS = ["测试用例系统编号", "作者"]
+IMPORT_AUTO_FIELDS = [
+    "一级模块系统编号", "二级模块系统编号", "三级模块系统编号", "四级模块系统编号", "五级模块系统编号",
+    "其他模块系统编号", "其他模块名称", "测试用例系统编号", "维护人", "作者",
+]
 IMPORT_MULTILINE_FIELDS = ["测试步骤描述", "测试步骤预期结果", "前置条件", "测试用例说明", "备注"]
 
 FORMAL_MULTILINE_FIELDS = {
@@ -233,6 +254,9 @@ PAGE_DISCOVERY_REQUIRED_HEADERS = [
     "批次ID",
     "最小标题路径",
     "页面/入口",
+    "角色/权限",
+    "数据状态",
+    "交互实例ID",
     "菜单路径/URL",
     "元素名称/文案",
     "元素类型",
@@ -243,9 +267,25 @@ PAGE_DISCOVERY_REQUIRED_HEADERS = [
     "联动/依赖变化",
     "结果分支/后续状态",
     "完整点击路径",
+    "操作步骤锚点",
+    "预期结果锚点",
     "是否已生成用例",
     "关联用例ID",
     "覆盖状态",
+    "证据路径",
+    "证据定位",
+]
+
+PAGE_ELEMENT_INVENTORY_EXPECTED_HEADERS = [
+    "批次ID", "最小标题路径", "页面/入口", "角色/权限", "数据状态", "交互实例ID", "采集快照ID", "元素指纹", "元素名称/文案", "元素类型",
+    "交互方式", "可交互状态", "DOM/可访问性定位", "发现来源", "证据路径", "证据定位", "备注",
+]
+
+SELECTION_OPTION_OBSERVATIONS_EXPECTED_HEADERS = [
+    "批次ID", "最小标题路径", "交互实例ID", "页面/入口", "元素名称/文案", "元素类型", "选项值",
+    "选项序号", "可用选项总数", "选项集合类型", "是否实际选择", "选择前状态", "选择后页面变化",
+    "联动/依赖变化", "结果分支/后续状态", "预期结果锚点", "恢复/清空结果", "覆盖策略", "证据路径",
+    "证据定位", "阻塞原因", "关联用例ID", "备注",
 ]
 
 PAGE_DISCOVERY_EXPECTED_HEADERS = [
@@ -259,6 +299,7 @@ PAGE_DISCOVERY_EXPECTED_HEADERS = [
     "发现方式",
     "角色/权限",
     "数据状态",
+    "交互实例ID",
     "元素名称/文案",
     "元素类型",
     "交互方式",
@@ -269,6 +310,8 @@ PAGE_DISCOVERY_EXPECTED_HEADERS = [
     "结果分支/后续状态",
     "完整点击路径",
     "预期/观察行为",
+    "操作步骤锚点",
+    "预期结果锚点",
     "业务依据/规则来源",
     "测试数据来源",
     "是否已生成用例",
@@ -276,12 +319,14 @@ PAGE_DISCOVERY_EXPECTED_HEADERS = [
     "覆盖状态",
     "未覆盖/待确认原因",
     "证据路径",
+    "证据定位",
     "备注",
 ]
 
 ELEMENT_CASE_PLAN_EXPECTED_HEADERS = [
     "批次ID",
     "最小标题路径",
+    "交互实例ID",
     "页面/入口",
     "功能点",
     "元素名称/文案",
@@ -309,6 +354,7 @@ ELEMENT_CASE_PLAN_EXPECTED_HEADERS = [
 TEST_DATA_LIFECYCLE_EXPECTED_HEADERS = [
     "批次ID",
     "最小标题路径",
+    "交互实例ID",
     "关联页面/入口",
     "修改项/元素",
     "测试数据ID/名称",
@@ -872,6 +918,10 @@ def parse_ids(text: str) -> set[str]:
     return {item.strip() for item in re.split(r"[,，;；\s]+", text) if item.strip()}
 
 
+def parse_id_sequence(text: str) -> list[str]:
+    return [item.strip() for item in re.split(r"[,，;；、/\s]+", text or "") if item.strip()]
+
+
 def split_dfx_values(text: str) -> list[str]:
     return [item.strip() for item in re.split(r"[,，;；、/\\\s]+", text or "") if item.strip()]
 
@@ -985,6 +1035,45 @@ def normalize(value: str) -> str:
 
 def normalized_key(*values: str) -> tuple[str, ...]:
     return tuple(normalize(value) for value in values)
+
+
+def resolved_run_evidence_file(run_dir: Path, value: str) -> Path | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    candidates = [path] if path.is_absolute() else [run_dir / path, run_dir.parents[3] / path]
+    allowed_root = (run_dir / "artifacts").resolve()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+            resolved.relative_to(allowed_root)
+        except (OSError, ValueError):
+            continue
+        if resolved.is_file() and resolved.stat().st_size > 0:
+            return resolved
+    return None
+
+
+def run_evidence_fingerprint(run_dir: Path, value: str) -> str | None:
+    path = resolved_run_evidence_file(run_dir, value)
+    if path is None:
+        return None
+    digest = hashlib.sha256()
+    prefix = b""
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            if not prefix:
+                prefix = chunk[:32]
+            digest.update(chunk)
+    lowered = prefix.lstrip().lower()
+    is_image = bool(
+        re.search(r"\.(?:png|jpe?g|gif|bmp|webp|svg|tiff?)$", path.name, re.IGNORECASE)
+        or prefix.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"BM", b"II*\x00", b"MM\x00*"))
+        or (prefix.startswith(b"RIFF") and prefix[8:12] == b"WEBP")
+        or lowered.startswith((b"<svg", b"<?xml")) and b"<svg" in lowered
+    )
+    return f"{'image' if is_image else 'file'}:{digest.hexdigest()}"
 
 
 def csv_row_dicts(path: Path, required: list[str], label: str) -> list[dict[str, str]]:
@@ -1172,6 +1261,7 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
 
     try:
         validate_case_collection(function_rows, label="功能测试用例")
+        validate_contiguous_function_point_groups(function_rows, label="功能测试用例")
     except ValueError as exc:
         fail(str(exc))
 
@@ -1240,7 +1330,11 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
     }
 
 
-def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, object]) -> None:
+def validate_import_workbook(
+    import_workbook: Path,
+    workbook_data: dict[str, object],
+    expected_module_path: str | None = None,
+) -> None:
     if not import_workbook.exists():
         fail(f"Import workbook not found: {import_workbook}")
     with zipfile.ZipFile(import_workbook) as zf:
@@ -1303,6 +1397,74 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
         if row.get("前置条件"):
             assert_numbered(row["前置条件"], f"Import workbook row {index} 前置条件")
 
+    function_rows_for_mapping = workbook_data["function_rows"]
+    assert isinstance(function_rows_for_mapping, list)
+    if len(function_rows_for_mapping) != len(rows):
+        fail(
+            "Import workbook row count must equal formal function cases before deterministic field mapping: "
+            f"{len(rows)} != {len(function_rows_for_mapping)}"
+        )
+
+    def expected_case_level(priority: str) -> str:
+        value = (priority or "").upper()
+        if value in {"L1", "L2", "L3", "L4"}:
+            return value
+        if value in {"P0", "P1", "高", "高优先级"}:
+            return "L1"
+        if value in {"P2", "中", "中优先级"}:
+            return "L2"
+        if value in {"P3", "低", "低优先级"}:
+            return "L3"
+        return "L2"
+
+    def expected_test_type(value: str) -> str:
+        if value in IMPORT_ALLOWED_VALUES["测试类型"]:
+            return value
+        for marker, mapped in [
+            ("性能", "性能规格测试"), ("兼容", "兼容性测试"), ("安全", "安全性测试"),
+            ("权限", "安全性测试"), ("可靠", "可靠性测试"), ("稳定", "可靠性测试"),
+            ("易用", "易用性测试"), ("维护", "可维护性测试"),
+        ]:
+            if marker in (value or ""):
+                return mapped
+        return "功能测试"
+
+    expected_modules = module_names(expected_module_path) if expected_module_path else None
+    for position, (case, imported) in enumerate(zip(function_rows_for_mapping, rows), start=1):
+        dimension = case.get("DFX维度", "")
+        scenario = case.get("DFX场景", "")
+        tags = ";".join(
+            part for part in [case.get("模块", ""), case.get("功能点", ""), dimension, scenario] if part
+        )
+        dfx_note = f"DFX覆盖：{dimension}-{scenario}" if dimension and scenario else ""
+        remarks = "\n".join(part for part in [dfx_note, case.get("备注", "")] if part)
+        automation_note = f"{case.get('备注', '')}{case.get('是否适合自动化', '')}"
+        execution = "自动化" if (
+            "自动化" in automation_note
+            and any(marker in automation_note for marker in ["自动化资产", "脚本", "流水线", "API自动化", "UI自动化", "已实现"])
+        ) else "手动"
+        expected = {
+            "测试用例序号": str(position),
+            "测试用例名称": case.get("用例标题", ""),
+            "测试步骤描述": case.get("操作步骤", ""),
+            "测试步骤预期结果": case.get("预期结果", ""),
+            "测试类型": expected_test_type(case.get("测试类型", "")),
+            "测试用例级别": expected_case_level(case.get("优先级", "")),
+            "执行方式": execution,
+            "测试用例说明": case.get("功能点", ""),
+            "前置条件": case.get("前置条件", ""),
+            "标签": tags,
+            "备注": remarks,
+        }
+        if expected_modules is not None:
+            expected.update({f"{level}级模块名称": expected_modules[level - 1] for level in range(1, 6)})
+        changed = [field for field, value in expected.items() if imported.get(field, "") != value]
+        if changed:
+            fail(
+                f"Import workbook data row {position} deterministic mapping differs from formal function case "
+                f"{case.get('用例 ID', '')}: {changed}"
+            )
+
     try:
         validate_case_collection(
             rows,
@@ -1331,6 +1493,25 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
                 "预期结果": "测试步骤预期结果",
                 "前置条件": "前置条件",
             },
+        )
+        validate_case_order_parity(
+            function_rows,
+            rows,
+            source_field_map={
+                "用例标题": "用例标题",
+                "操作步骤": "操作步骤",
+                "预期结果": "预期结果",
+                "前置条件": "前置条件",
+            },
+            target_field_map={
+                "用例标题": "测试用例名称",
+                "操作步骤": "测试步骤描述",
+                "预期结果": "测试步骤预期结果",
+                "前置条件": "前置条件",
+            },
+            fields=["用例标题", "操作步骤", "预期结果", "前置条件"],
+            source_label="功能测试用例 Sheet",
+            target_label="Import workbook",
         )
     except ValueError as exc:
         fail(str(exc))
@@ -1632,6 +1813,7 @@ def validate_batch_run_directory_from_page_discovery(page_discovery: Path) -> Pa
         "batch-plan.md",
         "batch-status.csv",
         "batch-review.md",
+        "page-element-inventory.csv",
         "page-discovery.csv",
         "selection-option-observations.csv",
         "element-case-plan.csv",
@@ -1674,7 +1856,20 @@ def is_relative_to_path(path: Path, parent: Path) -> bool:
         return False
 
 
+def batch_scope_module_path(batch_status: Path) -> str:
+    scope_path = batch_status.resolve().parent / "batch-scope.json"
+    try:
+        scope = json.loads(scope_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"batch-scope.json is missing or invalid beside batch-status.csv: {exc}")
+    module_path = str(scope.get("module_path", "")).strip() if isinstance(scope, dict) else ""
+    if not module_path:
+        fail("batch-scope.json must contain module_path for deterministic import module mapping")
+    return module_path
+
+
 def validate_batch_import_workbooks(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
+    expected_module_path = batch_scope_module_path(batch_status)
     for row in batch_rows:
         if not is_passed_batch(row):
             continue
@@ -1703,7 +1898,40 @@ def validate_batch_import_workbooks(batch_status: Path, batch_rows: list[dict[st
                 f"batch {batch_id} 导入文件路径 must point to internal import archive under docs/test-assets/imports/: {import_raw}"
             )
         archive_data = validate_workbook(archive_path)
-        validate_import_workbook(import_path, archive_data)
+        validate_import_workbook(import_path, archive_data, expected_module_path)
+
+
+def validate_completed_batch_workbook_semantics(
+    workbook_data: dict[str, object],
+    batch_rows: list[dict[str, str]],
+) -> None:
+    if not any(is_passed_batch(row) for row in batch_rows):
+        return
+    function_rows = workbook_data.get("function_rows")
+    coverage_rows = workbook_data.get("coverage_rows")
+    if not isinstance(function_rows, list) or not isinstance(coverage_rows, list):
+        fail("formal workbook data is incomplete for completed-batch semantic validation")
+    derived_counts = derived_case_quality_counts(function_rows)
+    for row in batch_rows:
+        if not is_passed_batch(row):
+            continue
+        mismatches = {
+            field: (positive_int(row.get(field, "0"), field, row.get("批次ID", "")), expected)
+            for field, expected in derived_counts.items()
+            if positive_int(row.get(field, "0"), field, row.get("批次ID", "")) != expected
+        }
+        if mismatches:
+            fail(f"batch {row.get('批次ID', '')} quality-direction counts differ from formal function cases: {mismatches}")
+    pending = [
+        f"row {index} ({row.get('页面/入口', '')}/{row.get('元素名称/文案', '')})"
+        for index, row in enumerate(coverage_rows, start=2)
+        if row.get("覆盖状态", "").strip() != "已覆盖"
+    ]
+    if pending:
+        fail(
+            "completed batch cannot retain pending/not-covered rows in formal 页面元素覆盖清单: "
+            f"{pending[:10]}"
+        )
 
 
 def validate_batch_review(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
@@ -1819,6 +2047,15 @@ def validate_sheet_split_artifacts(
     scripts_dir = run_dir / "artifacts" / "scripts"
     if not data_dir.exists():
         fail(f"artifacts/data directory is required for sheet-split generation: {data_dir}")
+    misplaced_python_helpers = [
+        path for path in (run_dir / "artifacts").rglob("*.py")
+        if scripts_dir not in path.parents
+    ]
+    if misplaced_python_helpers:
+        fail(
+            "Generated Python helpers must stay under artifacts/scripts and must not be hidden beside data/evidence: "
+            f"{misplaced_python_helpers[:10]}"
+        )
     required_data_files = [
         "overview.json",
         "requirements.json",
@@ -1844,13 +2081,21 @@ def validate_sheet_split_artifacts(
     bad_part_names = [str(name) for name in manifest_parts if not FUNCTION_CASE_PART_RE.match(str(name))]
     if bad_part_names:
         fail(f"function_cases_manifest.json contains invalid shard names: {bad_part_names[:10]}")
+    expected_part_names = [f"function_cases_part_{index:03d}.json" for index in range(1, len(manifest_parts) + 1)]
+    actual_part_names = [str(name) for name in manifest_parts]
+    if actual_part_names != expected_part_names:
+        fail(
+            "function_cases_manifest.json parts must be unique, sequential, and ordered as 001..N; "
+            f"expected={expected_part_names}, actual={actual_part_names}"
+        )
     function_parts = [data_dir / str(name) for name in manifest_parts]
     stale_parts = sorted(path.name for path in data_dir.glob("function_cases_part_*.json") if path.name not in set(map(str, manifest_parts)))
     if stale_parts:
         fail(f"artifacts/data contains stale function case shards not listed in function_cases_manifest.json: {stale_parts[:10]}")
     actual_function_case_count = 0
     manifest_function_rows: list[dict[str, object]] = []
-    for part_index, part in enumerate(function_parts):
+    shard_function_rows: list[list[dict[str, object]]] = []
+    for part in function_parts:
         try:
             data = json.loads(part.read_text(encoding="utf-8-sig"))
         except Exception as exc:
@@ -1858,11 +2103,10 @@ def validate_sheet_split_artifacts(
         cases = data.get("cases") if isinstance(data, dict) else data
         if not isinstance(cases, list):
             fail(f"{part} must contain a list or an object with cases list")
-        if len(cases) > MAX_FUNCTION_CASES_PER_PART:
-            fail(f"{part} contains more than {MAX_FUNCTION_CASES_PER_PART} function cases: {len(cases)}")
-        if part_index < len(function_parts) - 1 and len(cases) != MAX_FUNCTION_CASES_PER_PART:
-            fail(f"{part} is not the final shard and must contain exactly {MAX_FUNCTION_CASES_PER_PART} function cases: {len(cases)}")
+        if not (1 <= len(cases) <= MAX_FUNCTION_CASES_PER_PART):
+            fail(f"{part} must contain 1..{MAX_FUNCTION_CASES_PER_PART} function cases: {len(cases)}")
         actual_function_case_count += len(cases)
+        current_shard_rows: list[dict[str, object]] = []
         for case_index, case in enumerate(cases, start=1):
             if not isinstance(case, dict):
                 fail(f"{part.name} case {case_index} must be an object")
@@ -1884,6 +2128,8 @@ def validate_sheet_split_artifacts(
             if not title.startswith(f"{function_point}-"):
                 fail(f"{part.name} case {case_index} 用例标题 must use 功能点-当前标题 format")
             manifest_function_rows.append(case)
+            current_shard_rows.append(case)
+        shard_function_rows.append(current_shard_rows)
     if isinstance(manifest_data, dict):
         if manifest_data.get("part_size") not in {None, MAX_FUNCTION_CASES_PER_PART}:
             fail(f"function_cases_manifest.json part_size must be {MAX_FUNCTION_CASES_PER_PART}: {manifest_data.get('part_size')}")
@@ -1894,10 +2140,25 @@ def validate_sheet_split_artifacts(
             )
     try:
         validate_case_collection(manifest_function_rows, label="function case manifest")
+        validate_contiguous_function_point_groups(manifest_function_rows, label="function case manifest")
+        validate_function_point_aware_shards(
+            shard_function_rows,
+            label="function case manifest",
+            max_per_shard=MAX_FUNCTION_CASES_PER_PART,
+        )
         if workbook_function_rows is not None:
             validate_case_field_parity(
                 manifest_function_rows,
                 workbook_function_rows,
+                fields=FUNCTION_CASE_REQUIRED_FIELDS,
+                source_label="function case manifest",
+                target_label="功能测试用例 Sheet",
+            )
+            validate_case_order_parity(
+                manifest_function_rows,
+                workbook_function_rows,
+                source_field_map={field: field for field in FUNCTION_CASE_REQUIRED_FIELDS},
+                target_field_map={field: field for field in FUNCTION_CASE_REQUIRED_FIELDS},
                 fields=FUNCTION_CASE_REQUIRED_FIELDS,
                 source_label="function case manifest",
                 target_label="功能测试用例 Sheet",
@@ -1963,23 +2224,28 @@ def validate_element_case_plan_and_lifecycle(
         batch_id = row.get("批次ID", "")
         if not row.get("最小标题路径"):
             fail(f"element-case-plan.csv row {index} must include 最小标题路径")
-        if not row.get("功能点") or not row.get("元素名称/文案"):
-            fail(f"element-case-plan.csv row {index} must include 功能点 and 元素名称/文案")
+        if not row.get("交互实例ID") or not row.get("功能点") or not row.get("元素名称/文案"):
+            fail(f"element-case-plan.csv row {index} must include 交互实例ID, 功能点 and 元素名称/文案")
         assert_dfx_mapping(row.get("适用DFX维度", ""), row.get("适用DFX场景", ""), f"element-case-plan.csv row {index}")
         expected_raw = row.get("应生成用例数", "")
         if not re.fullmatch(r"\d+", expected_raw or ""):
             fail(f"element-case-plan.csv row {index} 应生成用例数 must be a non-negative integer")
         expected_count = int(expected_raw)
-        actual_ids = parse_ids(row.get("实际用例ID", ""))
-        planned_ids = parse_ids(row.get("计划用例ID", ""))
+        actual_sequence = parse_id_sequence(row.get("实际用例ID", ""))
+        planned_sequence = parse_id_sequence(row.get("计划用例ID", ""))
+        actual_ids = set(actual_sequence)
+        planned_ids = set(planned_sequence)
         if expected_count > 0 and not (actual_ids or row.get("未生成原因")):
             fail(f"element-case-plan.csv row {index} expects cases but has neither 实际用例ID nor 未生成原因")
         if actual_ids:
             unknown = sorted(actual_ids - case_ids)
             if unknown:
                 fail(f"element-case-plan.csv row {index} references unknown 实际用例ID: {unknown}")
-            if planned_ids and not actual_ids <= planned_ids:
-                fail(f"element-case-plan.csv row {index} 实际用例ID must be included in 计划用例ID when planned IDs are filled")
+            if planned_sequence and actual_sequence != planned_sequence:
+                fail(
+                    f"element-case-plan.csv row {index} 实际用例ID must exactly preserve 计划用例ID order; "
+                    f"planned={planned_sequence}, actual={actual_sequence}"
+                )
             all_actual_ids.update(actual_ids)
         if row.get("是否涉及配置生效") == "是":
             configuration_case_ids.update(actual_ids)
@@ -2033,6 +2299,32 @@ def validate_element_case_plan_and_lifecycle(
     missing_lifecycle = sorted((mutation_case_ids | lifecycle_required_ids) - lifecycle_case_ids)
     if missing_lifecycle:
         fail(f"test-data-lifecycle.csv is missing lifecycle linkage for mutation/config cases: {missing_lifecycle[:10]}")
+
+    try:
+        validate_plan_function_point_alignment(plan_rows, case_rows, split_ids=parse_id_sequence)
+        validate_plan_case_order_alignment(plan_rows, case_rows, split_ids=parse_id_sequence)
+        validate_discovery_plan_case_alignment(
+            discovery_rows,
+            plan_rows,
+            case_rows,
+            split_ids=parse_id_sequence,
+        )
+        option_rows_all = csv_rows_with_exact_header(
+            run_dir / "selection-option-observations.csv",
+            SELECTION_OPTION_OBSERVATIONS_EXPECTED_HEADERS,
+            "selection-option-observations.csv",
+        )
+        option_rows = [row for row in option_rows_all if row.get("选项值") or row.get("元素名称/文案")]
+        validate_selection_option_rows(
+            discovery_rows,
+            option_rows,
+            lambda value: resolved_run_evidence_file(run_dir, value) is not None,
+            lambda value: run_evidence_fingerprint(run_dir, value),
+        )
+        validate_selection_plan_links(option_rows, plan_rows, parse_id_sequence)
+        validate_selection_case_grounding(option_rows, case_rows, parse_id_sequence)
+    except ValueError as exc:
+        fail(str(exc))
 
 
 def validate_product_map_sync(
@@ -2103,6 +2395,24 @@ def validate_product_map_sync(
     assert isinstance(function_case_count, int)
     assert isinstance(function_rows, list)
     run_dir = page_discovery.resolve().parent
+    inventory_rows = csv_rows_with_exact_header(
+        run_dir / "page-element-inventory.csv",
+        PAGE_ELEMENT_INVENTORY_EXPECTED_HEADERS,
+        "page-element-inventory.csv",
+    )
+    try:
+        validate_page_element_inventory(
+            [row for row in inventory_rows if row.get("元素指纹") or row.get("元素名称/文案")],
+            discovery_rows,
+            lambda value: resolved_run_evidence_file(run_dir, value) is not None,
+        )
+        validate_discovery_rows(
+            discovery_rows,
+            lambda value: resolved_run_evidence_file(run_dir, value) is not None,
+            lambda value: run_evidence_fingerprint(run_dir, value),
+        )
+    except ValueError as exc:
+        fail(str(exc))
     validate_sheet_split_artifacts(run_dir, function_rows)
     validate_element_case_plan_and_lifecycle(run_dir, discovery_rows, case_ids, function_rows)
 
@@ -2122,6 +2432,65 @@ def validate_product_map_sync(
     if len(product_elements) < len(workbook_elements):
         fail(f"product-map 页面元素地图 has fewer unique page elements than workbook 页面元素覆盖清单: {len(product_elements)} < {len(workbook_elements)}")
 
+    def coverage_key(row: dict[str, str]) -> tuple[str, str, str]:
+        return normalized_key(
+            row.get("页面/入口", ""),
+            row.get("元素名称/文案", ""),
+            row.get("元素类型", ""),
+        )
+
+    discovery_coverage: dict[tuple[str, str, str], set[str]] = {}
+    for row in discovery_rows:
+        if row.get("页面/入口") and row.get("元素名称/文案"):
+            discovery_coverage.setdefault(coverage_key(row), set()).update(parse_ids(row.get("关联用例ID", "")))
+
+    def unique_coverage_map(
+        source_rows: list[dict[str, str]],
+        id_field: str,
+        label: str,
+    ) -> dict[tuple[str, str, str], set[str]]:
+        result: dict[tuple[str, str, str], set[str]] = {}
+        for row in source_rows:
+            if not row.get("页面/入口") or not row.get("元素名称/文案"):
+                continue
+            key = coverage_key(row)
+            if key in result:
+                fail(f"{label} contains duplicate page-element identity: {key}")
+            result[key] = parse_ids(row.get(id_field, ""))
+        return result
+
+    workbook_coverage = unique_coverage_map(coverage_rows, "覆盖用例 ID", "Workbook 页面元素覆盖清单")
+    discovery_leaf_paths = {
+        normalize(row.get("最小标题路径", ""))
+        for row in discovery_rows
+        if row.get("最小标题路径")
+    }
+    scoped_product_rows = [
+        row for row in product_page_rows
+        if any(normalize(row.get("模块", "")).endswith(leaf) for leaf in discovery_leaf_paths)
+    ]
+    product_coverage = unique_coverage_map(scoped_product_rows, "关联用例ID", "product-map 页面元素地图")
+    for label, actual, reject_unexpected in [
+        ("Workbook 页面元素覆盖清单", workbook_coverage, True),
+        ("product-map 页面元素地图", product_coverage, False),
+    ]:
+        missing_keys = sorted(set(discovery_coverage) - set(actual))
+        unexpected_keys = sorted(set(actual) - set(discovery_coverage)) if reject_unexpected else []
+        if missing_keys or unexpected_keys:
+            fail(
+                f"{label} element identities must exactly match page-discovery.csv; "
+                f"missing={missing_keys[:10]}, unexpected={unexpected_keys[:10]}"
+            )
+        mismatched_links = [
+            key for key, linked_ids in discovery_coverage.items()
+            if actual.get(key, set()) != linked_ids
+        ]
+        if mismatched_links:
+            fail(
+                f"{label} linked case sets must exactly match page-discovery.csv for every element: "
+                f"{mismatched_links[:10]}"
+            )
+
     passed_batches = {
         row.get("批次ID", ""): row.get("最小标题路径", "").strip()
         for row in (batch_rows or [])
@@ -2130,13 +2499,14 @@ def validate_product_map_sync(
     passed_batch_numbers = {
         row.get("批次ID", ""): {
             field: positive_int(row.get(field, ""), field, row.get("批次ID", ""))
-            for field in ["元素总数", "已覆盖元素数"]
+            for field in ["页面数", "元素总数", "已覆盖元素数"]
         }
         for row in (batch_rows or [])
         if is_passed_batch(row)
     }
     discovery_count_by_batch: dict[str, int] = {}
     generated_count_by_batch: dict[str, int] = {}
+    discovery_pages_by_batch: dict[str, set[str]] = {}
     pagination_rows_by_page: dict[tuple[str, str], list[dict[str, str]]] = {}
 
     for index, row in enumerate(discovery_rows, start=2):
@@ -2157,6 +2527,8 @@ def validate_product_map_sync(
         if not page or not element:
             fail(f"page-discovery.csv row {index} must include 页面/入口 and 元素名称/文案")
         discovery_count_by_batch[batch_id] = discovery_count_by_batch.get(batch_id, 0) + 1
+        if page:
+            discovery_pages_by_batch.setdefault(batch_id, set()).add(page.strip())
         if row.get("是否已生成用例", "") == "是":
             generated_count_by_batch[batch_id] = generated_count_by_batch.get(batch_id, 0) + 1
             assert_dfx_mapping(
@@ -2237,13 +2609,21 @@ def validate_product_map_sync(
     for batch_id, numbers in passed_batch_numbers.items():
         discovered = discovery_count_by_batch.get(batch_id, 0)
         generated = generated_count_by_batch.get(batch_id, 0)
-        if discovered < numbers["元素总数"]:
+        page_count = len(discovery_pages_by_batch.get(batch_id, set()))
+        if page_count != numbers["页面数"]:
             fail(
-                f"page-discovery.csv has fewer element-level rows for {batch_id} than batch-status.csv 元素总数: {discovered} < {numbers['元素总数']}"
+                f"page-discovery.csv distinct pages for {batch_id} must exactly equal batch-status.csv 页面数: "
+                f"{page_count} != {numbers['页面数']}"
             )
-        if generated < numbers["已覆盖元素数"]:
+        if discovered != numbers["元素总数"]:
             fail(
-                f"page-discovery.csv has fewer generated coverage rows for {batch_id} than batch-status.csv 已覆盖元素数: {generated} < {numbers['已覆盖元素数']}"
+                f"page-discovery.csv element-level rows for {batch_id} must exactly equal batch-status.csv 元素总数: "
+                f"{discovered} != {numbers['元素总数']}"
+            )
+        if generated != numbers["已覆盖元素数"]:
+            fail(
+                f"page-discovery.csv generated coverage rows for {batch_id} must exactly equal batch-status.csv "
+                f"已覆盖元素数: {generated} != {numbers['已覆盖元素数']}"
             )
         minimum_cases = max(1, int(numbers["已覆盖元素数"] * MIN_FUNCTION_CASES_PER_GENERATED_ELEMENT + 0.999))
         if function_case_count < minimum_cases:
@@ -2301,13 +2681,17 @@ def main() -> int:
     batch_rows = None
     if args.batch_status:
         batch_rows = validate_batch_status(args.batch_status)
+        validate_completed_batch_workbook_semantics(workbook_data, batch_rows)
         validate_batch_artifacts_location(args.batch_status)
         validate_batch_file_consistency(args.batch_status, batch_rows)
         validate_batch_plan(args.batch_status, batch_rows)
         validate_batch_review(args.batch_status, batch_rows)
         validate_batch_import_workbooks(args.batch_status, batch_rows)
     if args.import_workbook:
-        validate_import_workbook(args.import_workbook, workbook_data)
+        if not args.batch_status:
+            fail("--import-workbook requires --batch-status so module hierarchy can be checked against batch-scope.json")
+        expected_module_path = batch_scope_module_path(args.batch_status) if args.batch_status else None
+        validate_import_workbook(args.import_workbook, workbook_data, expected_module_path)
     if bool(args.product_map) != bool(args.page_discovery):
         fail("--product-map and --page-discovery must be provided together")
     if args.product_map and args.page_discovery:

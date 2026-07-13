@@ -59,7 +59,10 @@ from test_design.paths import (
 from test_design.formal_assembler import assemble_formal_workbook
 
 
-IMPORT_AUTO_FIELDS = {"测试用例系统编号", "作者"}
+IMPORT_AUTO_FIELDS = {
+    "一级模块系统编号", "二级模块系统编号", "三级模块系统编号", "四级模块系统编号", "五级模块系统编号",
+    "其他模块系统编号", "其他模块名称", "测试用例系统编号", "维护人", "作者",
+}
 IMPORT_ALLOWED_VALUES = {
     "测试类型": {"功能测试", "性能规格测试", "可靠性测试", "兼容性测试", "可维护性测试", "安全性测试", "易用性测试"},
     "测试用例级别": {"L1", "L2", "L3", "L4"},

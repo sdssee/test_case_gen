@@ -41,7 +41,7 @@
 `VERSION` 中包含两个版本：
 
 ```text
-framework_version=2.2.0
+framework_version=2.3.0
 asset_schema_version=2.0.0
 ```
 
@@ -65,6 +65,8 @@ powershell -ExecutionPolicy Bypass -File scripts\new-framework-upgrade-package.p
 2.1.0 起一个 run-dir 只能包含一个最小标题批次。旧目录若在 `batch-status.csv` 中保存多行批次，必须先按批次复制并拆分 ledgers、证据和产物到独立目录；框架会拒绝混装，不会猜测性自动拆分历史事实。
 
 2.2.0 起有限选择集合必须补录 `selection-option-observations.csv` 的每个选项事实；旧批次恢复时工具只补齐模板和 scope，不会伪造逐项点击、页面变化或证据。原用例分片若存在重复正文、标题参数未落地、计划功能点串位或临时选择误判为持久化变更，必须回到 discovery/plan 后重新 prepare 和生成。
+
+2.3.0 新增按角色/权限和数据状态采集的 `page-element-inventory.csv`；discovery、逐选项、元素计划和生命周期新增 `交互实例ID`，仅 page discovery 新增证据定位及通用步骤/结果锚点，逐选项新增非平凡 `预期结果锚点`。本次创建对象以同一测试数据 ID 和创建 owner 用例贯穿，各生命周期行使用对应 mutation plan 的交互实例 ID。状态计数按明确 DFX taxonomy 派生；分片从 001 非空连续；正式表与导入表确定性字段有序一致。`--resume` 只补空模板/列，不伪造事实；旧批次必须按角色和数据状态重新独立盘点、补录 ID/锚点，并把真实非空文件迁入当前批次作为证据。
 
 ## 内网应用升级包
 
@@ -112,7 +114,7 @@ powershell -ExecutionPolicy Bypass -File scripts\validate-test-design-deliverabl
 ```
 
 大范围任务可追加 `-BatchStatusPath <batch-status.csv>` 校验批次状态中的覆盖数量和质量门禁。
-升级到包含逐选项账本、结构化计划和生命周期门禁的框架后，新批次必须通过 `init-batch-run --product-name` 生成 `batch-scope.json`、`selection-option-observations.csv`、`element-case-plan.csv` 和 `test-data-lifecycle.csv`；旧批次使用 `--resume` 迁移，缺失逐选项事实时必须重新实探，不应直接用空模板覆盖历史事实。
+升级到包含独立元素盘点、逐选项账本、结构化计划和生命周期门禁的框架后，新批次必须通过 `init-batch-run --product-name` 生成 `batch-scope.json`、`page-element-inventory.csv`、`page-discovery.csv`、`selection-option-observations.csv`、`element-case-plan.csv` 和 `test-data-lifecycle.csv`；旧批次使用 `--resume` 迁移，缺失 inventory、交互实例 ID、逐选项事实或当前批次证据时必须重新实探，不应直接用空模板覆盖历史事实。
 只需要单独生成导入文件且不做批次收口时，可使用 `generate-import` 兼容命令。
 
 ## 资产结构升级

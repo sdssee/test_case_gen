@@ -1272,8 +1272,10 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
                 for row in plan_rows
                 if row.get("应生成用例数", "").isdigit()
             )
-            if declared_total and case_count < declared_total:
-                raise ValueError(f"function case shards contain {case_count} cases, fewer than element-case-plan declared {declared_total}")
+            if case_count != declared_total:
+                raise ValueError(
+                    f"function case shards contain {case_count} cases, but element-case-plan declares exactly {declared_total}"
+                )
 
     if batch_rows:
         for index, status_row in enumerate(batch_rows, start=2):

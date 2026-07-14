@@ -56,7 +56,8 @@ EXPECTED_TOOLS = {
 
 GUARD_MATCHER = (
     "^(?:Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|Bash|PowerShell|"
-    "ToolSearch|DeferExecuteTool|WaitForMcpServers|mcp__.*)$"
+    "ToolSearch|DeferExecuteTool|WaitForMcpServers|read_file|write_to_file|"
+    "replace_in_file|execute_command|run_in_terminal|mcp__.*)$"
 )
 
 

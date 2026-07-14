@@ -24,7 +24,8 @@ tools: Read, Write
 
 - 以 Discovery 的元素、交互实例、分支观察、证据和数据生命周期为唯一 grounding；发现实探缺口时返回结构化失败并要求回到 discovery，不得凭空补计划。
 - 建立元素与交互骨架，保持交互实例 ID 双向可追踪；创建对象的数据 ID、owner 与逐修改项 mutation plan 必须贯穿。
-- 按专题规则完成 DFX 12×4 评估和扩展；性能规格测试和 DFP 性能不混入功能用例。
+- 按专题规则对 `element-case-plan.csv` **每个交互实例**完成 DFX 12×4 评估和扩展；`dfx-assessment.json` 必须同时包含全局 `dimensions` 和逐元素 `elements`。每个 element 精确绑定 `interaction_id`、`function_point`，并对 12 个维度下各 4 个标准场景逐项给出状态、事实理由和 `planned_case_ids`；不得用一份全局 Markdown 代替逐元素评估。
+- 每个计划用例 ID 必须且只能由该元素至少一个 `状态=适用` 的 DFX 场景解释；逐元素适用维度/场景必须与计划 CSV 完全一致，全部元素计划用例预算的合计就是 Cases 的最低且精确生成数量。性能规格测试和 DFP 性能不混入功能用例。
 - 只处理任务包指定的批次与输出 schema，保持确定性排序和可复核性。
 
 ## 返回

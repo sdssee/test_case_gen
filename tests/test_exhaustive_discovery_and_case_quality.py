@@ -8,6 +8,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 
@@ -53,6 +54,11 @@ from test_design.validators.batch_ledgers import (
     validate_selection_option_rows,
     validate_selection_plan_links,
 )
+from test_design.validators.function_cases import (
+    validate_case_steps_and_expected,
+    validate_function_case_schema,
+)
+from test_design.contracts.function_cases import FUNCTION_CASE_REQUIRED_FIELDS
 from test_design.batch import evidence_content_fingerprint, evidence_path_exists, manifest_parts
 from test_design.fact_store import (
     PRODUCT_MAP_SHEETS,
@@ -72,6 +78,96 @@ class CaseCollectionQualityTests(unittest.TestCase):
             "操作步骤": steps,
             "预期结果": expected,
         }
+
+    def test_human_cases_reject_internal_ids_screenshots_and_uncertain_results(self) -> None:
+        base_steps = "1. 打开系统\n2. 通过一级菜单进入告警页面\n3. 选择目标告警\n4. 点击查看详情"
+        base_expected = "1. 告警页面加载完成\n2. 目标告警详情打开\n3. 字段值与列表一致"
+        cases = [
+            (
+                self.case("TC-001", "告警详情-uid=backend-42", base_steps, base_expected),
+                "internal probe/orchestration identifier",
+            ),
+            (
+                self.case(
+                    "TC-002",
+                    "告警详情-查看详情",
+                    base_steps + "\n5. 截图留档作为证据",
+                    base_expected,
+                ),
+                "must not require screenshots",
+            ),
+            (
+                self.case(
+                    "TC-003",
+                    "告警详情-查看详情",
+                    base_steps,
+                    "1. 告警页面加载完成\n2. 以下任一行为均可接受\n3. 根据实际结果确认",
+                ),
+                "is not deterministic",
+            ),
+        ]
+        for row, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                validate_case_steps_and_expected(row, "function case")
+
+    def test_function_case_schema_rejects_english_alias_fields(self) -> None:
+        with self.assertRaisesRegex(ValueError, "forbidden/deprecated fields"):
+            validate_function_case_schema(
+                {"expected_result": "must not bypass the Chinese formal schema"},
+                "function case",
+            )
+
+    def test_design_cases_cannot_carry_execution_results(self) -> None:
+        row = {field: "占位" for field in FUNCTION_CASE_REQUIRED_FIELDS}
+        row.update(
+            {
+                "用例 ID": "TC-001",
+                "功能点": "告警详情",
+                "用例标题": "告警详情-打开详情",
+                "执行状态": "已完成",
+                "实际结果": "",
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "执行状态=未执行"):
+            validate_function_case_schema(row, "function case")
+        row["执行状态"] = "未执行"
+        row["实际结果"] = "打开了错误告警详情"
+        with self.assertRaisesRegex(ValueError, "must not fabricate"):
+            validate_function_case_schema(row, "function case")
+
+    def test_excel_reader_preserves_physical_blank_row_numbers(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            workbook = Path(value) / "physical-gap.xlsx"
+            with zipfile.ZipFile(workbook, "w") as archive:
+                archive.writestr(
+                    "xl/workbook.xml",
+                    """<?xml version="1.0" encoding="UTF-8"?>
+                    <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                      xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                      <sheets><sheet name="功能测试用例" sheetId="1" r:id="rId1"/></sheets>
+                    </workbook>""",
+                )
+                archive.writestr(
+                    "xl/_rels/workbook.xml.rels",
+                    """<?xml version="1.0" encoding="UTF-8"?>
+                    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                      <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+                    </Relationships>""",
+                )
+                archive.writestr(
+                    "xl/worksheets/sheet1.xml",
+                    """<?xml version="1.0" encoding="UTF-8"?>
+                    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+                      <sheetData>
+                        <row r="1"><c r="A1" t="inlineStr"><is><t>Header</t></is></c></row>
+                        <row r="3"><c r="A3" t="inlineStr"><is><t>Value</t></is></c></row>
+                      </sheetData>
+                    </worksheet>""",
+                )
+            self.assertEqual(
+                [["Header"], [], ["Value"]],
+                DELIVERABLE_VALIDATOR.sheet_rows(workbook, "功能测试用例"),
+            )
 
     def test_rejects_different_titles_with_identical_execution_body(self) -> None:
         steps = (

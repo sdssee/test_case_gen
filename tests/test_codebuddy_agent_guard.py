@@ -534,12 +534,120 @@ class CodeBuddyAgentGuardTests(unittest.TestCase):
         self._write_json(self.manifest_path, self.manifest)
         self.assert_denied(GUARD.evaluate_event(self.payload(approved), self.root))
 
-    def test_main_session_is_not_guarded_even_if_it_mentions_task(self) -> None:
+    def test_main_session_shell_requires_a_concrete_safe_command(self) -> None:
         payload = self.payload("Bash")
         main_transcript = self.root / ".runtime" / "parent-session" / "main.jsonl"
         main_transcript.write_text(json.dumps({"content": str(self.task_path)}) + "\n", encoding="utf-8")
         payload["transcript_path"] = str(main_transcript)
+        self.assert_denied(GUARD.evaluate_event(payload, self.root))
+
+    def test_main_session_cannot_write_formal_ledgers_or_run_custom_excel_script(self) -> None:
+        main_transcript = self.root / ".runtime" / "parent-session" / "main.jsonl"
+        main_transcript.parent.mkdir(parents=True, exist_ok=True)
+        main_transcript.write_text("{}\n", encoding="utf-8")
+        ledger_payload = self.payload("write_to_file")
+        ledger_payload["transcript_path"] = str(main_transcript)
+        ledger_payload["tool_input"] = {"filePath": str(self.run_dir / "page-discovery.csv")}
+        self.assert_denied(GUARD.evaluate_event(ledger_payload, self.root))
+
+        shell_payload = self.payload("execute_command")
+        shell_payload["transcript_path"] = str(main_transcript)
+        shell_payload["tool_input"] = {
+            "command": (
+                "python docs/test-assets/batch-runs/run-1/artifacts/scripts/"
+                "gen_excel_deliverable.py"
+            )
+        }
+        self.assert_denied(GUARD.evaluate_event(shell_payload, self.root))
+
+    def test_main_session_cannot_chain_after_a_standard_entry_point(self) -> None:
+        main_transcript = self.root / ".runtime" / "parent-session" / "main.jsonl"
+        main_transcript.parent.mkdir(parents=True, exist_ok=True)
+        main_transcript.write_text("{}\n", encoding="utf-8")
+        payload = self.payload("execute_command")
+        payload["transcript_path"] = str(main_transcript)
+        payload["tool_input"] = {
+            "command": (
+                "scripts/run-test-design.ps1 agent-status --run-dir safe; "
+                "Set-Content docs/test-assets/batch-runs/run-1/page-discovery.csv forged"
+            )
+        }
+        self.assert_denied(GUARD.evaluate_event(payload, self.root))
+
+        payload["tool_input"] = {
+            "command": (
+                "scripts/run-test-design.ps1 agent-status --run-dir safe "
+                "> docs/test-assets/batch-runs/run-1/page-discovery.csv"
+            )
+        }
+        self.assert_denied(GUARD.evaluate_event(payload, self.root))
+
+    def test_standard_delivery_command_allows_quoted_menu_path_separator(self) -> None:
+        main_transcript = self.root / ".runtime" / "parent-session" / "main.jsonl"
+        main_transcript.parent.mkdir(parents=True, exist_ok=True)
+        main_transcript.write_text("{}\n", encoding="utf-8")
+        payload = self.payload("execute_command")
+        payload["transcript_path"] = str(main_transcript)
+        payload["tool_input"] = {
+            "command": (
+                'scripts/run-test-design.ps1 complete-deliverables --run-dir "safe" '
+                '--module-path "模块>子模块>页面" --batch-id BATCH-001'
+            )
+        }
         self.assertIsNone(GUARD.evaluate_event(payload, self.root))
+
+    def test_main_session_may_write_only_the_active_isolated_fallback_output(self) -> None:
+        fallback_claim = dict(self.claim)
+        fallback_claim.update(
+            {
+                "executor_id": "FALLBACK-CASE-001",
+                "executor_kind": "codebuddy-isolated-fallback",
+            }
+        )
+        content = {
+            "schema_version": "1.0.0",
+            "task_id": self.task_id,
+            "execution_id": self.execution_id,
+            "coordinator_id": fallback_claim["coordinator_id"],
+            "executor_id": fallback_claim["executor_id"],
+            "executor_kind": fallback_claim["executor_kind"],
+            "source_fingerprint": self.task["source_fingerprint"],
+            "input_snapshot_fingerprint": fallback_claim["input_snapshot_fingerprint"],
+            "task_packet_fingerprint": fallback_claim["task_packet_fingerprint"],
+            "context_fingerprint": fallback_claim["context_fingerprint"],
+            "failure_count": 2,
+            "failure_reason": "native Agent unavailable after retry",
+            "authorized_at": "2026-07-13T00:00:01Z",
+            "quality_gates_unchanged": True,
+            "workspace_isolation_required": True,
+            "review_required": True,
+            "delivery_single_writer": True,
+        }
+        authorization = {
+            **content,
+            "authorization_fingerprint": hashlib.sha256(
+                json.dumps(
+                    content,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+        }
+        self.entry["claim"] = fallback_claim
+        self.entry["fallback_authorization"] = authorization
+        self._write_json(self.manifest_path, self.manifest)
+        main_transcript = self.root / ".runtime" / "parent-session" / "main.jsonl"
+        main_transcript.parent.mkdir(parents=True, exist_ok=True)
+        main_transcript.write_text("{}\n", encoding="utf-8")
+        payload = self.payload("write_to_file")
+        payload["transcript_path"] = str(main_transcript)
+        payload["tool_input"] = {"filePath": str(self.allowed_file)}
+        self.assertIsNone(GUARD.evaluate_event(payload, self.root))
+
+        payload["tool_input"] = {"filePath": str(self.run_dir / "artifacts" / "data" / "function_cases_part_001.json")}
+        self.assert_denied(GUARD.evaluate_event(payload, self.root))
 
     def test_unbound_canonical_subagent_fails_closed(self) -> None:
         self.transcript.write_text(json.dumps({"content": "ordinary review"}) + "\n", encoding="utf-8")

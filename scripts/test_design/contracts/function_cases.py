@@ -12,6 +12,8 @@ FUNCTION_CASE_REQUIRED_FIELDS = [
 ]
 FUNCTION_CASE_FORBIDDEN_FIELDS = {
     "用例编号", "用侊 ID", "用侊标题", "场景类型", "正向/反向", "steps", "expected", "title", "case_id", "id",
+    "expected_result", "expectedResults", "preconditions", "test_data", "test_steps",
+    "actual_result", "execution_status", "feature", "function_point", "name",
 }
 ENGLISH_TEMPLATE_MARKERS = [
     "Open browser", "navigate to", "Verify page", "Operate element", "Execute extended scenario", "Extended scenario",

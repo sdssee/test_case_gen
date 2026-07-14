@@ -28,6 +28,7 @@ from test_design.orchestration.engine import (
     commit_page_probe_receipt,
     initialize_orchestration,
     orchestration_status,
+    record_agent_dispatch_failure,
     resume_external_block,
     release_agent_claim,
     submit_agent_result,
@@ -323,6 +324,60 @@ class OrchestrationEngineTests(unittest.TestCase):
             result_path,
             execution_id=execution_id,
         )
+
+    def _submit_with_automatic_fallback(
+        self,
+        run_dir: Path,
+        task: dict[str, object],
+        result_path: Path,
+        *,
+        fallback_executor_id: str | None = None,
+    ) -> dict[str, object]:
+        """Model a platform where native Agent dispatch is entirely unavailable."""
+        execution_id = self._claim_with_automatic_fallback(
+            run_dir,
+            task,
+            fallback_executor_id=fallback_executor_id,
+        )
+        return submit_agent_result(
+            run_dir,
+            str(task["task_id"]),
+            result_path,
+            execution_id=execution_id,
+        )
+
+    def _claim_with_automatic_fallback(
+        self,
+        run_dir: Path,
+        task: dict[str, object],
+        *,
+        fallback_executor_id: str | None = None,
+    ) -> str:
+        execution_id = self._claim_task(
+            run_dir,
+            task,
+            physical_binding=False,
+        )
+        executor_id = fallback_executor_id or f"FALLBACK-{task['agent_role']}-{task['task_id']}"
+        first = record_agent_dispatch_failure(
+            run_dir,
+            str(task["task_id"]),
+            execution_id=execution_id,
+            coordinator_id="COORD-TEST",
+            reason="native Agent API is unavailable",
+            fallback_executor_id=executor_id,
+        )
+        self.assertEqual("RETRY_NATIVE_AGENT", first["dispatch_action"])
+        second = record_agent_dispatch_failure(
+            run_dir,
+            str(task["task_id"]),
+            execution_id=execution_id,
+            coordinator_id="COORD-TEST",
+            reason="native Agent retry is unavailable",
+            fallback_executor_id=executor_id,
+        )
+        self.assertEqual("RUN_ISOLATED_FALLBACK", second["dispatch_action"])
+        return execution_id
 
     @staticmethod
     def _success_result(task: dict[str, object]) -> dict[str, object]:
@@ -1709,11 +1764,195 @@ class OrchestrationEngineTests(unittest.TestCase):
         with self.assertRaisesRegex(OrchestrationError, "unauthenticated diagnostic"):
             _validate_reviewer_execution_identity(main_generator, reviewer)
 
-        with self.assertRaisesRegex(OrchestrationError, "authenticated codebuddy-subagent"):
+        with self.assertRaisesRegex(OrchestrationError, "authenticated sub-agent"):
             _validate_reviewer_execution_identity(
                 independent,
                 claim("TASK-REVIEW-A01", "MAIN-REVIEW", "codebuddy-main-session"),
             )
+
+    def test_native_agent_dispatch_failure_retries_then_runs_isolated_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.helper.create_project_root(root)
+            run_dir = self.helper.make_valid_plan_run(root, "agent-dispatch-fallback")
+            task = advance_orchestration(run_dir)["runnable_tasks"][0]
+            execution = self._claim_task(
+                run_dir,
+                task,
+                execution_id="EXEC-DISPATCH-FALLBACK",
+                physical_binding=False,
+            )
+            first = record_agent_dispatch_failure(
+                run_dir,
+                str(task["task_id"]),
+                execution_id=execution,
+                coordinator_id="COORD-TEST",
+                reason="native Agent TLS handshake failed",
+                fallback_executor_id="FALLBACK-DISCOVERY-01",
+            )
+            self.assertEqual("RETRY_NATIVE_AGENT", first["dispatch_action"])
+            self.assertEqual("codebuddy-subagent", first["claim"]["executor_kind"])
+
+            second = record_agent_dispatch_failure(
+                run_dir,
+                str(task["task_id"]),
+                execution_id=execution,
+                coordinator_id="COORD-TEST",
+                reason="native Agent TLS handshake failed after retry",
+                fallback_executor_id="FALLBACK-DISCOVERY-01",
+            )
+            self.assertEqual("RUN_ISOLATED_FALLBACK", second["dispatch_action"])
+            self.assertEqual("codebuddy-isolated-fallback", second["claim"]["executor_kind"])
+            self.assertTrue(second["fallback_authorization"]["quality_gates_unchanged"])
+
+            output = self._output_dir(run_dir, task)
+            for name in (
+                "page-element-inventory.csv",
+                "page-discovery.csv",
+                "selection-option-observations.csv",
+                "interaction-branch-observations.csv",
+                "test-data-lifecycle.csv",
+            ):
+                shutil.copy2(run_dir / name, output / name)
+            status = submit_agent_result(
+                run_dir,
+                str(task["task_id"]),
+                self._write_result(
+                    run_dir,
+                    "fallback-discovery-success",
+                    self._success_result(task),
+                ),
+                execution_id=execution,
+            )
+            self.assertEqual("PLAN_RUNNING", status["state"])
+            events = (run_dir / "orchestration" / "events.jsonl").read_text(encoding="utf-8")
+            self.assertIn("AGENT_DISPATCH_FAILED", events)
+            self.assertIn("TASK_EXECUTOR_DEGRADED", events)
+
+    def test_isolated_fallback_cannot_be_claimed_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            run_dir = self._new_run(root, "fallback-direct-claim")
+            task = advance_orchestration(run_dir)["runnable_tasks"][0]
+            with self.assertRaisesRegex(OrchestrationError, "created only by agent-dispatch-failed"):
+                claim_agent_task(
+                    run_dir,
+                    str(task["task_id"]),
+                    execution_id="EXEC-DIRECT-FALLBACK",
+                    coordinator_id="COORD-TEST",
+                    executor_id="FALLBACK-DIRECT",
+                    executor_kind="codebuddy-isolated-fallback",
+                    wave_id="WAVE-DIRECT-FALLBACK",
+                )
+
+    def test_fallback_degradation_event_recovers_after_manifest_commit_hard_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.helper.create_project_root(root)
+            run_dir = self.helper.make_valid_plan_run(root, "fallback-event-recovery")
+            task = advance_orchestration(run_dir)["runnable_tasks"][0]
+            execution = self._claim_task(
+                run_dir,
+                task,
+                execution_id="EXEC-FALLBACK-EVENT-RECOVERY",
+                physical_binding=False,
+            )
+            record_agent_dispatch_failure(
+                run_dir,
+                str(task["task_id"]),
+                execution_id=execution,
+                coordinator_id="COORD-TEST",
+                reason="native Agent dispatch unavailable",
+                fallback_executor_id="FALLBACK-RECOVERY-01",
+            )
+            original_append = engine_module.EventStore.append
+
+            def hard_stop_after_manifest(store: object, event_type: str, *args: object, **kwargs: object) -> object:
+                if event_type == "TASK_EXECUTOR_DEGRADED":
+                    raise RuntimeError("simulated hard stop after fallback manifest commit")
+                return original_append(store, event_type, *args, **kwargs)
+
+            with mock.patch.object(engine_module.EventStore, "append", new=hard_stop_after_manifest):
+                with self.assertRaisesRegex(RuntimeError, "simulated hard stop"):
+                    record_agent_dispatch_failure(
+                        run_dir,
+                        str(task["task_id"]),
+                        execution_id=execution,
+                        coordinator_id="COORD-TEST",
+                        reason="native Agent retry unavailable",
+                        fallback_executor_id="FALLBACK-RECOVERY-01",
+                    )
+
+            recovered = orchestration_status(run_dir)
+            claim = recovered["claimed_tasks"][0]["claim"]
+            self.assertEqual("codebuddy-isolated-fallback", claim["executor_kind"])
+            events = [
+                json.loads(line)
+                for line in (run_dir / "orchestration/events.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            degraded = [
+                event
+                for event in events
+                if event.get("event_type") == "TASK_EXECUTOR_DEGRADED"
+                and event.get("task_id") == task["task_id"]
+            ]
+            self.assertEqual(1, len(degraded))
+            self.assertTrue(degraded[0]["payload"]["recovered_after_manifest_commit"])
+
+    def test_dispatch_failure_history_recovers_after_event_commit_hard_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.helper.create_project_root(root)
+            run_dir = self.helper.make_valid_plan_run(root, "fallback-failure-recovery")
+            task = advance_orchestration(run_dir)["runnable_tasks"][0]
+            execution = self._claim_task(
+                run_dir,
+                task,
+                execution_id="EXEC-FALLBACK-FAILURE-RECOVERY",
+                physical_binding=False,
+            )
+            with mock.patch.object(
+                engine_module,
+                "_save_manifest",
+                side_effect=RuntimeError("simulated hard stop after failure event commit"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "simulated hard stop"):
+                    record_agent_dispatch_failure(
+                        run_dir,
+                        str(task["task_id"]),
+                        execution_id=execution,
+                        coordinator_id="COORD-TEST",
+                        reason="native Agent dispatch unavailable",
+                        fallback_executor_id="FALLBACK-FAILURE-RECOVERY-01",
+                    )
+
+            recovered = record_agent_dispatch_failure(
+                run_dir,
+                str(task["task_id"]),
+                execution_id=execution,
+                coordinator_id="COORD-TEST",
+                reason="native Agent retry unavailable",
+                fallback_executor_id="FALLBACK-FAILURE-RECOVERY-01",
+            )
+            self.assertEqual("RUN_ISOLATED_FALLBACK", recovered["dispatch_action"])
+            self.assertEqual(2, recovered["fallback_authorization"]["failure_count"])
+            events = [
+                json.loads(line)
+                for line in (run_dir / "orchestration/events.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            failures = [
+                event["payload"]
+                for event in events
+                if event.get("event_type") == "AGENT_DISPATCH_FAILED"
+                and event.get("task_id") == task["task_id"]
+            ]
+            self.assertEqual([1, 2], [item["sequence"] for item in failures])
 
     def test_review_requires_one_full_claim_and_a_success_commit_event(self) -> None:
         claim = AgentClaim(
@@ -2287,6 +2526,7 @@ class OrchestrationEngineTests(unittest.TestCase):
                 reason="historical executor stopped before product mutation",
                 confirm_no_side_effects=True,
             )
+            discovery_execution = self._claim_with_automatic_fallback(run_dir, discovery)
             discovery_output = self._output_dir(run_dir, discovery)
             for name in (
                 "page-element-inventory.csv",
@@ -2296,14 +2536,16 @@ class OrchestrationEngineTests(unittest.TestCase):
                 "test-data-lifecycle.csv",
             ):
                 shutil.copy2(run_dir / name, discovery_output / name)
-            status = self._submit(
+            status = submit_agent_result(
                 run_dir,
-                discovery,
+                str(discovery["task_id"]),
                 self._write_result(run_dir, "discovery-success", self._success_result(discovery)),
+                execution_id=discovery_execution,
             )
             self.assertEqual("PLAN_RUNNING", status["state"])
 
             plan = status["runnable_tasks"][0]
+            plan_execution = self._claim_with_automatic_fallback(run_dir, plan)
             plan_output = self._output_dir(run_dir, plan)
             for name in (
                 "element-case-plan.csv",
@@ -2400,21 +2642,70 @@ class OrchestrationEngineTests(unittest.TestCase):
                                 "scenarios": scenarios,
                             }
                             for dimension, scenarios in DFX_MATRIX.items()
-                        ]
+                        ],
+                        "elements": [
+                            {
+                                "interaction_id": plan_row["交互实例ID"],
+                                "function_point": plan_row["功能点"],
+                                "assessments": [
+                                    {
+                                        "dimension": dimension,
+                                        "scenarios": [
+                                            {
+                                                "scenario": scenario,
+                                                "status": (
+                                                    "适用"
+                                                    if dimension in plan_row["适用DFX维度"].split(",")
+                                                    and scenario in plan_row["适用DFX场景"].split(",")
+                                                    else "不适用"
+                                                ),
+                                                "reason": (
+                                                    "页面事实与计划要求适用"
+                                                    if dimension in plan_row["适用DFX维度"].split(",")
+                                                    and scenario in plan_row["适用DFX场景"].split(",")
+                                                    else "当前元素与场景无直接作用关系"
+                                                ),
+                                                "planned_case_ids": (
+                                                    [
+                                                        case_id
+                                                        for case_id in plan_row["计划用例ID"].split(",")
+                                                        if case_id
+                                                    ]
+                                                    if dimension in plan_row["适用DFX维度"].split(",")
+                                                    and scenario == plan_row["适用DFX场景"].split(",")[0]
+                                                    else []
+                                                ),
+                                            }
+                                            for scenario in scenarios
+                                        ],
+                                    }
+                                    for dimension, scenarios in DFX_MATRIX.items()
+                                ],
+                            }
+                            for plan_row in list(
+                                csv.DictReader(
+                                    (plan_output / "element-case-plan.csv")
+                                    .read_text(encoding="utf-8-sig")
+                                    .splitlines()
+                                )
+                            )
+                        ],
                     },
                     ensure_ascii=False,
                 ),
                 encoding="utf-8",
             )
-            status = self._submit(
+            status = submit_agent_result(
                 run_dir,
-                plan,
+                str(plan["task_id"]),
                 self._write_result(run_dir, "plan-success", self._success_result(plan)),
+                execution_id=plan_execution,
             )
             self.assertEqual("CASES_RUNNING", status["state"])
             self.assertEqual(["discovery", "plan", "risk"], status["validated_phases"])
 
             worker = status["runnable_tasks"][0]
+            worker_execution = self._claim_with_automatic_fallback(run_dir, worker)
             worker_output = self._output_dir(run_dir, worker)
             context = json.loads(
                 (
@@ -2434,15 +2725,17 @@ class OrchestrationEngineTests(unittest.TestCase):
             )
             worker_result = self._success_result(worker)
             worker_result["affected_case_ids"] = case_ids
-            status = self._submit(
+            status = submit_agent_result(
                 run_dir,
-                worker,
+                str(worker["task_id"]),
                 self._write_result(run_dir, "worker-success", worker_result),
+                execution_id=worker_execution,
             )
             self.assertEqual("REVIEW_RUNNING", status["state"])
             self.assertFalse((run_dir / "orchestration/review-report.json").exists())
 
             reviewer = status["runnable_tasks"][0]
+            reviewer_execution = self._claim_with_automatic_fallback(run_dir, reviewer)
             rework = self._result(reviewer, "NEEDS_REWORK")
             rework["rework_requests"] = [
                 {
@@ -2460,16 +2753,18 @@ class OrchestrationEngineTests(unittest.TestCase):
                     "attempt": reviewer["attempt"],
                 }
             ]
-            status = self._submit(
+            status = submit_agent_result(
                 run_dir,
-                reviewer,
+                str(reviewer["task_id"]),
                 self._write_result(run_dir, "review-rework", rework),
+                execution_id=reviewer_execution,
             )
             self.assertEqual("CASES_RUNNING", status["state"])
             status = advance_orchestration(run_dir)
             replacement = status["runnable_tasks"][0]
             self.assertEqual("case_worker", replacement["agent_role"])
             self.assertNotEqual(worker["task_id"], replacement["task_id"])
+            replacement_execution = self._claim_with_automatic_fallback(run_dir, replacement)
             replacement_output = self._output_dir(run_dir, replacement)
             replacement_context = json.loads(
                 (replacement_output.parent / "meta" / "task-context.json").read_text(encoding="utf-8")
@@ -2486,10 +2781,11 @@ class OrchestrationEngineTests(unittest.TestCase):
             )
             replacement_result = self._success_result(replacement)
             replacement_result["affected_case_ids"] = case_ids
-            status = self._submit(
+            status = submit_agent_result(
                 run_dir,
-                replacement,
+                str(replacement["task_id"]),
                 self._write_result(run_dir, "worker-rework-success", replacement_result),
+                execution_id=replacement_execution,
             )
             self.assertEqual("REVIEW_RUNNING", status["state"])
             formal_cases = json.loads(
@@ -2498,6 +2794,7 @@ class OrchestrationEngineTests(unittest.TestCase):
             self.assertIn("返工后的唯一确认动作", formal_cases[0]["操作步骤"])
 
             reviewer = status["runnable_tasks"][0]
+            reviewer_execution = self._claim_with_automatic_fallback(run_dir, reviewer)
             self.assertTrue(
                 any(path.endswith("/artifacts/screenshots/unreferenced-state.png") for path in reviewer["input_files"])
             )
@@ -2529,10 +2826,11 @@ class OrchestrationEngineTests(unittest.TestCase):
             (reviewer_output / "review-report.json").write_text(
                 json.dumps(report, ensure_ascii=False), encoding="utf-8"
             )
-            status = self._submit(
+            status = submit_agent_result(
                 run_dir,
-                reviewer,
+                str(reviewer["task_id"]),
                 self._write_result(run_dir, "review-success", self._success_result(reviewer)),
+                execution_id=reviewer_execution,
             )
             self.assertEqual("DELIVERY_RUNNING", status["state"])
             self.assertEqual(
@@ -2601,25 +2899,25 @@ class OrchestrationEngineTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 ReviewValidationError,
-                "physical sub-agent execution binding|claim ordering proof",
+                "fallback task|claim ordering proof",
             ):
                 validate_review_artifacts(run_dir)
             manifest_path.write_bytes(manifest_bytes)
             self.assertTrue(validate_review_artifacts(run_dir))
-            discovery_execution = manifest_value["tasks"][discovery_id]["claim"][
-                "execution_id"
-            ]
-            discovery_binding = execution_binding_module.execution_binding_path(
-                root, discovery_execution
+            tampered_authorization = json.loads(manifest_bytes)
+            tampered_authorization["tasks"][discovery_id]["fallback_authorization"][
+                "authorization_fingerprint"
+            ] = "0" * 64
+            manifest_path.write_text(
+                json.dumps(tampered_authorization, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
             )
-            discovery_binding_bytes = discovery_binding.read_bytes()
-            discovery_binding.unlink()
             with self.assertRaisesRegex(
                 ReviewValidationError,
-                "physical sub-agent execution binding",
+                "fallback task.*authorization fingerprint",
             ):
                 validate_review_artifacts(run_dir)
-            discovery_binding.write_bytes(discovery_binding_bytes)
+            manifest_path.write_bytes(manifest_bytes)
             self.assertTrue(validate_review_artifacts(run_dir))
             with self.assertRaisesRegex(ValueError, "external --formal-workbook input is not allowed"):
                 architecture_safety.TOOLS.complete_deliverables(

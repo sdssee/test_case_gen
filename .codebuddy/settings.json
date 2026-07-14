@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^(?:Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|Bash|PowerShell|ToolSearch|DeferExecuteTool|WaitForMcpServers|mcp__.*)$",
+        "matcher": "^(?:Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|Bash|PowerShell|ToolSearch|DeferExecuteTool|WaitForMcpServers|read_file|write_to_file|replace_in_file|execute_command|run_in_terminal|mcp__.*)$",
         "hooks": [
           {
             "type": "command",

@@ -55,7 +55,7 @@
 25. 每次修改规范或模板后必须运行稳定性自检。
 26. Rule 镜像和轻量入口引用由 `docs/test-design/rules/entry-contract.json` 与 `scripts/sync-rule-entrypoints.py` 校验；修改权威 Rule 后使用 `--write` 更新镜像，禁止分别编辑两份 Rule。
 27. 3.0.0 直接采用最终多 Agent 架构，不保留可选旧模式。确定性编排器是唯一阶段推进者：Discovery 为单 owner，Plan/DFX 冻结预算与功能点，Risk Arbiter 仅处理真实外部语义，Case Worker 只按精确功能点并行，Reviewer 独立只读，Delivery 单写。AgentTask/AgentResult、冻结输入、隔离 workspace、source fingerprint、逐用例 traceability、追加事件链和结构化返工共同拒绝接纳越界或过期产物、防止旧产物混入和模型自报通过；CodeBuddy 写入前能力隔离由项目最小工具和保护 hook 执行，完整设计以 `docs/AGENT_ORCHESTRATION.md` 与 `docs/CODEBUDDY_AGENT_ADAPTER.md` 为准。
-28. 确定性编排器不调用模型；CodeBuddy 主会话是唯一 coordinator，项目级 `.codebuddy/agents/` 只承载 Discovery、Plan/DFX、Risk、Case、Reviewer 五个认知角色。任务执行前必须经 `agent-claim` 原子领取并绑定 `execution_id`，不使用会让 CRUD 重放的自动租约；非 Case 串行，Case 只并行一次 `runnable_tasks` 的冻结波次；无后台并行能力时串行执行仍保持同一门禁和合并语义。当前正式流程只认证 `codebuddy-subagent`；`codebuddy-main-session`、`external-session` 与 Agent Team 只可诊断，枚举存在不代表隔离已认证。无 sub-agent 时正式流程必须阻断，不能用未认证执行器模拟成功。Reviewer 执行身份必须独立于全部成功生成者，Delivery 不建模为 Agent，完整适配以 `docs/CODEBUDDY_AGENT_ADAPTER.md` 为准。
+28. 确定性编排器不调用模型；CodeBuddy 主会话是唯一 coordinator，项目级 `.codebuddy/agents/` 只承载 Discovery、Plan/DFX、Risk、Case、Reviewer 五个认知角色。任务执行前必须经 `agent-claim` 原子领取并绑定 `execution_id`，不使用会让 CRUD 重放的自动租约；非 Case 串行，Case 只并行一次 `runnable_tasks` 的冻结波次；无后台并行能力时串行执行仍保持同一门禁和合并语义。正式执行身份包括受物理 transcript 约束的 `codebuddy-subagent`，以及仅由 supervisor 在连续派发失败后从同一 claim 原子转换、受任务 output 白名单和哈希授权约束的 `codebuddy-isolated-fallback`；后者不能直接 claim。`codebuddy-main-session`、`external-session` 与 Agent Team 仍只可诊断。Reviewer 必须是独立任务和不同执行身份；确定性 Review 从实际产物重算逐元素 DFX、用例与交付门禁。Delivery 不建模为 Agent，完整适配以 `docs/CODEBUDDY_AGENT_ADAPTER.md` 为准。
 
 ## 变更同步规则
 

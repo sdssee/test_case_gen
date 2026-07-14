@@ -118,7 +118,8 @@ CODEBUDDY_AGENT_TOOLS = {
 
 CODEBUDDY_GUARD_MATCHER = (
     "^(?:Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|Bash|PowerShell|"
-    "ToolSearch|DeferExecuteTool|WaitForMcpServers|mcp__.*)$"
+    "ToolSearch|DeferExecuteTool|WaitForMcpServers|read_file|write_to_file|"
+    "replace_in_file|execute_command|run_in_terminal|mcp__.*)$"
 )
 CODEBUDDY_PROBE_RECORDER_MATCHER = "^(?:DeferExecuteTool|mcp__.*)$"
 
@@ -917,7 +918,9 @@ def main() -> int:
             "PreToolUse",
             "拒绝接纳越界产物",
             "全部释放成功后",
-            "未认证且默认阻断",
+            "codebuddy-isolated-fallback",
+            "agent-dispatch-failed",
+            "自动降级",
             "complete-deliverables",
             "append-only checkpoint",
             "不设置 transcript 总大小硬上限",

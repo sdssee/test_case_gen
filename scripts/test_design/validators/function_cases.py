@@ -32,6 +32,23 @@ TERMINAL_STEP_MARKERS = [
     "click OK", "click Cancel", "close", "return", "back to list", "save", "submit", "not save", "no data changed",
     "点击确定", "点击「确定」", "点击取消", "点击「取消」", "点击关闭", "点击「关闭」", "返回", "回到列表", "返回列表", "保存", "提交", "确认", "不保存", "关闭弹窗", "弹窗关闭", "列表不变", "数据不变", "退出编辑",
 ]
+INTERNAL_EXECUTION_MARKERS = [
+    r"\buid\s*=", r"\b(?:element|node|backend|accessibility)[_-]?id\s*=",
+    r"<element_uid>", r"\bartifacts[/\\]", r"\borchestration[/\\]",
+    r"\bAgentResult\b", r"\bMCP\b", r"\bDevTools\b", r"开发者工具",
+    r"可访问性树", r"DOM节点", r"interaction[-_ ]?id",
+]
+SCREENSHOT_STEP_RE = re.compile(
+    r"(?:截图|截屏|屏幕截图|保存截图|拍照).{0,16}(?:证据|留档|记录|附件)?|"
+    r"(?:证据|留档).{0,12}(?:截图|截屏)",
+    re.IGNORECASE,
+)
+UNCERTAIN_RESULT_RE = re.compile(
+    r"以下任一|任一行为|需(?:实际)?观察(?:后)?确认|待(?:页面)?确认|待验证|"
+    r"根据实际(?:情况|结果)|以实际为准|预期观察|若.*则.*否则|N/?A",
+    re.IGNORECASE,
+)
+CASE_REFERENCE_RE = re.compile(r"(?:同|参照|参考)\s*TC[-_A-Za-z0-9]+", re.IGNORECASE)
 
 
 def contains_any(text: str, markers: list[str]) -> bool:
@@ -59,6 +76,31 @@ def validate_case_steps_and_expected(case: dict[str, str], label: str) -> None:
     combined = "\n".join([precondition, steps, expected, str(case.get("备注", "") or "")])
     if any(marker in combined for marker in ENGLISH_TEMPLATE_MARKERS):
         raise ValueError(f"{label} contains English placeholder/template text")
+    human_fields = "\n".join(
+        str(case.get(field, "") or "")
+        for field in ["用例标题", "前置条件", "测试数据", "操作步骤", "预期结果"]
+    )
+    internal = next(
+        (pattern for pattern in INTERNAL_EXECUTION_MARKERS if re.search(pattern, human_fields, re.IGNORECASE)),
+        None,
+    )
+    if internal:
+        raise ValueError(
+            f"{label} contains internal probe/orchestration identifier {internal!r}; "
+            "formal cases must use visible page text and human-executable actions"
+        )
+    if SCREENSHOT_STEP_RE.search(steps):
+        raise ValueError(
+            f"{label} 操作步骤 must not require screenshots as a test action; evidence collection belongs to discovery"
+        )
+    if UNCERTAIN_RESULT_RE.search(expected):
+        raise ValueError(
+            f"{label} 预期结果 is not deterministic; return to discovery/risk instead of leaving an observation placeholder"
+        )
+    if CASE_REFERENCE_RE.search(human_fields):
+        raise ValueError(
+            f"{label} must be independently executable and cannot replace steps/results with another TC reference"
+        )
     validate_numbered_sequence(precondition, f"{label} 前置条件", 2)
     validate_numbered_sequence(steps, f"{label} 操作步骤", 4)
     validate_numbered_sequence(expected, f"{label} 预期结果", 3)
@@ -159,6 +201,12 @@ def validate_function_case_schema(case: dict[str, object], label: str, planned_i
     for field in ["模块", "优先级", "测试类型", "DFX维度", "DFX场景", "测试数据"]:
         if not normalized[field]:
             raise ValueError(f"{label} must fill {field}")
+    if normalized["执行状态"] != "未执行":
+        raise ValueError(f"{label} is a design case and must use 执行状态=未执行")
+    if normalized["实际结果"] not in {"", "未执行"}:
+        raise ValueError(
+            f"{label} must not fabricate or carry an execution result; 实际结果 must be blank or 未执行"
+        )
     if normalized["测试类型"] == "性能规格测试" or normalized["DFX维度"] == "DFP性能":
         raise ValueError(f"{label} must not put performance scenarios into function case shards")
     validate_case_steps_and_expected(normalized, label)

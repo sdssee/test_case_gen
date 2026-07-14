@@ -346,6 +346,7 @@ from test_design.orchestration.engine import (
     complete_delivery_orchestration,
     orchestration_status,
     orchestration_status_under_lock,
+    record_agent_dispatch_failure,
     release_agent_claim,
     resume_external_block,
     submit_agent_result,
@@ -1297,6 +1298,21 @@ def main() -> int:
     agent_submit.add_argument("--result", required=True, type=Path)
     agent_submit.add_argument("--json", action="store_true")
 
+    dispatch_failed = sub.add_parser(
+        "agent-dispatch-failed",
+        help=(
+            "Record an unavailable native Agent; retry once, then atomically continue with the "
+            "same frozen execution under the isolated fallback quality boundary."
+        ),
+    )
+    dispatch_failed.add_argument("--run-dir", required=True, type=Path)
+    dispatch_failed.add_argument("--task-id", required=True)
+    dispatch_failed.add_argument("--execution-id", required=True)
+    dispatch_failed.add_argument("--coordinator-id", required=True)
+    dispatch_failed.add_argument("--reason", required=True)
+    dispatch_failed.add_argument("--fallback-executor-id", required=True)
+    dispatch_failed.add_argument("--json", action="store_true")
+
     agent_release = sub.add_parser(
         "agent-release",
         help="Release a durable task claim only after explicitly confirming that execution caused no side effects.",
@@ -1399,7 +1415,8 @@ def main() -> int:
             for reason in status.get("reasons", []):
                 print(f"reason={reason}")
     elif args.command in {
-        "agent-run", "agent-status", "page-probe-commit", "agent-claim", "agent-submit", "agent-release", "agent-resume"
+        "agent-run", "agent-status", "page-probe-commit", "agent-claim", "agent-submit",
+        "agent-dispatch-failed", "agent-release", "agent-resume"
     }:
         with contextlib.redirect_stdout(io.StringIO()):
             if args.command == "agent-run":
@@ -1436,6 +1453,15 @@ def main() -> int:
                     args.result,
                     execution_id=args.execution_id,
                 )
+            elif args.command == "agent-dispatch-failed":
+                status = record_agent_dispatch_failure(
+                    args.run_dir,
+                    args.task_id,
+                    execution_id=args.execution_id,
+                    coordinator_id=args.coordinator_id,
+                    reason=args.reason,
+                    fallback_executor_id=args.fallback_executor_id,
+                )
             elif args.command == "agent-release":
                 status = release_agent_claim(
                     args.run_dir,
@@ -1453,6 +1479,8 @@ def main() -> int:
             print(f"state={status['state']}")
             if status.get("claim"):
                 print(f"execution_id={status['claim']['execution_id']}")
+            if status.get("dispatch_action"):
+                print(f"dispatch_action={status['dispatch_action']}")
             if status.get("page_probe_receipt"):
                 receipt = status["page_probe_receipt"]
                 print(f"page_probe_receipt_id={receipt['receipt_id']}")

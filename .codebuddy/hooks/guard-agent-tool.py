@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Fail-closed CodeBuddy PreToolUse guard for test-design sub-agents.
+"""Fail-closed CodeBuddy PreToolUse guard for test-design execution.
 
-The main coordinator is intentionally outside this guard.  Every canonical
-CodeBuddy sub-agent transcript, however, must be bound to exactly one durable,
-CLAIMED orchestration task before it can read or write a file.  The manifest,
-task packet and frozen task context are the authority; text in a prompt alone
-never grants access.
+Canonical sub-agents remain bound to one durable claim.  The coordinator is
+also prevented from writing formal ledgers, accepted data, orchestration state,
+or publication paths directly.  When native Agent dispatch is unavailable,
+only a supervisor-authorized isolated fallback claim may write that task's
+exact output allowlist; all promotion, review, and delivery still belongs to
+the deterministic runtime.
 """
 
 from __future__ import annotations
@@ -155,8 +156,8 @@ _PAGE_PROBE_CONSUMPTION_FIELDS = {
     "run_dir_sha256", "run_id", "batch_id", "task_id", "execution_id",
     "coordinator_id", "source_fingerprint", "binding_fingerprint",
 }
-_READ_TOOLS = {"Read"}
-_WRITE_TOOLS = {"Write"}
+_READ_TOOLS = {"Read", "read_file"}
+_WRITE_TOOLS = {"Write", "write_to_file", "replace_in_file"}
 _DISCOVERY_META_TOOLS = {"ToolSearch", "DeferExecuteTool", "WaitForMcpServers"}
 _ALWAYS_DENIED_TOOLS = {
     "Edit",
@@ -166,6 +167,8 @@ _ALWAYS_DENIED_TOOLS = {
     "Glob",
     "Bash",
     "PowerShell",
+    "execute_command",
+    "run_in_terminal",
 }
 _MATCHED_TOOLS = (
     _READ_TOOLS | _WRITE_TOOLS | _ALWAYS_DENIED_TOOLS | _DISCOVERY_META_TOOLS
@@ -1784,7 +1787,14 @@ def _target_path(payload: dict[str, Any]) -> Path:
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
         raise GuardedTaskError("文件工具缺少 tool_input")
-    value = tool_input.get("file_path")
+    value = next(
+        (
+            tool_input.get(key)
+            for key in ("file_path", "filePath", "path")
+            if isinstance(tool_input.get(key), str) and tool_input.get(key).strip()
+        ),
+        None,
+    )
     if not isinstance(value, str) or not value.strip() or "\x00" in value:
         raise GuardedTaskError(f"{tool_name} 缺少可信 file_path")
     raw_path = Path(value)
@@ -1819,6 +1829,205 @@ def _is_matched_tool(tool_name: Any) -> bool:
     return isinstance(tool_name, str) and (
         tool_name in _MATCHED_TOOLS or tool_name.startswith("mcp__")
     )
+
+
+_PUBLICATION_PATHS = (
+    "docs/test-design/current",
+    "docs/test-design/deliverables",
+    "docs/test-assets/modules",
+    "docs/test-assets/imports",
+    "docs/test-assets/catalog",
+)
+_RUN_LEDGER_NAMES = {
+    "batch-scope.json", "batch-status.csv", "batch-plan.md", "batch-review.md",
+    "page-element-inventory.csv", "page-discovery.csv",
+    "selection-option-observations.csv", "interaction-branch-observations.csv",
+    "element-case-plan.csv", "test-data-lifecycle.csv", "risk-confirmation.csv",
+}
+_SHELL_TOOL_NAMES = {"Bash", "PowerShell", "execute_command", "run_in_terminal"}
+_DANGEROUS_SHELL_PATHS = (
+    "artifacts/agent-work", "artifacts/data", "orchestration/",
+    "docs/test-design/current", "docs/test-design/deliverables",
+    "docs/test-assets/modules", "docs/test-assets/imports", "docs/test-assets/catalog",
+    "docs/test-assets/product-map.xlsx",
+)
+
+
+def _relative_project_path(target: Path, project_root: Path) -> str | None:
+    try:
+        return target.resolve(strict=False).relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return None
+
+
+def _run_dir_for_target(target: Path, project_root: Path) -> Path | None:
+    root = project_root.resolve()
+    current = target.resolve(strict=False)
+    for candidate in (current, *current.parents):
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            return None
+        if (candidate / "orchestration" / "run-manifest.json").is_file():
+            return candidate
+        if candidate == root:
+            break
+    return None
+
+
+def _safe_json(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=_reject_duplicate_keys)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _main_fallback_allows(target: Path, run_dir: Path) -> bool:
+    manifest = _safe_json(run_dir / "orchestration" / "run-manifest.json")
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("tasks"), dict):
+        return False
+    target_key = _path_key(target)
+    matching = 0
+    for entry in manifest["tasks"].values():
+        if not isinstance(entry, dict) or entry.get("status") != "CLAIMED":
+            continue
+        claim = entry.get("claim")
+        task = entry.get("task")
+        authorization = entry.get("fallback_authorization")
+        if (
+            not isinstance(claim, dict)
+            or claim.get("executor_kind") != "codebuddy-isolated-fallback"
+            or not isinstance(task, dict)
+            or not isinstance(authorization, dict)
+            or authorization.get("authorization_fingerprint")
+            != hashlib.sha256(
+                json.dumps(
+                    {key: value for key, value in authorization.items() if key != "authorization_fingerprint"},
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            or authorization.get("task_id") != task.get("task_id")
+            or authorization.get("execution_id") != claim.get("execution_id")
+            or authorization.get("coordinator_id") != claim.get("coordinator_id")
+            or authorization.get("executor_id") != claim.get("executor_id")
+            or authorization.get("executor_kind") != "codebuddy-isolated-fallback"
+            or authorization.get("source_fingerprint") != task.get("source_fingerprint")
+            or authorization.get("input_snapshot_fingerprint") != claim.get("input_snapshot_fingerprint")
+            or authorization.get("task_packet_fingerprint") != claim.get("task_packet_fingerprint")
+            or authorization.get("context_fingerprint") != claim.get("context_fingerprint")
+            or not isinstance(authorization.get("failure_count"), int)
+            or isinstance(authorization.get("failure_count"), bool)
+            or authorization.get("failure_count", 0) < 2
+            or authorization.get("quality_gates_unchanged") is not True
+            or authorization.get("workspace_isolation_required") is not True
+            or authorization.get("review_required") is not True
+            or authorization.get("delivery_single_writer") is not True
+        ):
+            continue
+        allowed = {
+            _path_key((run_dir / str(relative)).resolve(strict=False))
+            for relative in task.get("allowed_output_files", [])
+            if isinstance(relative, str)
+        }
+        prefixes = tuple(
+            _path_key((run_dir / str(relative)).resolve(strict=False)).rstrip("/")
+            for relative in task.get("allowed_output_prefixes", [])
+            if isinstance(relative, str)
+        )
+        if target_key in allowed or any(target_key.startswith(prefix + "/") for prefix in prefixes):
+            matching += 1
+    return matching == 1
+
+
+def _guard_main_write(payload: dict[str, Any], project_root: Path) -> dict[str, Any] | None:
+    try:
+        target = _target_path(payload)
+    except GuardedTaskError as exc:
+        return _deny(f"拒绝无法证明安全的主会话写入：{exc}")
+    relative = _relative_project_path(target, project_root)
+    if relative is None:
+        return None
+    lowered = relative.casefold()
+    if any(lowered == prefix or lowered.startswith(prefix + "/") for prefix in _PUBLICATION_PATHS):
+        return _deny("正式交付、归档、导入和产品事实只能由 complete-deliverables 单写者事务更新")
+    if lowered == "docs/test-assets/product-map.xlsx":
+        return _deny("product-map.xlsx 只能由标准事实投影/交付事务更新")
+    run_dir = _run_dir_for_target(target, project_root)
+    if run_dir is None:
+        return None
+    run_relative = target.resolve(strict=False).relative_to(run_dir.resolve()).as_posix()
+    run_lower = run_relative.casefold()
+    if run_relative in _RUN_LEDGER_NAMES or run_lower.startswith("artifacts/data/"):
+        return _deny("主会话不得直接写正式批次账本或 artifacts/data；必须由 Agent 提升/确定性合并器写入")
+    if run_lower.startswith("orchestration/submissions/") and target.suffix.casefold() == ".json":
+        return None
+    if run_lower.startswith("orchestration/"):
+        return _deny("主会话不得直接修改编排状态、结果、accepted、事件或收据")
+    if run_lower.startswith("artifacts/agent-work/"):
+        if _main_fallback_allows(target, run_dir):
+            return None
+        return _deny("Agent workspace 只能由物理 sub-agent 或 supervisor 授权的单个 fallback claim 写入")
+    if run_lower.startswith("artifacts/scripts/") and re.search(
+        r"(?:gen|build|create|fix|patch).*(?:excel|deliver|workbook)|(?:excel|deliver|workbook).*(?:gen|build|create|fix|patch)",
+        target.name,
+        re.IGNORECASE,
+    ):
+        return _deny("禁止批次级自制 Excel/Delivery 脚本；必须使用标准组装器和 complete-deliverables")
+    return None
+
+
+def _contains_unquoted_shell_operator(command: str) -> bool:
+    quote: str | None = None
+    for char in command:
+        if char == "`":
+            return True
+        if quote:
+            if char == quote:
+                quote = None
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char in ";|&<>\r\n":
+            return True
+    return quote is not None
+
+
+def _guard_main_shell(payload: dict[str, Any]) -> dict[str, Any] | None:
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return _deny("主会话命令工具缺少可信输入")
+    command = next(
+        (
+            tool_input.get(key)
+            for key in ("command", "cmd", "script")
+            if isinstance(tool_input.get(key), str)
+        ),
+        "",
+    )
+    normalized = command.replace("\\", "/").casefold()
+    if not normalized.strip():
+        return _deny("主会话命令为空")
+    if "scripts/run-test-design.ps1" in normalized or "scripts/test_design_excel_tools.py" in normalized:
+        # A standard entry point is safe only as a single command.  Otherwise an
+        # attacker could append an arbitrary writer after a trusted substring.
+        if _contains_unquoted_shell_operator(command) or "$(" in command or re.search(
+            r"\b(?:invoke-expression|iex|start-process|powershell|pwsh|cmd(?:\.exe)?)\b",
+            normalized,
+        ):
+            return _deny("鏍囧噯鍏ュ彛鍛戒护涓嶅緱閾惧紡鎴栧啀娲惧彂鍏朵粬 shell 鍛戒护")
+        return None
+    if any(path in normalized for path in _DANGEROUS_SHELL_PATHS):
+        return _deny(
+            "禁止通过任意 shell 旁路写 Agent workspace、正式账本、编排状态或交付目录；使用 run-test-design.ps1"
+        )
+    if "artifacts/scripts" in normalized and re.search(r"gen[_-]?(?:excel|deliver)|openpyxl", normalized):
+        return _deny("禁止执行批次级 Excel/Delivery 生成脚本")
+    return None
 
 
 def _deferred_input_selects(
@@ -1868,6 +2077,10 @@ def evaluate_event(payload: Any, project_root: Path) -> dict[str, Any] | None:
     except Exception:
         return _deny("测试设计 Agent 权限上下文发生未预期异常；按失败关闭处理")
     if guarded is None:
+        if tool_name in _WRITE_TOOLS:
+            return _guard_main_write(payload, project_root)
+        if tool_name in _SHELL_TOOL_NAMES:
+            return _guard_main_shell(payload)
         return None
     if tool_name in _DISCOVERY_META_TOOLS or tool_name.startswith("mcp__"):
         if guarded.agent_role != "discovery" or not guarded.approved_page_mcp_tools:

@@ -68,7 +68,11 @@ from .contracts import (
     role_contract_relative_paths,
 )
 from .event_store import EventStore
-from .execution_binding import ExecutionBindingError, validate_execution_binding
+from .execution_binding import (
+    ExecutionBindingError,
+    execution_binding_path,
+    validate_execution_binding,
+)
 from .page_probe import (
     PageProbeError,
     create_page_probe_receipt,
@@ -99,6 +103,8 @@ TASK_STATUSES = {
     "PENDING", "CLAIMED", "SUCCEEDED", "FAILED", "NEEDS_REWORK", "EXTERNAL_BLOCKED", "INVALIDATED"
 }
 _PROMOTION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+AGENT_DISPATCH_RETRY_LIMIT = 1
+FALLBACK_AUTHORIZATION_VERSION = "1.0.0"
 
 DFX_MATRIX = {
     "DFT功能": ["正向流程", "边界值", "异常输入", "逆向操作"],
@@ -690,7 +696,9 @@ def _initialize_orchestration_unlocked(
                 for event in event_rows:
                     if (
                         event.get("task_id") != task_id
-                        or event.get("event_type") not in {"TASK_CLAIMED", "AUDIT_CLAIM_RECOVERED"}
+                        or event.get("event_type") not in {
+                            "TASK_CLAIMED", "TASK_EXECUTOR_DEGRADED", "AUDIT_CLAIM_RECOVERED"
+                        }
                         or not isinstance(event.get("payload"), dict)
                     ):
                         continue
@@ -727,10 +735,74 @@ def _initialize_orchestration_unlocked(
                             f"task {task_id} manifest claim conflicts with its durable claim event"
                         )
                 if complete_claim_events and any(item != claim for item in complete_claim_events):
-                    raise OrchestrationError(
-                        f"task {task_id} manifest claim conflicts with its durable full-claim event"
+                    if claim.executor_kind is not ExecutorKind.CODEBUDDY_ISOLATED_FALLBACK:
+                        raise OrchestrationError(
+                            f"task {task_id} manifest claim conflicts with its durable full-claim event"
+                        )
+                    stable_fields = {
+                        key: value
+                        for key, value in claim.to_dict().items()
+                        if key not in {"executor_id", "executor_kind"}
+                    }
+                    incompatible = [
+                        item
+                        for item in complete_claim_events
+                        if item != claim
+                        and (
+                            item.executor_kind is not ExecutorKind.CODEBUDDY_SUBAGENT
+                            or {
+                                key: value
+                                for key, value in item.to_dict().items()
+                                if key not in {"executor_id", "executor_kind"}
+                            }
+                            != stable_fields
+                        )
+                    ]
+                    if incompatible:
+                        raise OrchestrationError(
+                            f"task {task_id} fallback claim conflicts with its original durable claim"
+                        )
+                recovered_fallback_event = False
+                if claim.executor_kind is ExecutorKind.CODEBUDDY_ISOLATED_FALLBACK:
+                    _validate_fallback_authorization(
+                        AgentTask.from_dict(entry.get("task")), entry, claim
                     )
-                if not any(item == claim for item in complete_claim_events):
+                    degradation_events = [
+                        event
+                        for event in event_rows
+                        if event.get("task_id") == task_id
+                        and event.get("event_type") == "TASK_EXECUTOR_DEGRADED"
+                        and isinstance(event.get("payload"), dict)
+                        and event["payload"].get("claim") == claim.to_dict()
+                    ]
+                    if len(degradation_events) > 1:
+                        raise OrchestrationError(
+                            f"task {task_id} has duplicate durable executor degradation events"
+                        )
+                    if not degradation_events:
+                        original_claims = {
+                            canonical_fingerprint(item.to_dict()): item
+                            for item in complete_claim_events
+                            if item.executor_kind is ExecutorKind.CODEBUDDY_SUBAGENT
+                            and item != claim
+                        }
+                        if len(original_claims) != 1:
+                            raise OrchestrationError(
+                                f"task {task_id} fallback cannot recover its unique original Agent claim"
+                            )
+                        previous_claim = next(iter(original_claims.values()))
+                        events.append(
+                            "TASK_EXECUTOR_DEGRADED",
+                            {
+                                "previous_claim": previous_claim.to_dict(),
+                                "claim": claim.to_dict(),
+                                "fallback_authorization": dict(entry["fallback_authorization"]),
+                                "recovered_after_manifest_commit": True,
+                            },
+                            task_id=task_id,
+                        )
+                        recovered_fallback_event = True
+                if not any(item == claim for item in complete_claim_events) and not recovered_fallback_event:
                     events.append(
                         "AUDIT_CLAIM_RECOVERED",
                         {
@@ -1662,10 +1734,25 @@ def _validate_risk_candidates_file(
     return candidates
 
 
-def _validate_dfx_assessment(path: Path) -> dict[str, str]:
+def _split_case_ids(value: object) -> list[str]:
+    return [
+        item.strip()
+        for item in re.split(r"[,，;；\s]+", str(value or ""))
+        if item.strip()
+    ]
+
+
+def _validate_dfx_assessment(path: Path, plan_path: Path) -> dict[str, str]:
     value = _load_json(path, "dfx-assessment.json")
-    if not isinstance(value, dict) or set(value) != {"dimensions"} or not isinstance(value["dimensions"], list):
-        raise OrchestrationError("dfx-assessment.json must be exactly {\"dimensions\": [...]} ")
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"dimensions", "elements"}
+        or not isinstance(value["dimensions"], list)
+        or not isinstance(value["elements"], list)
+    ):
+        raise OrchestrationError(
+            "dfx-assessment.json must contain exactly global dimensions and per-element assessments"
+        )
     expected = set(DFX_MATRIX)
     actual: set[str] = set()
     statuses: dict[str, str] = {}
@@ -1688,11 +1775,131 @@ def _validate_dfx_assessment(path: Path) -> dict[str, str]:
         statuses[dimension] = str(item["status"])
     if actual != expected:
         raise OrchestrationError(f"dfx-assessment.json must cover all 12 dimensions; missing={sorted(expected-actual)}")
+
+    with plan_path.open("r", encoding="utf-8-sig", newline="") as stream:
+        plan_rows = list(csv.DictReader(stream))
+    if not plan_rows:
+        raise OrchestrationError("element-case-plan.csv must contain at least one element before DFX assessment")
+    plan_by_interaction: dict[str, Mapping[str, str]] = {}
+    for row_number, row in enumerate(plan_rows, start=2):
+        interaction_id = str(row.get("交互实例ID", "") or "").strip()
+        if not interaction_id or interaction_id in plan_by_interaction:
+            raise OrchestrationError(
+                f"element-case-plan.csv row {row_number} requires a unique 交互实例ID"
+            )
+        plan_by_interaction[interaction_id] = row
+    seen_elements: set[str] = set()
+    for element_index, element in enumerate(value["elements"]):
+        required_element = {"interaction_id", "function_point", "assessments"}
+        if not isinstance(element, dict) or set(element) != required_element:
+            raise OrchestrationError(
+                f"DFX element {element_index} must use fields {sorted(required_element)}"
+            )
+        interaction_id = str(element["interaction_id"] or "").strip()
+        plan = plan_by_interaction.get(interaction_id)
+        if plan is None or interaction_id in seen_elements:
+            raise OrchestrationError(
+                f"DFX element interaction_id {interaction_id!r} is missing from plan or duplicated"
+            )
+        seen_elements.add(interaction_id)
+        function_point = str(element["function_point"] or "").strip()
+        if not function_point or function_point != str(plan.get("功能点", "") or "").strip():
+            raise OrchestrationError(
+                f"DFX element {interaction_id} function_point must exactly match element-case-plan.csv"
+            )
+        assessments = element["assessments"]
+        if not isinstance(assessments, list) or len(assessments) != len(DFX_MATRIX):
+            raise OrchestrationError(f"DFX element {interaction_id} must assess all 12 dimensions")
+        assessed_dimensions: set[str] = set()
+        applicable_dimensions: set[str] = set()
+        applicable_scenarios: set[str] = set()
+        referenced_case_ids: set[str] = set()
+        for assessment_index, assessment in enumerate(assessments):
+            if not isinstance(assessment, dict) or set(assessment) != {"dimension", "scenarios"}:
+                raise OrchestrationError(
+                    f"DFX element {interaction_id} assessment {assessment_index} has invalid fields"
+                )
+            dimension = str(assessment["dimension"] or "").strip()
+            if dimension not in DFX_MATRIX or dimension in assessed_dimensions:
+                raise OrchestrationError(
+                    f"DFX element {interaction_id} dimension {dimension!r} is unknown or duplicated"
+                )
+            assessed_dimensions.add(dimension)
+            scenario_rows = assessment["scenarios"]
+            if not isinstance(scenario_rows, list) or len(scenario_rows) != 4:
+                raise OrchestrationError(
+                    f"DFX element {interaction_id}/{dimension} must assess exactly four scenarios"
+                )
+            scenario_names: list[str] = []
+            for scenario_index, scenario_row in enumerate(scenario_rows):
+                fields = {"scenario", "status", "reason", "planned_case_ids"}
+                if not isinstance(scenario_row, dict) or set(scenario_row) != fields:
+                    raise OrchestrationError(
+                        f"DFX element {interaction_id}/{dimension} scenario {scenario_index} has invalid fields"
+                    )
+                scenario = str(scenario_row["scenario"] or "").strip()
+                scenario_names.append(scenario)
+                status = scenario_row["status"]
+                if status not in {"适用", "不适用", "待确认", "需补充证据"}:
+                    raise OrchestrationError(
+                        f"DFX element {interaction_id}/{dimension}/{scenario} has invalid status"
+                    )
+                if not str(scenario_row["reason"] or "").strip():
+                    raise OrchestrationError(
+                        f"DFX element {interaction_id}/{dimension}/{scenario} requires a reason"
+                    )
+                case_ids = scenario_row["planned_case_ids"]
+                if not isinstance(case_ids, list) or len(case_ids) != len(set(case_ids)) or any(
+                    not isinstance(case_id, str) or not case_id.strip() for case_id in case_ids
+                ):
+                    raise OrchestrationError(
+                        f"DFX element {interaction_id}/{dimension}/{scenario} planned_case_ids is invalid"
+                    )
+                if status == "适用":
+                    applicable_dimensions.add(dimension)
+                    applicable_scenarios.add(scenario)
+                    repeated = referenced_case_ids & set(case_ids)
+                    if repeated:
+                        raise OrchestrationError(
+                            f"DFX element {interaction_id} assigns planned cases to multiple scenarios: "
+                            f"{sorted(repeated)}"
+                        )
+                    referenced_case_ids.update(case_ids)
+                elif case_ids:
+                    raise OrchestrationError(
+                        f"DFX element {interaction_id}/{dimension}/{scenario} may reference cases only when status=适用"
+                    )
+            if scenario_names != DFX_MATRIX[dimension]:
+                raise OrchestrationError(
+                    f"DFX element {interaction_id}/{dimension} scenarios must equal the canonical four in order"
+                )
+        if assessed_dimensions != set(DFX_MATRIX):
+            raise OrchestrationError(f"DFX element {interaction_id} does not cover all 12 dimensions")
+        planned_ids = set(_split_case_ids(plan.get("计划用例ID", "")))
+        if referenced_case_ids != planned_ids:
+            raise OrchestrationError(
+                f"DFX element {interaction_id} applicable scenario case IDs must exactly equal its plan budget; "
+                f"missing={sorted(planned_ids-referenced_case_ids)}, unknown={sorted(referenced_case_ids-planned_ids)}"
+            )
+        plan_dimensions = set(_split_case_ids(plan.get("适用DFX维度", "")))
+        plan_scenarios = set(_split_case_ids(plan.get("适用DFX场景", "")))
+        if applicable_dimensions != plan_dimensions or applicable_scenarios != plan_scenarios:
+            raise OrchestrationError(
+                f"DFX element {interaction_id} applicable dimensions/scenarios must exactly match element-case-plan.csv"
+            )
+    if seen_elements != set(plan_by_interaction):
+        raise OrchestrationError(
+            "dfx-assessment.json elements must cover every and only plan interaction; "
+            f"missing={sorted(set(plan_by_interaction)-seen_elements)}"
+        )
     return statuses
 
 
 def _validate_plan_retained_outputs(run_dir: Path, task: AgentTask) -> None:
-    statuses = _validate_dfx_assessment(_accepted_output(run_dir, task, "dfx-assessment.json"))
+    statuses = _validate_dfx_assessment(
+        _accepted_output(run_dir, task, "dfx-assessment.json"),
+        _accepted_output(run_dir, task, "element-case-plan.csv"),
+    )
     candidates = _validate_risk_candidates_file(
         _accepted_output(run_dir, task, "risk-candidates.json"),
         run_dir=run_dir,
@@ -2400,9 +2607,14 @@ def _validate_reviewer_execution_identity(
     manifest: Mapping[str, Any],
     reviewer_claim: AgentClaim,
 ) -> None:
-    if reviewer_claim.executor_kind is not ExecutorKind.CODEBUDDY_SUBAGENT:
+    formal_kinds = {
+        ExecutorKind.CODEBUDDY_SUBAGENT,
+        ExecutorKind.CODEBUDDY_ISOLATED_FALLBACK,
+    }
+    if reviewer_claim.executor_kind not in formal_kinds:
         raise OrchestrationError(
-            "formal Reviewer execution must use an authenticated codebuddy-subagent claim; "
+            "formal Reviewer execution must use an authenticated sub-agent or a supervisor-authorized "
+            "isolated fallback claim; "
             f"diagnostic executor kind {reviewer_claim.executor_kind.value!r} cannot approve delivery"
         )
     reviewer_identity = _claim_identity(reviewer_claim)
@@ -2425,7 +2637,7 @@ def _validate_reviewer_execution_identity(
         except (TypeError, ValueError):
             missing.append(task_id)
             continue
-        if generator_claim.executor_kind is not ExecutorKind.CODEBUDDY_SUBAGENT:
+        if generator_claim.executor_kind not in formal_kinds:
             unauthenticated_generators.append(task_id)
         if _claim_identity(generator_claim) == reviewer_identity:
             conflicts.append(task_id)
@@ -2437,7 +2649,7 @@ def _validate_reviewer_execution_identity(
     if unauthenticated_generators:
         raise OrchestrationError(
             "formal Review is blocked because successful generators used unauthenticated diagnostic "
-            f"executor kinds instead of codebuddy-subagent: {unauthenticated_generators}"
+            f"executor kinds: {unauthenticated_generators}"
         )
     if conflicts:
         raise OrchestrationError(
@@ -2678,6 +2890,11 @@ def claim_agent_task(
             )
         except ValueError as exc:
             raise OrchestrationError(f"unsupported executor_kind: {executor_kind}") from exc
+        if requested_kind is ExecutorKind.CODEBUDDY_ISOLATED_FALLBACK:
+            raise OrchestrationError(
+                "codebuddy-isolated-fallback claims are created only by agent-dispatch-failed "
+                "after the bounded native Agent retry is exhausted"
+            )
         probe_receipt: PageProbeReceipt | None = None
         if task.agent_role is AgentRole.DISCOVERY:
             if not page_probe_receipt_id or not page_probe_receipt_fingerprint:
@@ -2872,6 +3089,224 @@ def claim_agent_task(
         raise OrchestrationError(f"task {task_id} claim did not complete")
     assert response is not None
     return response
+
+
+def _fallback_authorization(
+    task: AgentTask,
+    claim: AgentClaim,
+    *,
+    failure_count: int,
+    failure_reason: str,
+) -> dict[str, Any]:
+    content = {
+        "schema_version": FALLBACK_AUTHORIZATION_VERSION,
+        "task_id": task.task_id,
+        "execution_id": claim.execution_id,
+        "coordinator_id": claim.coordinator_id,
+        "executor_id": claim.executor_id,
+        "executor_kind": claim.executor_kind.value,
+        "source_fingerprint": task.source_fingerprint,
+        "input_snapshot_fingerprint": claim.input_snapshot_fingerprint,
+        "task_packet_fingerprint": claim.task_packet_fingerprint,
+        "context_fingerprint": claim.context_fingerprint,
+        "failure_count": failure_count,
+        "failure_reason": failure_reason,
+        "authorized_at": _now(),
+        "quality_gates_unchanged": True,
+        "workspace_isolation_required": True,
+        "review_required": True,
+        "delivery_single_writer": True,
+    }
+    return {**content, "authorization_fingerprint": canonical_fingerprint(content)}
+
+
+def _validate_fallback_authorization(
+    task: AgentTask,
+    entry: Mapping[str, Any],
+    claim: AgentClaim,
+) -> None:
+    authorization = entry.get("fallback_authorization")
+    if not isinstance(authorization, Mapping):
+        raise OrchestrationError(
+            f"fallback task {task.task_id} has no deterministic fallback authorization"
+        )
+    expected_fields = {
+        "schema_version", "task_id", "execution_id", "coordinator_id", "executor_id",
+        "executor_kind", "source_fingerprint", "input_snapshot_fingerprint",
+        "task_packet_fingerprint", "context_fingerprint", "failure_count",
+        "failure_reason", "authorized_at", "quality_gates_unchanged",
+        "workspace_isolation_required", "review_required", "delivery_single_writer",
+        "authorization_fingerprint",
+    }
+    if set(authorization) != expected_fields:
+        raise OrchestrationError("fallback authorization field set is invalid")
+    content = dict(authorization)
+    actual_fingerprint = content.pop("authorization_fingerprint", None)
+    if actual_fingerprint != canonical_fingerprint(content):
+        raise OrchestrationError("fallback authorization fingerprint is stale")
+    expected = {
+        "schema_version": FALLBACK_AUTHORIZATION_VERSION,
+        "task_id": task.task_id,
+        "execution_id": claim.execution_id,
+        "coordinator_id": claim.coordinator_id,
+        "executor_id": claim.executor_id,
+        "executor_kind": ExecutorKind.CODEBUDDY_ISOLATED_FALLBACK.value,
+        "source_fingerprint": task.source_fingerprint,
+        "input_snapshot_fingerprint": claim.input_snapshot_fingerprint,
+        "task_packet_fingerprint": claim.task_packet_fingerprint,
+        "context_fingerprint": claim.context_fingerprint,
+        "quality_gates_unchanged": True,
+        "workspace_isolation_required": True,
+        "review_required": True,
+        "delivery_single_writer": True,
+    }
+    mismatched = [key for key, value in expected.items() if authorization.get(key) != value]
+    if mismatched:
+        raise OrchestrationError(
+            f"fallback authorization does not match its frozen task/claim: {mismatched}"
+        )
+    if not isinstance(authorization.get("failure_count"), int) or authorization["failure_count"] <= AGENT_DISPATCH_RETRY_LIMIT:
+        raise OrchestrationError("fallback authorization was issued before bounded Agent retries were exhausted")
+    if not isinstance(authorization.get("failure_reason"), str) or not authorization["failure_reason"].strip():
+        raise OrchestrationError("fallback authorization has no concrete Agent dispatch failure")
+
+
+def record_agent_dispatch_failure(
+    run_dir: Path | str,
+    task_id: str,
+    *,
+    execution_id: str,
+    coordinator_id: str,
+    reason: str,
+    fallback_executor_id: str,
+) -> dict[str, Any]:
+    """Record an unavailable native Agent and automatically authorize safe continuation.
+
+    The first failure keeps the exact claim for one bounded retry.  A subsequent
+    failure atomically converts that same execution to an isolated fallback
+    claim, preserving Discovery's page-probe receipt and every frozen input.
+    Conversion is allowed only before a physical sub-agent binding, output, or
+    result exists, so it cannot steal work from a running Agent.
+    """
+
+    if not isinstance(reason, str) or not reason.strip() or reason != reason.strip():
+        raise OrchestrationError("agent-dispatch-failed requires a concrete trimmed reason")
+    root = Path(run_dir).resolve()
+    with exclusive_process_lock(root / "orchestration" / ".orchestrator.lock"):
+        _initialize_orchestration_unlocked(root)
+        manifest = _load_manifest(root)
+        entry = manifest.get("tasks", {}).get(task_id)
+        if not isinstance(entry, dict) or entry.get("status") != "CLAIMED":
+            raise OrchestrationError(f"task {task_id} is not claimed")
+        task = AgentTask.from_dict(entry.get("task"))
+        claim = AgentClaim.from_dict(entry.get("claim"))
+        if claim.execution_id != execution_id or claim.coordinator_id != coordinator_id:
+            raise OrchestrationError("dispatch failure identity does not match the active claim")
+        if claim.executor_kind is ExecutorKind.CODEBUDDY_ISOLATED_FALLBACK:
+            _validate_fallback_authorization(task, entry, claim)
+            return {
+                **_orchestration_status_unlocked(root, manifest),
+                "dispatch_action": "RUN_ISOLATED_FALLBACK",
+                "claim": claim.to_dict(),
+                "fallback_authorization": dict(entry["fallback_authorization"]),
+            }
+        if claim.executor_kind is not ExecutorKind.CODEBUDDY_SUBAGENT:
+            raise OrchestrationError(
+                "only a failed codebuddy-subagent dispatch can enter formal fallback"
+            )
+        if entry.get("result_path") or entry.get("promotion_ids"):
+            raise OrchestrationError("cannot degrade a claim after result storage or promotion")
+        output_root = root / "artifacts" / "agent-work" / task.agent_role.value / task.task_id / "output"
+        output_files = [path for path in output_root.rglob("*") if path.is_file()] if output_root.is_dir() else []
+        if output_files:
+            raise OrchestrationError(
+                "cannot degrade a claim after Agent output exists; reconcile the original execution"
+            )
+        binding = execution_binding_path(_project_root(root), claim.execution_id)
+        if binding.exists():
+            raise OrchestrationError(
+                "cannot degrade a claim after a physical sub-agent transcript was bound"
+            )
+        failures = entry.setdefault("dispatch_failures", [])
+        if not isinstance(failures, list):
+            raise OrchestrationError("dispatch_failures must be an array")
+        durable_failures = [
+            dict(event["payload"])
+            for event in _event_store(root).read_events()
+            if event.get("task_id") == task_id
+            and event.get("event_type") == "AGENT_DISPATCH_FAILED"
+            and isinstance(event.get("payload"), dict)
+            and event["payload"].get("execution_id") == claim.execution_id
+        ]
+        if any(
+            failure.get("sequence") != index
+            for index, failure in enumerate(durable_failures, start=1)
+        ):
+            raise OrchestrationError("durable Agent dispatch failure sequence is invalid")
+        if len(durable_failures) < len(failures):
+            raise OrchestrationError(
+                "manifest contains Agent dispatch failures without durable audit events"
+            )
+        if failures and failures != durable_failures[: len(failures)]:
+            raise OrchestrationError("manifest Agent dispatch failure history conflicts with events")
+        if len(durable_failures) > len(failures):
+            # Event append precedes manifest persistence.  Recover a hard stop at
+            # that exact boundary without counting the same dispatch twice.
+            failures[:] = durable_failures
+
+        def authorize_fallback(last_reason: str) -> dict[str, Any]:
+            fallback_claim = AgentClaim.from_dict(
+                {
+                    **claim.to_dict(),
+                    "executor_id": fallback_executor_id,
+                    "executor_kind": ExecutorKind.CODEBUDDY_ISOLATED_FALLBACK.value,
+                }
+            )
+            authorization = _fallback_authorization(
+                task,
+                fallback_claim,
+                failure_count=len(failures),
+                failure_reason=last_reason,
+            )
+            entry["claim"] = fallback_claim.to_dict()
+            entry["fallback_authorization"] = authorization
+            _save_manifest(root, manifest)
+            _event_store(root).append(
+                "TASK_EXECUTOR_DEGRADED",
+                {
+                    "previous_claim": claim.to_dict(),
+                    "claim": fallback_claim.to_dict(),
+                    "fallback_authorization": authorization,
+                },
+                task_id=task_id,
+            )
+            return {
+                **_orchestration_status_unlocked(root, manifest),
+                "dispatch_action": "RUN_ISOLATED_FALLBACK",
+                "claim": fallback_claim.to_dict(),
+                "fallback_authorization": authorization,
+            }
+
+        if len(failures) > AGENT_DISPATCH_RETRY_LIMIT:
+            return authorize_fallback(str(failures[-1].get("reason") or reason))
+        failure = {
+            "sequence": len(failures) + 1,
+            "recorded_at": _now(),
+            "execution_id": claim.execution_id,
+            "executor_id": claim.executor_id,
+            "reason": reason,
+        }
+        failures.append(failure)
+        _event_store(root).append("AGENT_DISPATCH_FAILED", failure, task_id=task_id)
+        if len(failures) <= AGENT_DISPATCH_RETRY_LIMIT:
+            _save_manifest(root, manifest)
+            return {
+                **_orchestration_status_unlocked(root, manifest),
+                "dispatch_action": "RETRY_NATIVE_AGENT",
+                "remaining_native_retries": AGENT_DISPATCH_RETRY_LIMIT - len(failures) + 1,
+                "claim": claim.to_dict(),
+            }
+        return authorize_fallback(reason)
 
 
 def release_agent_claim(
@@ -4111,13 +4546,19 @@ def submit_agent_result(
         _validate_case_wave_result_barrier(
             manifest, task, entry, claim, result.status
         )
+        if claim.executor_kind is ExecutorKind.CODEBUDDY_ISOLATED_FALLBACK:
+            _validate_fallback_authorization(task, entry, claim)
         if (
-            claim.executor_kind is not ExecutorKind.CODEBUDDY_SUBAGENT
+            claim.executor_kind not in {
+                ExecutorKind.CODEBUDDY_SUBAGENT,
+                ExecutorKind.CODEBUDDY_ISOLATED_FALLBACK,
+            }
             and result.status in {TaskStatus.SUCCEEDED, TaskStatus.NEEDS_REWORK}
         ):
             raise OrchestrationError(
                 f"diagnostic executor kind {claim.executor_kind.value!r} cannot submit "
-                f"{result.status.value} or promote formal artifacts; use codebuddy-subagent"
+                f"{result.status.value} or promote formal artifacts; use codebuddy-subagent or "
+                "the supervisor-authorized isolated fallback"
             )
         machine = _machine(manifest)
         expected_state = f"{ROLE_PHASE[task.agent_role].value.upper()}_RUNNING"
@@ -4326,6 +4767,7 @@ __all__ = [
     "orchestration_exists",
     "orchestration_status",
     "orchestration_status_under_lock",
+    "record_agent_dispatch_failure",
     "release_agent_claim",
     "resume_external_block",
     "submit_agent_result",

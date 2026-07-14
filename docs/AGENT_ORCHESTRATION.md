@@ -171,11 +171,11 @@ Review 绑定当前 generation session、generation source fingerprint 和全量
 
 `verdict` 只有 `APPROVED` 可以通过；报告中不能保留阻塞或未解决问题。正式 `artifacts/evidence` 与 `artifacts/screenshots` 中的全部文件及二进制 sidecar 都进入 Reviewer 冻结输入和最终 Review 指纹；替换任一合法 sidecar 也会使既有 Review 失效。任何上游正式事实、generation session、分片、Sheet JSON、traceability 或规则变化都会使指纹失效，必须重新 Review。`complete-deliverables` 在产生任何交付副作用之前再次校验 Review。
 
-Reviewer 的领取身份受确定性规则约束：当前正式流程只认证受项目 hook 约束的 `codebuddy-subagent`，且 `(executor_kind, executor_id)` 不能与任何成功的 Discovery、Plan/DFX、Risk 或 Case 生成任务相同。`codebuddy-main-session`、`external-session` 与 `codebuddy-agent-team` 目前只允许诊断；这些枚举值不代表隔离能力已经认证，任何生成或 Review 任务以它们返回 `SUCCEEDED` / `NEEDS_REWORK` 都会在正式产物晋升前失败关闭。平台没有 sub-agent 时不得用主会话、独立会话或 Agent Team 模拟正式执行，必须阻断正式流程，直到部署受支持的 sub-agent 或另行实现并通过等价的身份、claim、transcript 与读写边界认证。
+Reviewer 的领取身份受确定性规则约束：正式流程认证受项目 hook 和物理 transcript 约束的 `codebuddy-subagent`，以及仅能由 supervisor 从已领取 sub-agent claim 转换的 `codebuddy-isolated-fallback`。fallback 复用原 `execution_id`、冻结输入和 source fingerprint，授权哈希限定唯一 task output 白名单；存在物理绑定、既有 output、result 或 promotion 时拒绝转换。Reviewer 仍必须使用独立任务和不同 `(executor_kind, executor_id)`，确定性 Review 会从实际文件重新计算全部门禁。`codebuddy-main-session`、`external-session` 与 `codebuddy-agent-team` 只允许诊断，不能用来模拟成功。
 
 ## CLI 使用
 
-CodeBuddy 的项目适配、UI 显示边界、串并行调度以及无 sub-agent 时的阻断与诊断边界见 `docs/CODEBUDDY_AGENT_ADAPTER.md`。核心 engine 从不调用模型；`.codebuddy/agents/` 只注册 Discovery、Plan/DFX、Risk、Case 和 Reviewer 5 个认知角色，主 CodeBuddy 会话负责 coordinator，Delivery 仍是确定性单写者。
+CodeBuddy 的项目适配、UI 显示边界、串并行调度以及无 sub-agent 时的自动降级边界见 `docs/CODEBUDDY_AGENT_ADAPTER.md`。核心 engine 从不调用模型；`.codebuddy/agents/` 只注册 Discovery、Plan/DFX、Risk、Case 和 Reviewer 5 个认知角色，主 CodeBuddy 会话负责 coordinator，Delivery 仍是确定性单写者。
 
 初始化后，用统一 PowerShell 入口操作：
 
@@ -188,6 +188,9 @@ scripts/run-test-design.ps1 agent-status --run-dir <run-dir> --json
 
 # 调用方先生成稳定唯一 execution_id，再原子领取；丢响应时用相同参数重试
 scripts/run-test-design.ps1 agent-claim --run-dir <run-dir> --task-id <task-id> --execution-id <execution-id> --coordinator-id <coordinator-id> --executor-id <executor-id> --executor-kind codebuddy-subagent --wave-id <wave-id> --json
+
+# 原生派发在执行开始前失败时记录；第一次要求重试，第二次把同一 claim 转成隔离 fallback
+scripts/run-test-design.ps1 agent-dispatch-failed --run-dir <run-dir> --task-id <task-id> --execution-id <execution-id> --coordinator-id <coordinator-id> --reason <实际失败原因> --fallback-executor-id <角色唯一执行ID> --json
 
 # Agent 按 task packet 完成 output 后，用同一 execution_id 提交严格 AgentResult
 scripts/run-test-design.ps1 agent-submit --run-dir <run-dir> --task-id <task-id> --execution-id <execution-id> --result <agent-result.json> --json

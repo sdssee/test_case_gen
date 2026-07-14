@@ -97,6 +97,7 @@ class TaskStatus(str, Enum):
 
 class ExecutorKind(str, Enum):
     CODEBUDDY_SUBAGENT = "codebuddy-subagent"
+    CODEBUDDY_ISOLATED_FALLBACK = "codebuddy-isolated-fallback"
     CODEBUDDY_MAIN_SESSION = "codebuddy-main-session"
     CODEBUDDY_AGENT_TEAM = "codebuddy-agent-team"
     EXTERNAL_SESSION = "external-session"

@@ -112,10 +112,66 @@ _ISSUE_FIELDS = {
     "message",
 }
 _CLOSED_REWORK_STATES = {"RESOLVED", "CLOSED", "WAIVED", "INVALIDATED"}
+_FORMAL_EXECUTOR_KINDS = {
+    ExecutorKind.CODEBUDDY_SUBAGENT,
+    ExecutorKind.CODEBUDDY_ISOLATED_FALLBACK,
+}
 
 
 class ReviewValidationError(ValueError):
     """Raised when an orchestrated run is not independently reviewable."""
+
+
+def _validate_fallback_authorization(
+    task_id: str,
+    entry: Mapping[str, Any],
+    task: AgentTask,
+    claim: AgentClaim,
+) -> None:
+    value = entry.get("fallback_authorization")
+    if not isinstance(value, Mapping):
+        raise ReviewValidationError(
+            f"fallback task {task_id!r} has no supervisor authorization"
+        )
+    expected_fields = {
+        "schema_version", "task_id", "execution_id", "coordinator_id", "executor_id",
+        "executor_kind", "source_fingerprint", "input_snapshot_fingerprint",
+        "task_packet_fingerprint", "context_fingerprint", "failure_count",
+        "failure_reason", "authorized_at", "quality_gates_unchanged",
+        "workspace_isolation_required", "review_required", "delivery_single_writer",
+        "authorization_fingerprint",
+    }
+    if set(value) != expected_fields:
+        raise ReviewValidationError(f"fallback task {task_id!r} authorization fields are invalid")
+    content = dict(value)
+    fingerprint_value = content.pop("authorization_fingerprint", None)
+    if fingerprint_value != canonical_fingerprint(content):
+        raise ReviewValidationError(f"fallback task {task_id!r} authorization fingerprint is stale")
+    expected = {
+        "schema_version": "1.0.0",
+        "task_id": task_id,
+        "execution_id": claim.execution_id,
+        "coordinator_id": claim.coordinator_id,
+        "executor_id": claim.executor_id,
+        "executor_kind": ExecutorKind.CODEBUDDY_ISOLATED_FALLBACK.value,
+        "source_fingerprint": task.source_fingerprint,
+        "input_snapshot_fingerprint": claim.input_snapshot_fingerprint,
+        "task_packet_fingerprint": claim.task_packet_fingerprint,
+        "context_fingerprint": claim.context_fingerprint,
+        "quality_gates_unchanged": True,
+        "workspace_isolation_required": True,
+        "review_required": True,
+        "delivery_single_writer": True,
+    }
+    mismatched = [key for key, item in expected.items() if value.get(key) != item]
+    if mismatched:
+        raise ReviewValidationError(
+            f"fallback task {task_id!r} authorization does not match frozen execution: {mismatched}"
+        )
+    if not isinstance(value.get("failure_count"), int) or value["failure_count"] < 2:
+        raise ReviewValidationError(f"fallback task {task_id!r} did not exhaust the native Agent retry")
+    if not isinstance(value.get("failure_reason"), str) or not value["failure_reason"].strip():
+        raise ReviewValidationError(f"fallback task {task_id!r} has no concrete dispatch failure")
 
 
 def _strict_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -776,7 +832,11 @@ def _validate_discovery_page_probe(
         }:
             continue
         payload = event.get("payload")
-        if isinstance(payload, Mapping) and payload.get("claim") == claim.to_dict():
+        if (
+            isinstance(payload, Mapping)
+            and isinstance(payload.get("claim"), Mapping)
+            and payload["claim"].get("execution_id") == claim.execution_id
+        ):
             matching_claim_events.append(event)
     if len(matching_claim_events) != 1 or not isinstance(
         matching_claim_events[0].get("sequence"), int
@@ -843,8 +903,26 @@ def _validate_task_events(
     current_claim_events = [
         event for event in claim_events if event.get("execution_id") == claim.execution_id
     ]
-    if len(current_claim_events) != 1 or current_claim_events[0] != expected_claim:
+    if len(current_claim_events) != 1:
         raise ReviewValidationError(f"task {task_id!r} has no matching durable full-claim event")
+    if claim.executor_kind is ExecutorKind.CODEBUDDY_ISOLATED_FALLBACK:
+        degraded = [
+            event for event in events
+            if event.get("task_id") == task_id
+            and event.get("event_type") == "TASK_EXECUTOR_DEGRADED"
+            and isinstance(event.get("payload"), Mapping)
+            and event["payload"].get("claim") == expected_claim
+        ]
+        if len(degraded) != 1:
+            raise ReviewValidationError(
+                f"fallback task {task_id!r} has no unique executor degradation event"
+            )
+        if current_claim_events[0].get("executor_kind") != ExecutorKind.CODEBUDDY_SUBAGENT.value:
+            raise ReviewValidationError(
+                f"fallback task {task_id!r} was not originally claimed by a native Agent"
+            )
+    elif current_claim_events[0] != expected_claim:
+        raise ReviewValidationError(f"task {task_id!r} durable claim differs from current claim")
 
     expected_fingerprint = entry.get("result_fingerprint")
     stored = False
@@ -1071,6 +1149,18 @@ def validate_review_artifacts(
         validate_batch_artifacts(root, "cases", use_cache=False)
     except (OSError, TypeError, ValueError) as exc:
         raise ReviewValidationError(f"current cases gate has not passed: {exc}") from exc
+    try:
+        # Recompute the complete element-by-element DFX 12x4 contract from the
+        # promoted formal files.  Reviewer must not trust the Plan Agent's
+        # self-reported gate_summary or an earlier cached validation.
+        from .engine import _validate_dfx_assessment
+
+        _validate_dfx_assessment(
+            root / "artifacts" / "data" / "dfx-assessment.json",
+            root / "element-case-plan.csv",
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        raise ReviewValidationError(f"current per-element DFX 12x4 gate has not passed: {exc}") from exc
 
     session = generation_session_data(root)
     if not isinstance(session, dict):
@@ -1134,18 +1224,21 @@ def validate_review_artifacts(
             )
             successful_results[task_id] = result
             claim = _task_claim(task_id, entry)
-            if claim.executor_kind is not ExecutorKind.CODEBUDDY_SUBAGENT:
+            if claim.executor_kind not in _FORMAL_EXECUTOR_KINDS:
                 raise ReviewValidationError(
                     f"task {task_id!r} used diagnostic executor kind "
-                    f"{claim.executor_kind.value!r}; formal review requires codebuddy-subagent"
+                    f"{claim.executor_kind.value!r}; formal review requires a guarded executor"
                 )
             _validate_claim_binding(root, task_id, entry, task, claim)
-            try:
-                validate_execution_binding(root.parents[3], root, task, claim)
-            except ExecutionBindingError as exc:
-                raise ReviewValidationError(
-                    f"task {task_id!r} physical sub-agent execution binding is invalid: {exc}"
-                ) from exc
+            if claim.executor_kind is ExecutorKind.CODEBUDDY_SUBAGENT:
+                try:
+                    validate_execution_binding(root.parents[3], root, task, claim)
+                except ExecutionBindingError as exc:
+                    raise ReviewValidationError(
+                        f"task {task_id!r} physical sub-agent execution binding is invalid: {exc}"
+                    ) from exc
+            else:
+                _validate_fallback_authorization(task_id, entry, task, claim)
             _validate_discovery_page_probe(
                 root,
                 task_id,
@@ -1238,9 +1331,9 @@ def validate_review_artifacts(
     if review_task_id not in successful_results:
         raise ReviewValidationError("reviewer task has no validated successful result")
     reviewer_claim = _task_claim(review_task_id, entry)
-    if reviewer_claim.executor_kind is not ExecutorKind.CODEBUDDY_SUBAGENT:
+    if reviewer_claim.executor_kind not in _FORMAL_EXECUTOR_KINDS:
         raise ReviewValidationError(
-            "Reviewer must use an authenticated codebuddy-subagent execution claim"
+            "Reviewer must use an authenticated sub-agent or supervisor-authorized fallback claim"
         )
     reviewer_identity = (reviewer_claim.executor_kind.value, reviewer_claim.executor_id)
     conflicting_generators: list[str] = []
@@ -1252,14 +1345,14 @@ def validate_review_artifacts(
         ):
             continue
         generator_claim = _task_claim(generator_task_id, generator_entry)
-        if generator_claim.executor_kind is not ExecutorKind.CODEBUDDY_SUBAGENT:
+        if generator_claim.executor_kind not in _FORMAL_EXECUTOR_KINDS:
             unguarded_generators.append(generator_task_id)
         if (generator_claim.executor_kind.value, generator_claim.executor_id) == reviewer_identity:
             conflicting_generators.append(generator_task_id)
     if unguarded_generators:
         raise ReviewValidationError(
             "formal review is blocked because successful generators used diagnostic "
-            f"executor kinds instead of codebuddy-subagent: {unguarded_generators}"
+            f"executor kinds: {unguarded_generators}"
         )
     if conflicting_generators:
         raise ReviewValidationError(

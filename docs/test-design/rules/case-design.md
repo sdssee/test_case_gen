@@ -90,6 +90,7 @@ DFX 落地必须遵循“先元素、后 DFX”的顺序：
 - 分片必须同步生成 `function_cases_manifest.json`，manifest 的 `parts` 只列出本轮有效、非空且连续的三位编号分片；Excel 写入脚本只能读取 manifest 中列出的分片，禁止直接 glob 目录下所有 `function_cases_part_*.json`。
 - `prepare-function-case-generation` 会生成 `generation-session.json`；manifest 必须原样写入相同的 `generation_session_id` 与 `source_fingerprint`。page-element-inventory、page-discovery、selection-option-observations、interaction-branch-observations、element-case-plan、test-data-lifecycle 或 risk-confirmation 任一语义变化后，旧会话和旧分片立即失效，必须重新 prepare。
 - 每条 JSON 用例只能使用标准字段：`用例 ID`、`Story ID/需求 ID`、`模块`、`功能点`、`用例标题`、`优先级`、`测试类型`、`DFX维度`、`DFX场景`、`前置条件`、`测试数据`、`操作步骤`、`预期结果`、`实际结果`、`执行状态`、`是否适合自动化`、`关联风险`、`备注`；禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected` 等非标准字段。
+- 测试设计交付不是执行报告：`执行状态` 固定为 `未执行`，`实际结果` 只能留空或写 `未执行`；不得把实探观察、截图说明或其他用例的结果伪装为当前用例执行结果。
 - JSON 生成阶段必须直接写完整步骤和预期：`前置条件` 至少 2 条，`操作步骤` 至少 4 条且从系统入口和菜单路径开始，`预期结果` 至少 3 条；编号必须连续，不得出现跳号、`点搜索`、`操作元素`、`Extended scenario passes`、`behaves as expected` 等占位或笼统描述。
 - 分片必须按功能点、页面元素、业务路径或相邻交互连续编排，不得随机切分。
 - 每个分片生成后立即校验用例标题、步骤编号、预期编号、DFX维度/场景、关联 `element-case-plan.csv`、真实测试数据证据和配置生效验证；失败时只重写当前分片，不得重写全部功能用例。

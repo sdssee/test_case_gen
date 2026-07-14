@@ -1,32 +1,155 @@
 # test_case_gen
 
-测试设计规范包，用于让 CodeBuddy/Codex 按统一规则生成测试设计 Excel、测试系统导入文件，并维护内部产品测试资产。
+`test_case_gen` 是一套面向 CodeBuddy/Codex 的测试设计规范、确定性编排器和交付工具包。它不是业务应用，也不是单纯的 Excel 生成脚本；它用于把需求、产品事实和真实页面操作，经过可追踪的实探、计划、风险、用例和 Review，转换为标准测试设计、测试系统导入文件及可持续维护的产品测试资产。
 
-本仓库不是业务应用代码。它提供可复制到业务项目根目录的 Memory、Skill、Rule、脚本和 Excel 模板。
+项目重点解决四类问题：
 
-## 核心入口
+- 页面实探不彻底：默认全量深探，有限下拉项逐项选择，输入、动态选择、分页、弹窗逐分支执行，创建与修改必须验证真实生效。
+- 用例与页面事实脱节：以稳定的交互实例 ID 串联实探、元素计划、测试数据生命周期、用例和 Review。
+- 多 Agent 输出不稳定：由确定性状态机控制任务领取、指纹、隔离写入、返工、合并与交付，Agent 只负责认知工作。
+- Excel 与资产容易漂移：正式工作簿、独立导入文件、内部归档和产品事实由标准组装器一次事务性生成。
 
-| 文件 | 作用 |
+## 项目组成
+
+项目由四层协同工作：
+
+| 层 | 主要职责 | 权威入口 |
+| --- | --- | --- |
+| Skill | 告诉模型如何编排测试设计任务、何时加载专题规则、如何调用 Agent | `.codebuddy/skills/test-design/SKILL.md` |
+| Rule | 定义不可绕过的硬门禁和各阶段详细质量标准 | `.codebuddy/rules/test-design-rule.md`、`docs/test-design/rules/` |
+| Agent | 分工完成页面实探、计划/DFX、风险仲裁、用例编写和独立 Review | `.codebuddy/agents/` |
+| 确定性工具 | 管理状态机、任务包、指纹、产物校验、Excel 组装、归档与升级 | `scripts/run-test-design.ps1`、`scripts/test_design_excel_tools.py` |
+
+Codex 从 `AGENTS.md` 进入，CodeBuddy 从 `CODEBUDDY.md` 进入。二者都是轻量路由，不复制全部规则正文。规则归属与权威源见 `docs/RULE_OWNERSHIP.md`。
+
+## Skill 如何工作
+
+测试设计 Skill 是流程协调层，不自行降低 Rule 门禁。其主要职责是：
+
+1. 识别任务范围，读取产品事实与需求，决定是否按最小标题拆分批次。
+2. 按阶段延迟加载需要的专题规则，避免一次塞入全部文档导致上下文臃肿。
+3. 推动 `discovery → plan → risk → cases → review → delivery`，为每个认知任务选择正确 Agent。
+4. 只接受结构化 AgentResult，由确定性编排器判断阶段是否通过。
+5. 在 Review 通过后调用单写者完成 Excel、导入文件和产品事实归档。
+
+推荐正式入口：
+
+```text
+/test-design-run <run-dir>
+```
+
+`pipeline-status`、`agent-status` 和阶段校验命令用于诊断事实，不能绕过 Agent、Review 或交付门禁。
+
+## 规则体系
+
+`.codebuddy/rules/test-design-rule.md` 是硬门禁权威源，`.codebuddy/.rules/test-design-rule.mdc` 是同步镜像。详细规则由 `docs/test-design/rules/README.md` 路由：
+
+| 场景 | 需要读取的规则 |
 | --- | --- |
-| `AGENTS.md` | Codex 项目级执行入口。 |
-| `CODEBUDDY.md` | CodeBuddy 项目级 Memory。 |
-| `.codebuddy/skills/test-design/SKILL.md` | 测试设计执行流程。 |
-| `.codebuddy/.rules/test-design-rule.mdc` | CodeBuddy IDE 硬规则。 |
-| `.codebuddy/rules/test-design-rule.md` | CodeBuddy Code/CLI 硬规则。 |
-| `.codebuddy/settings.json`、`.codebuddy/hooks/guard-agent-tool.py` | CodeBuddy 认知 sub-agent 的冻结输入读取与输出写入边界保护。 |
-| `docs/test-design/codebuddy-test-design-template.xlsx` | 正式测试设计模板，固定 8 个 Sheet。 |
-| `docs/test-design/测试用例模板.xlsx` | 测试系统导入模板，使用时复制副本，不修改原模板。 |
-| `docs/test-assets/catalog/` | 按模块 JSON 保存的内部产品测试权威事实源。 |
-| `docs/test-assets/product-map.xlsx` | 从 catalog 重建的 Excel 查询视图，不作为默认客户交付件。 |
-| `docs/RULE_OWNERSHIP.md` | 规则归属矩阵，避免重复和漂移。 |
-| `docs/AGENT_ORCHESTRATION.md` | 最终多 Agent 架构、角色、契约、状态机、返工、Review 与 CLI。 |
-| `docs/CODEBUDDY_AGENT_ADAPTER.md` | CodeBuddy Agent 注册、串并行调度、UI 显示边界与降级方案。 |
+| 所有测试设计 | `case-design.md`、`excel-deliverable.md`、`data-safety.md`、`dfx-test-strategy.md` |
+| 页面、截图、浏览器或 computer use | `page-discovery.md` |
+| 全产品、大模块或多个菜单 | `batch-run.md` |
+| 测试系统导入 | `import-template.md` |
+| 历史用例、跨模块依赖和资产归档 | `product-map-sync.md` |
 
-详细规则按任务读取 `docs/test-design/rules/`；Excel 字段以 `docs/test-design/excel-template-spec.md` 为准；归档和跨模块依赖以 `docs/test-design/archive-and-index-guidelines.md` 为准。
+关键规则包括：
 
-## 标准交付
+- 默认全量深探。有限集合逐项实际选择；输入、动态选择、分页、弹窗在 `interaction-branch-observations.csv` 中逐分支独立执行、恢复和关联用例。
+- 页面可验证的问题由模型自行操作，不能转给用户规避实探；只有页面无法解释的外部业务语义才进入风险确认。
+- 创建必须成功；配置项和所有修改项必须验证保存后回显、持久化和实际生效。既有数据只读，变更仅作用于带 `AI_TEST`、`CODEX_TEST` 或用户指定标识的本次测试数据。
+- 先通过 `page-element-inventory.csv` 和实探建立元素骨架，再生成 `element-case-plan.csv` 与 `test-data-lifecycle.csv`。DFX 使用 `DFX维度`、`DFX场景` 做扩展检查矩阵；旧字段 `场景类型`、`正向/反向` 已废弃，性能规格测试和 `DFP性能` 不进入功能用例。
+- 功能用例按功能点集中管理；每个 `function_cases_part_001.json` 等分片包含 1–10 条，同功能点不得跨片，`function_cases_manifest.json` 是唯一读取源。折叠测试实例编号后，不同用例的步骤和预期仍必须分别唯一、可判定。
+- 正式测试设计只含 8 个标准 Sheet，导入文件从独立模板副本生成。正式交付只能由 `complete-deliverables` 一站式收口。
 
-正式测试设计只包含 8 个标准 Sheet：
+## Agent 架构
+
+仓库注册 5 个认知 Agent，不注册 Delivery Agent：
+
+| Agent | 阶段 | 职责 | 执行方式 |
+| --- | --- | --- | --- |
+| `test-discovery` | discovery | 单一页面事实 owner；全量实探、证据采集、安全 CRUD 和修改生效验证 | 串行 |
+| `test-plan-dfx` | plan | 将实探事实转换为元素计划、数据生命周期和 DFX 评估 | 串行 |
+| `test-risk-arbiter` | risk | 区分页面可验证问题与必须由用户确认的外部语义 | 条件串行 |
+| `test-case-worker` | cases | 按单一功能点生成步骤、预期均有差异的功能用例 | 可按冻结波次并行 |
+| `test-reviewer` | review | 独立只读检查实探、计划、用例、覆盖、隐私和交付条件 | 串行且身份独立 |
+
+Delivery 由确定性单写者完成，避免多个 Agent 同时改写正式工作簿、catalog 或 deliverables。
+
+Agent 只能读取冻结输入并写自己的隔离 workspace。每个任务都通过 `agent-claim` 绑定 `task_id`、`execution_id`、source fingerprint 和物理 sub-agent transcript；`agent-submit`、Review 与 Delivery 会重复验证。Review 未通过不得交付。
+
+### 串行与并行
+
+Discovery、Plan/DFX、Risk 和 Reviewer 始终串行。只有同一轮返回的 Case Worker 可以组成冻结 wave 并行执行；整波收齐后，成功结果按冻结顺序提交，失败或返工时先安全释放其余任务再提交控制结果。
+
+如果 CodeBuddy 支持 sub-agent 但不支持后台并行，Case wave 仍先完整 claim，再按固定顺序逐个前台执行并暂存结果，收齐后统一决策。这样只降低吞吐，不降低质量。如果完全不支持 sub-agent，主会话只能做非正式诊断，不能进入正式 Review/Delivery。
+
+CodeBuddy 项目 Agent 位于 `.codebuddy/agents/`。导入仓库不会在 IDE Agent 页面自动创建 5 个任务；新 CodeBuddy Code 会话中应分别执行 `/agents`、`/hooks` 完成注册和保护 Hook 预检，再执行 `/test-design-run <run-dir>`。完整适配边界见 `docs/CODEBUDDY_AGENT_ADAPTER.md`。
+
+## 运行流程
+
+### 1. 初始化最小标题批次
+
+一个 run-dir 只允许一个最小标题批次。超过一个最小标题时，按最深标题级别逐批运行，禁止合并、禁止再拆分。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-run `
+  --project-root . `
+  --run-id <YYYYMMDD_任务标识_BATCH-001> `
+  --module-path "一级模块>二级菜单>三级菜单" `
+  --product-name "产品名" `
+  --batch-id BATCH-001
+```
+
+批次目录位于 `docs/test-assets/batch-runs/`。已存在批次用 `--resume`，需要重建时显式使用 `--force-reinitialize`。
+
+### 2. 推进确定性多 Agent 流程
+
+```powershell
+scripts/run-test-design.ps1 agent-run --run-dir <run-dir> --json
+scripts/run-test-design.ps1 agent-status --run-dir <run-dir> --json
+```
+
+编排器生成隔离任务包，协调会话按角色完成 `agent-claim → sub-agent 执行 → agent-submit`。每个任务必须使用稳定唯一的 `execution_id`；领取没有自动超时重派，只有确认没有页面或数据副作用时才能通过 `agent-release --confirm-no-side-effects` 释放。
+
+### 3. Discovery 页面实探
+
+Discovery claim 前必须连接可操作当前页面的 MCP，并真实完成“前读 → 点击/选择/输入 → 变化后读”探针。snapshot、click、fill、select、navigate 等拆分工具需要逐个成功预探；未预探工具不授权。
+
+正式实探维护元素清单、页面事实、有限选项、交互分支、证据和测试数据生命周期。页面事实不足、选项未逐项执行或修改未验证生效时，流程停留在 discovery。
+
+### 4. Plan、Risk 与 Cases
+
+Plan/DFX 基于冻结的实探事实生成覆盖预算。Risk 只处理模型仍不理解的外部语义；页面可验证项退回 Discovery。Case Worker 按功能点读取对应事实与计划，输出 `artifacts/data/function_cases_part_*.json`，并通过以下门禁：
+
+```powershell
+scripts/run-test-design.ps1 validate-batch-artifacts --phase discovery --run-dir <run-dir>
+scripts/run-test-design.ps1 validate-batch-artifacts --phase plan --run-dir <run-dir>
+scripts/run-test-design.ps1 validate-batch-artifacts --phase risk --run-dir <run-dir>
+scripts/run-test-design.ps1 validate-batch-artifacts --phase cases --run-dir <run-dir>
+```
+
+### 5. 独立 Review
+
+Reviewer 检查元素覆盖、交互闭环、步骤和预期唯一性、功能点连续区块、DFX 落位、敏感信息和二进制证据审计。发现问题时生成结构化返工请求，并使目标阶段及其后续阶段失效。
+
+### 6. 一站式交付
+
+状态进入 `DELIVERY_RUNNING` 后才能执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-deliverables `
+  --project-root . `
+  --run-dir <run-dir> `
+  --module-path "一级模块>二级菜单>三级菜单" `
+  --product-name "产品名" `
+  --batch-id BATCH-001
+```
+
+命令会事务性生成正式工作簿、独立导入文件、current/deliverables 副本、内部模块归档和 catalog 事实，并写入交付 receipt。交付文件名只使用菜单/模块路径，不拼批次目录名或产品名。单独生成导入文件可使用 `generate-import`。
+
+## 标准输出
+
+正式测试设计固定包含：
 
 1. `测试设计总览`
 2. `需求用户故事拆解`
@@ -37,119 +160,23 @@
 7. `自动化建议`
 8. `页面元素覆盖清单`
 
-正式测试设计不新增 `测试系统导入用例` Sheet。需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件。
+客户交付件位于 `docs/test-design/current/` 和 `docs/test-design/deliverables/`；内部事实归档到 `docs/test-assets/catalog/modules/`、`docs/test-assets/modules/`、`docs/test-assets/imports/`。`docs/test-assets/product-map.xlsx` 是可重建查询视图，不是事实权威源。
 
-## 主流程
+## 校验与维护
 
-推荐统一通过 `scripts/run-test-design.ps1` 运行工具。该入口会选择兼容运行时后调用 `scripts/test_design_excel_tools.py`：优先使用 `TEST_DESIGN_PYTHON`，其次使用 Codex 捆绑运行时，最后检查 PATH 中的 Python，并验证 `openpyxl==3.1.5`。独立环境可先执行 `python -m pip install -r requirements.txt`。
-
-批次任务或页面实探任务先初始化批次目录：
+日常修改执行 Fast，提交、CI 和发布执行 Full：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-run `
-  --project-root . `
-  --run-id <YYYYMMDD_任务标识_BATCH-001> `
-  --module-path "一级模块>二级菜单>三级菜单" `
-  --product-name "产品/系统名称" `
-  --batch-id BATCH-001
+powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1 -Mode Fast
+powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1 -Mode Full
 ```
 
-`init-batch-run` 会直接建立必选的最终多 Agent 运行环境。使用 `agent-run` 获取下一组隔离任务，Agent 按 task packet 写入自己的 output 后用 `agent-submit` 提交；编排器依次完成 discovery、plan、risk、cases 和独立 review，进入 `DELIVERY_RUNNING` 后才允许收口：
-
-```powershell
-scripts/run-test-design.ps1 agent-run --run-dir <批次目录> --json
-scripts/run-test-design.ps1 agent-status --run-dir <批次目录> --json
-scripts/run-test-design.ps1 agent-claim --run-dir <批次目录> --task-id <任务ID> --execution-id <调用方稳定唯一执行ID> --coordinator-id <协调器ID> --executor-id <执行器ID> --executor-kind codebuddy-subagent --wave-id <波次ID> --json
-scripts/run-test-design.ps1 agent-submit --run-dir <批次目录> --task-id <任务ID> --execution-id <同一执行ID> --result <agent-result.json> --json
-```
-
-每个任务必须先由调用方生成稳定唯一 `execution_id` 并原子领取再执行；领取响应丢失时用完全相同参数重试会返回同一 claim，`agent-run` 不会重新返回已领取任务。领取没有自动超时或租约重派，避免 Discovery/CRUD 在崩溃后被重复执行；只有确认没有业务或页面副作用时，才可用 `agent-release ... --confirm-no-side-effects` 显式释放。`codebuddy-main-session` 只允许诊断降级，任何生成任务使用该身份都会阻断 Reviewer 和正式交付；Reviewer 不得使用该身份，且执行身份必须与全部成功生成者不同。
-
-在 CodeBuddy Code 主会话中执行项目命令 `/test-design-run <run-dir>`。`.codebuddy/agents/` 注册 5 个认知角色，但导入仓库不会自动创建或启动任务；CodeBuddy IDE 的 Agent 页面只是任务/会话列表，不是项目 Agent 注册表。首次导入、升级或修改 `.codebuddy` 配置后，用户必须新开 CodeBuddy Code 会话，分别执行 `/agents` 检查角色、执行 `/hooks` 审核 guard 与 page-probe recorder，再另行调用 `/test-design-run`；协调命令不能内嵌这两个交互式预检。Windows Discovery 在 claim 前必须实际探测一个已连接、可点击并观察结果的页面控制 MCP；若页面 MCP 拆分多个 exact tools，本批预计使用的每个工具都必须逐个成功预探并由同 server receipt 精确授权，未预探工具保持拒绝。支持 sub-agent 但不支持后台并行时，Case 仍先 claim 全波、逐个前台执行并暂存，收齐全波后才统一决策和顺序提交；`codebuddy-main-session`、`external-session` 与 Agent Team 当前均未通过本适配的隔离认证，只可诊断，不能正式交付。完整边界见 `docs/CODEBUDDY_AGENT_ADAPTER.md`。
-
-进入 `DELIVERY_RUNNING` 后使用一站式组装与收口命令。该命令从 manifest 和 7 个 Sheet JSON 生成 8 Sheet 正式工作簿，并同时写入 `current/`、`deliverables/`、内部归档和独立导入文件：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-deliverables `
-  --project-root . `
-  --run-dir docs/test-assets/batch-runs/<任务_BATCH-001> `
-  --module-path "一级模块>二级菜单>三级菜单" `
-  --product-name "产品/系统名称" `
-  --batch-id BATCH-001
-```
-
-交付事务会在同一排他锁与回滚边界内复核 receipt、文件哈希和产品事实，并直接把运行状态原子收口为 `COMPLETE`；无需也不得再用额外 `agent-run` 补写完成状态。正式持久输出只有事务内的 5 份规范发布文件，调用参数中的临时组装路径不是第六份交付副本；最终架构拒绝把 `--import-workbook` 指向外部兼容路径，`FINALIZED` 后不再执行任何事后复制。编排模式只接受当前 run-dir 的 `batch-status.csv`、`page-discovery.csv` 和项目规范 `docs/test-assets/product-map.xlsx`，不能用命令行覆盖文件把未经过 Review 的页面事实带入 catalog。
-
-如需排查组装问题，可先运行 `assemble-formal-workbook --run-dir <批次目录> --output <批次目录>/artifacts/previews/临时检查.xlsx`；该命令仅可生成 run-dir 内预览，正式目录和产品事实只能由 `complete-deliverables --run-dir` 在 Review 后写入。禁止在批次目录编写 `gen_excel.py` 之类脚本绕过标准组装器。
-
-一个 run-dir 只允许一个最小标题批次和一行 `batch-status.csv`；下一叶子批次必须使用新的 `<任务>_<BATCH-ID>` 目录。初始化时显式传入 `--product-name`，工具会写入 `batch-scope.json`，后续收口即使省略参数也复用同一产品，传入冲突产品则拒绝，避免把一级模块误写成产品名。已存在同名批次时，初始化命令默认拒绝覆盖；继续原批次使用 `--resume`，重建使用 `--force-reinitialize`。`complete-deliverables` 只有在组装、资产同步和最终校验全部通过后才保留输出；它会自动回填 `batch-review.md` 完成行，失败会恢复工作簿、交付副本、账本、产品事实 catalog 和产品版图，成功后写入绑定 generation session 与文件 SHA256 的 `delivery-receipt.json`。
-
-旧资产升级或排障时可使用 `migrate-product-facts`、`validate-product-facts`、`rebuild-product-map`；正常 `sync-product-map` 会自动 upsert 模块 JSON 并重建 Excel 视图。
-
-只需要单独生成导入文件且不做批次收口时，可使用 `generate-import` 兼容命令。
-
-交付文件名只使用菜单/模块路径，例如 `一级模块_二级菜单_三级菜单_测试设计.xlsx` 和 `一级模块_二级菜单_三级菜单_导入用例.xlsx`，不拼运行文件夹名、批次目录名或产品名。
-
-## 关键规则
-
-- 测试策略以 `DFX维度` 和 `DFX场景` 为主字段，`场景类型`、`正向/反向` 已废弃；详细矩阵见 `docs/test-design/rules/dfx-test-strategy.md`。
-- DFX 是扩展检查矩阵，不是用例生成主轴；必须先按页面元素和交互路径建立覆盖骨架，再用 DFX 扩展功能、异常、边界、权限、状态、数据一致性、性能、风险和自动化建议。
-- 页面实探前先从 DOM/可访问性树/trace/控件树独立采集 `page-element-inventory.csv`，再按稳定 `交互实例ID` 执行并写入 `page-discovery.csv`；两者必须双向一致。实探后沉淀 `element-case-plan.csv` 和 `test-data-lifecycle.csv`；`应生成用例数` 按元素类型 × DFX 最低预算计算，真实新增/编辑/删除形成测试数据生命周期闭环。
-- 配置项保存类用例必须验证保存后回显和实际生效，不能只写点击保存或提示成功。
-- 生成功能测试用例分片前先运行 `prepare-function-case-generation` 清理旧分片和旧 manifest；功能用例按功能点感知、每片 1–10 条生成从 `artifacts/data/function_cases_part_001.json` 开始连续无断号的三位编号分片，同功能点可容纳时不得跨片，并同步 `function_cases_manifest.json`。
-- 功能用例 JSON 只允许标准字段，禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected`、英文模板或泛化占位文本；Excel 数据按 Sheet 分文件输出，避免单个脚本或 JSON 承载过多内容。
-- 七个 Sheet JSON 必须使用目标 Sheet 的精确表头且至少有一个非空值；错误字段在 cases 门禁直接失败，不延迟到 Excel 组装阶段。
-- 最终架构强制由确定性编排器按 `discovery → plan → risk → cases → review → delivery` 推进：单 Discovery owner、Plan/DFX、条件 Risk Arbiter、按功能点 Case Worker、独立只读 Reviewer、单写者 Delivery。Agent 只写隔离 workspace，Review 未通过不得交付。`pipeline-status` 保留为事实诊断入口。
-- 日常修改运行 `scripts/validate-test-design.ps1 -Mode Fast`；提交、CI 和发布运行 `-Mode Full`。
-- `功能测试用例` 不写性能规格测试或 `DFP性能` 场景；性能、并发、大数据量、资源监控和极端压力进入 `性能测试设计`、风险或自动化建议。
-- 选择类有限集合逐项实际选择并写入 `selection-option-observations.csv`；输入、动态选择、分页和弹窗逐必测分支写入 `interaction-branch-observations.csv`，每个分支独立执行、恢复、取证并绑定唯一用例；每项 `预期结果锚点` 取自真实页面变化、不能只填选项值，并进入关联用例预期。创建对象后续生命周期复用同一测试数据 ID 和创建 owner 用例，各行绑定对应 mutation plan 交互实例 ID。
-- 页面可验证问题必须由模型自行操作，未完成时退回 discovery；不同用例在折叠测试实例编号后也不得复用相同操作步骤或相同预期结果，标题参数必须在步骤和预期中落地。
-- 页面实探必须记录所有可点击、可输入、可选择、可测试元素；独立 inventory、实探、页面元素覆盖清单和产品版图必须一致。证据必须是当前 run-dir `artifacts/` 内的非空文件，静态截图按内容去重；二进制证据必须带同哈希可视脱敏审计 sidecar。
-- 已有数据只能查看和只读深探；敏感操作只允许作用于本次创建且带测试标识的数据。
-- 客户交付件放在 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。
-- 内部资产归档到 `docs/test-assets/modules/`、`docs/test-assets/imports/` 和 `docs/test-assets/product-map.xlsx`。
-
-## 校验
-
-项目稳定性自检：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
-```
-
-交付件校验：
+交付件单独校验：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
 ```
 
-大范围任务追加 `-BatchStatusPath <batch-status.csv>`；有导入文件时追加 `-ImportWorkbookPath <导入文件.xlsx>`。如果同级存在 `page-discovery.csv`，校验会自动启用产品版图同步检查。
+升级包通过 `scripts/new-framework-upgrade-package.ps1` 生成，通过 `scripts/upgrade-framework.ps1` 应用。`framework_version` 表示框架版本，`asset_schema_version` 表示资产结构版本。升级脚本以 `PROTECTED_ASSET_DIRS` 保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`，不会覆盖真实业务资产；详细流程见 `docs/UPGRADE.md`。
 
-当前批次生成了 Python/JSON/CSV/Markdown/TXT 中间分片时，执行前先预检：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scripts.ps1 -Path docs/test-assets/batch-runs/<任务_BATCH-001>/artifacts/scripts
-```
-
-## 升级
-
-外网生成升级包：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/new-framework-upgrade-package.ps1
-```
-
-内网应用升级包：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/upgrade-framework.ps1 -PackagePath <升级包>
-```
-
-升级默认保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`，不会覆盖内网真实资产；保护清单标识为 `PROTECTED_ASSET_DIRS`。`VERSION` 中的 `framework_version` 表示框架版本，`asset_schema_version` 表示内部资产结构版本。详细流程见 `docs/UPGRADE.md`。
-
-## 维护
-
-- 规则变化先查 `docs/RULE_OWNERSHIP.md`。
-- 模板字段变化同步 `docs/test-design/excel-template-spec.md` 和校验脚本。
-- 修改完成后运行稳定性自检。
-- 验证通过后按项目约定提交并推送到 `origin`。
+模板字段、规则或交付逻辑变化前先查看 `docs/RULE_OWNERSHIP.md`，避免在 README、Skill、Rule 和专题文档之间重复维护完整规则。

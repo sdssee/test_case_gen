@@ -16,6 +16,7 @@ import tempfile
 from pathlib import Path
 
 from test_design.io_utils import (
+    DurableFileTransaction,
     atomic_copy,
     atomic_save_workbook,
     atomic_write_text,
@@ -340,8 +341,12 @@ from test_design.batch import (
 from test_design.pipeline import derive_pipeline_status
 from test_design.orchestration.engine import (
     advance_orchestration,
+    claim_agent_task,
+    commit_page_probe_receipt,
     complete_delivery_orchestration,
     orchestration_status,
+    orchestration_status_under_lock,
+    release_agent_claim,
     resume_external_block,
     submit_agent_result,
     validate_delivery_running_state,
@@ -404,36 +409,63 @@ def write_delivery_receipt(
     run_dir = batch_status.resolve().parent
     if not generation_session_core_is_current(run_dir):
         raise ValueError("Cannot write delivery receipt for a missing or stale generation session")
-    session = generation_session_data(run_dir) or {}
     tracked = list(published)
     if product_map and page_discovery:
         tracked.extend(path for path in product_map_mutable_paths(product_map, module_path, product_name) if path.is_file())
+    receipt = delivery_receipt_value(
+        project_root,
+        batch_status,
+        [(path, path) for path in tracked],
+        product_map if product_map and page_discovery else None,
+    )
+    target = run_dir / "artifacts" / "data" / DELIVERY_RECEIPT
+    atomic_write_text(target, json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return target
+
+
+def delivery_receipt_value(
+    project_root: Path,
+    batch_status: Path,
+    tracked_files: list[tuple[Path, Path]],
+    product_map: Path | None,
+) -> dict[str, object]:
+    """Build a receipt from logical publication paths and immutable content sources."""
+
+    run_dir = batch_status.resolve().parent
+    if not generation_session_core_is_current(run_dir):
+        raise ValueError("Cannot write delivery receipt for a missing or stale generation session")
+    session = generation_session_data(run_dir) or {}
     files = []
-    for path in dict.fromkeys(item.resolve() for item in tracked):
-        if not path.is_file() or path.stat().st_size == 0:
-            raise ValueError(f"Cannot write delivery receipt for missing or empty file: {path}")
+    seen: set[Path] = set()
+    for logical_path, content_source in tracked_files:
+        path = logical_path.resolve()
+        if path in seen:
+            continue
+        seen.add(path)
+        if content_source.is_symlink():
+            raise ValueError(f"Cannot write delivery receipt from symbolic link: {content_source}")
+        source = content_source.resolve()
+        if not source.is_file() or source.stat().st_size == 0:
+            raise ValueError(f"Cannot write delivery receipt for missing or empty file: {source}")
         files.append(
             {
                 "path": relative_project_path(project_root, path),
-                "size": path.stat().st_size,
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "size": source.stat().st_size,
+                "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
             }
         )
-    receipt = {
+    return {
         "version": 1,
         "generation_session_id": session.get("generation_session_id"),
         "source_fingerprint": session.get("source_fingerprint"),
         "catalog_source_fingerprint": session.get("catalog_source_fingerprint"),
         "product_map_path": (
             relative_project_path(project_root, product_map)
-            if product_map and page_discovery and product_map.is_file()
+            if product_map
             else ""
         ),
         "files": files,
     }
-    target = run_dir / "artifacts" / "data" / DELIVERY_RECEIPT
-    atomic_write_text(target, json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return target
 
 
 def finalize_deliverables(
@@ -488,6 +520,373 @@ def run_python_script(script: Path, args: list[str]) -> None:
         raise SystemExit(completed.returncode)
 
 
+def delivery_publication_paths(
+    project_root: Path,
+    module_path: str,
+    product_name: str | None,
+) -> list[Path]:
+    _, formal_name, import_name = deliverable_names(module_path, product_name)
+    return [
+        project_root / "docs" / "test-design" / "current" / formal_name,
+        project_root / "docs" / "test-design" / "deliverables" / formal_name,
+        project_root / "docs" / "test-design" / "deliverables" / import_name,
+        project_root / "docs" / "test-assets" / "modules" / formal_name,
+        project_root / "docs" / "test-assets" / "imports" / import_name,
+    ]
+
+
+def _project_relative(project_root: Path, path: Path) -> Path | None:
+    try:
+        return path.resolve(strict=False).relative_to(project_root.resolve())
+    except ValueError:
+        return None
+
+
+def _require_canonical_delivery_source(
+    actual: Path | None, expected: Path, label: str
+) -> Path:
+    """Reject aliases and override files that were not part of the reviewed run."""
+
+    if actual is None:
+        raise ValueError(
+            f"orchestrated delivery requires canonical {label}: {expected}"
+        )
+    if actual.is_symlink() or actual.resolve(strict=False) != expected.resolve(strict=False):
+        raise ValueError(
+            f"orchestrated delivery requires canonical {label}: {expected}; got {actual}"
+        )
+    return expected
+
+
+def _seed_staged_file(project_root: Path, staged_project: Path, source: Path) -> Path:
+    relative = _project_relative(project_root, source)
+    if relative is None:
+        raise ValueError(f"Delivery transaction target is outside project root: {source}")
+    target = staged_project / relative
+    if source.is_symlink():
+        raise ValueError(f"Delivery transaction refuses symbolic-link source: {source}")
+    if source.exists():
+        if not source.is_file():
+            raise ValueError(f"Delivery transaction source is not a regular file: {source}")
+        atomic_copy(source, target)
+    return target
+
+
+def _delivery_transaction_identity(
+    project_root: Path,
+    run_dir: Path,
+    module_path: str,
+    batch_id: str | None,
+    product_name: str | None,
+) -> dict[str, object]:
+    session = generation_session_data(run_dir) or {}
+    return {
+        "operation": "complete-deliverables",
+        "run_dir": relative_project_path(project_root, run_dir),
+        "batch_id": batch_id or "",
+        "module_path": module_path,
+        "product_name": product_name or "",
+        "generation_session_id": session.get("generation_session_id"),
+        "source_fingerprint": session.get("source_fingerprint"),
+        "catalog_source_fingerprint": session.get("catalog_source_fingerprint"),
+    }
+
+
+def _prepare_delivery_transaction(
+    transaction: DurableFileTransaction,
+    project_root: Path,
+    run_dir: Path,
+    import_template: Path,
+    formal_template: Path,
+    module_path: str,
+    batch_status: Path,
+    batch_id: str | None,
+    product_map: Path | None,
+    page_discovery: Path | None,
+    product_name: str | None,
+) -> dict[str, int]:
+    """Build every desired delivery file without touching a formal target."""
+
+    build_root = transaction.transaction_dir / "build"
+    if build_root.exists():
+        shutil.rmtree(build_root)
+    staged_project = build_root / "project"
+    (staged_project / "docs" / "test-design").mkdir(parents=True)
+    (staged_project / "docs" / "test-assets").mkdir(parents=True)
+    staged_formal = build_root / "formal.xlsx"
+    staged_import = build_root / "import.xlsx"
+
+    assembly_counts = assemble_formal_workbook(run_dir, formal_template, staged_formal)
+    apply_formal_workbook_styles(staged_formal)
+    generate_import_workbook(
+        staged_formal,
+        import_template,
+        staged_import,
+        module_path,
+        product_name,
+    )
+    run_python_script(
+        Path(__file__).resolve().parent / "validate-test-design-deliverable.py",
+        ["--workbook", str(staged_formal)],
+    )
+
+    seed_paths = [
+        batch_status,
+        batch_status.parent / "batch-plan.md",
+        batch_status.parent / "batch-review.md",
+    ]
+    if product_map:
+        seed_paths.extend(product_map_mutable_paths(product_map, module_path, product_name))
+    seeded: set[str] = set()
+    for seed in seed_paths:
+        key = str(seed.absolute()).replace("\\", "/").casefold()
+        if key in seeded:
+            continue
+        seeded.add(key)
+        _seed_staged_file(project_root, staged_project, seed)
+
+    staged_batch_status = _seed_staged_file(project_root, staged_project, batch_status)
+    staged_product_map = (
+        _seed_staged_file(project_root, staged_project, product_map)
+        if product_map
+        else None
+    )
+    finalize_deliverables(
+        staged_project,
+        staged_formal,
+        staged_import,
+        module_path,
+        staged_batch_status,
+        batch_id,
+        staged_product_map,
+        page_discovery,
+        product_name,
+    )
+
+    desired: dict[Path, Path | None] = {}
+    published = delivery_publication_paths(project_root, module_path, product_name)
+    for target in published:
+        relative = _project_relative(project_root, target)
+        assert relative is not None
+        desired[target] = staged_project / relative
+
+    run_mutable = [
+        batch_status,
+        batch_status.parent / "batch-plan.md",
+        batch_status.parent / "batch-review.md",
+    ]
+    for target in run_mutable:
+        relative = _project_relative(project_root, target)
+        assert relative is not None
+        staged = staged_project / relative
+        if staged.is_file():
+            desired[target] = staged
+
+    catalog_targets: list[Path] = []
+    if product_map and page_discovery:
+        catalog_targets = product_map_mutable_paths(product_map, module_path, product_name)
+        for target in catalog_targets:
+            relative = _project_relative(project_root, target)
+            if relative is None:
+                raise ValueError(f"Product fact target is outside project root: {target}")
+            staged = staged_project / relative
+            if staged.is_file():
+                desired[target] = staged
+
+    receipt_target = run_dir / "artifacts" / "data" / DELIVERY_RECEIPT
+    tracked_pairs = [
+        (target, desired[target])
+        for target in published
+    ]
+    if product_map and page_discovery:
+        tracked_pairs.extend(
+            (target, desired[target])
+            for target in catalog_targets
+            if target in desired
+        )
+    receipt = delivery_receipt_value(
+        project_root,
+        batch_status,
+        [(logical, source) for logical, source in tracked_pairs if source is not None],
+        product_map if product_map and page_discovery else None,
+    )
+    staged_receipt = build_root / "delivery-receipt.json"
+    atomic_write_text(
+        staged_receipt,
+        json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    desired[receipt_target] = staged_receipt
+
+    transaction.prepare(
+        desired,
+        metadata={
+            "assembly_counts": assembly_counts,
+            "formal_name": published[0].name,
+            "import_name": published[2].name,
+        },
+    )
+    return assembly_counts
+
+
+def _complete_orchestrated_delivery(
+    project_root: Path,
+    run_dir: Path,
+    import_template: Path,
+    formal_template: Path,
+    module_path: str,
+    batch_status: Path,
+    batch_id: str | None,
+    product_map: Path | None,
+    page_discovery: Path | None,
+    product_name: str | None,
+) -> dict[str, int]:
+    """Recover or execute the crash-safe formal delivery transaction."""
+
+    locked_product = validate_delivery_scope(
+        batch_status, batch_id, module_path, product_name
+    )
+    if locked_product != product_name:
+        raise RuntimeError("Delivery scope changed before the locked transaction began")
+    identity = _delivery_transaction_identity(
+        project_root, run_dir, module_path, batch_id, product_name
+    )
+    transaction = DurableFileTransaction(
+        project_root,
+        run_dir / "orchestration" / "delivery-transaction",
+        identity,
+    )
+    journal = transaction.load()
+    if journal is not None and journal["status"] == "ROLLED_BACK":
+        transaction.reset_terminal()
+        journal = None
+
+    state = orchestration_status_under_lock(run_dir)
+    if (
+        state.get("state") == "COMPLETE"
+        and journal is not None
+        and journal["status"] not in {"FINALIZING", "FINALIZED"}
+    ):
+        raise RuntimeError(
+            "Orchestration is COMPLETE but the durable delivery journal never entered "
+            f"FINALIZING; illegal recovery combination: {journal['status']} + COMPLETE"
+        )
+    if journal is not None and journal["status"] == "FINALIZED":
+        transaction.verify_committed(journal)
+        if state.get("state") != "COMPLETE":
+            raise RuntimeError(
+                "Delivery journal is finalized but orchestration is not COMPLETE; fail closed"
+            )
+        transaction.cleanup_payloads()
+        counts = dict(journal["metadata"].get("assembly_counts") or {})
+        return {str(key): int(value) for key, value in counts.items()}
+
+    if state.get("state") not in {"DELIVERY_RUNNING", "COMPLETE"}:
+        # Preserve the public orchestration guard and its actionable error
+        # contract while staying inside the caller-owned run lock.
+        validate_delivery_running_state(run_dir)
+        raise AssertionError("unreachable delivery state guard")
+    if state.get("state") == "DELIVERY_RUNNING":
+        try:
+            validate_delivery_running_state(run_dir)
+            validate_batch_artifacts(run_dir, "cases")
+            validate_review_artifacts(run_dir)
+        except BaseException as exc:
+            if (
+                isinstance(exc, (Exception, SystemExit))
+                and journal is not None
+                and journal["status"] in {"PREPARED", "APPLYING", "FILES_COMMITTED"}
+            ):
+                transaction.rollback()
+            raise
+
+    if journal is None:
+        if state.get("state") == "COMPLETE":
+            raise RuntimeError(
+                "Orchestration is COMPLETE but no durable delivery journal exists; "
+                "validate the existing receipt instead of silently republishing"
+            )
+        if transaction.transaction_dir.exists():
+            shutil.rmtree(transaction.transaction_dir)
+        try:
+            assembly_counts = _prepare_delivery_transaction(
+                transaction,
+                project_root,
+                run_dir,
+                import_template,
+                formal_template,
+                module_path,
+                batch_status,
+                batch_id,
+                product_map,
+                page_discovery,
+                product_name,
+            )
+        except BaseException:
+            if not transaction.journal_path.exists():
+                shutil.rmtree(transaction.transaction_dir, ignore_errors=True)
+            raise
+        journal = transaction.load()
+        assert journal is not None
+    else:
+        assembly_counts = {
+            str(key): int(value)
+            for key, value in dict(journal["metadata"].get("assembly_counts") or {}).items()
+        }
+
+    try:
+        journal = transaction.apply_all()
+        cleanup_batch_artifacts(batch_status)
+        published = delivery_publication_paths(project_root, module_path, product_name)
+        validator_args = [
+            "--workbook",
+            str(published[3]),
+            "--import-workbook",
+            str(published[4]),
+            "--batch-status",
+            str(batch_status),
+        ]
+        if product_map:
+            validator_args.extend(["--product-map", str(product_map)])
+        if page_discovery:
+            validator_args.extend(["--page-discovery", str(page_discovery)])
+        run_python_script(
+            Path(__file__).resolve().parent / "validate-test-design-deliverable.py",
+            validator_args,
+        )
+    except BaseException as exc:
+        current = transaction.load()
+        recoverable_failure = isinstance(exc, (Exception, SystemExit))
+        if (
+            recoverable_failure
+            and current is not None
+            and current["status"] != "FINALIZING"
+        ):
+            transaction.rollback()
+        raise
+
+    if journal["status"] != "FINALIZING":
+        journal = transaction.set_status("FINALIZING")
+    state = orchestration_status_under_lock(run_dir)
+    if state.get("state") == "DELIVERY_RUNNING":
+        complete_delivery_orchestration(run_dir)
+    elif state.get("state") != "COMPLETE":
+        raise RuntimeError(
+            "Delivery files committed but orchestration cannot be deterministically finalized: "
+            f"{state.get('state')}"
+        )
+
+    transaction.set_status("FINALIZED")
+    transaction.cleanup_payloads()
+    published = delivery_publication_paths(project_root, module_path, product_name)
+    receipt = run_dir / "artifacts" / "data" / DELIVERY_RECEIPT
+    print("OK: delivery outputs published and validated:")
+    for path in published:
+        print(f"- {relative_project_path(project_root, path)}")
+    print(f"- {relative_project_path(project_root, receipt)}")
+    return assembly_counts
+
+
 def complete_deliverables(
     project_root: Path,
     formal_workbook: Path,
@@ -538,6 +937,31 @@ def complete_deliverables(
         run_python_script(script_dir / "validate-generated-python-scripts.py", ["--path", str(scripts_path)])
     orchestrated = bool(run_dir and (run_dir / "orchestration" / "run-manifest.json").exists())
     if orchestrated:
+        assert run_dir is not None
+        _require_canonical_delivery_source(
+            batch_status, run_dir / "batch-status.csv", "batch-status.csv"
+        )
+        _require_canonical_delivery_source(
+            page_discovery,
+            run_dir / "page-discovery.csv",
+            "page-discovery.csv",
+        )
+        _require_canonical_delivery_source(
+            product_map,
+            project_root / "docs" / "test-assets" / "product-map.xlsx",
+            "product-map.xlsx",
+        )
+        canonical_import = delivery_publication_paths(
+            project_root, module_path, product_name
+        )[4]
+        if import_workbook is not None and (
+            import_workbook.is_symlink()
+            or import_workbook.resolve(strict=False) != canonical_import.resolve(strict=False)
+        ):
+            raise ValueError(
+                "orchestrated delivery publishes only the canonical import archive; "
+                "external --import-workbook output is not allowed"
+            )
         if assembly_run_dir is None or assembly_run_dir.resolve() != run_dir:
             raise ValueError(
                 "orchestrated delivery must assemble from the reviewed run-dir inside the locked transaction; "
@@ -545,13 +969,28 @@ def complete_deliverables(
             )
         if formal_template is None:
             raise ValueError("orchestrated delivery requires the standard formal template")
-        mutable_paths.extend(
-            [
-                run_dir / "orchestration" / "run-manifest.json",
-                run_dir / "orchestration" / "state.json",
-                run_dir / "orchestration" / "events.jsonl",
-            ]
-        )
+        delivery_lock = project_root / ".test-design-locks" / "delivery.lock"
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                exclusive_process_lock(run_dir / "orchestration" / ".orchestrator.lock")
+            )
+            stack.enter_context(exclusive_process_lock(delivery_lock))
+            if product_map:
+                stack.enter_context(
+                    exclusive_process_lock(project_root / ".test-design-locks" / "catalog.lock")
+                )
+            return _complete_orchestrated_delivery(
+                project_root,
+                run_dir,
+                import_template,
+                formal_template,
+                module_path,
+                batch_status,
+                batch_id,
+                product_map,
+                page_discovery,
+                product_name,
+            )
     assembly_counts: dict[str, int] = {}
     delivery_lock = project_root / ".test-design-locks" / "delivery.lock"
     with contextlib.ExitStack() as stack:
@@ -561,6 +1000,10 @@ def complete_deliverables(
         if orchestrated and run_dir:
             stack.enter_context(exclusive_process_lock(run_dir / "orchestration" / ".orchestrator.lock"))
         stack.enter_context(exclusive_process_lock(delivery_lock))
+        if product_map:
+            stack.enter_context(
+                exclusive_process_lock(project_root / ".test-design-locks" / "catalog.lock")
+            )
         if orchestrated and run_dir:
             validate_delivery_running_state(run_dir)
         if run_dir:
@@ -811,11 +1254,60 @@ def main() -> int:
     agent_status.add_argument("--run-dir", required=True, type=Path)
     agent_status.add_argument("--json", action="store_true")
 
+    page_probe_commit = sub.add_parser(
+        "page-probe-commit",
+        help="Validate coordinator preflight PostToolUse records and bind one receipt to a future Discovery execution.",
+    )
+    page_probe_commit.add_argument("--run-dir", required=True, type=Path)
+    page_probe_commit.add_argument("--task-id", required=True)
+    page_probe_commit.add_argument("--execution-id", required=True)
+    page_probe_commit.add_argument("--coordinator-id", required=True)
+    page_probe_commit.add_argument("--session-sha256", required=True)
+    page_probe_commit.add_argument("--transcript-sha256", required=True)
+    page_probe_commit.add_argument("--record-id", required=True, action="append")
+    page_probe_commit.add_argument("--evidence", required=True, action="append")
+    page_probe_commit.add_argument("--json", action="store_true")
+
+    agent_claim = sub.add_parser(
+        "agent-claim",
+        help="Atomically bind one runnable AgentTask to one durable execution identity before dispatch.",
+    )
+    agent_claim.add_argument("--run-dir", required=True, type=Path)
+    agent_claim.add_argument("--task-id", required=True)
+    agent_claim.add_argument("--execution-id", required=True)
+    agent_claim.add_argument("--coordinator-id", required=True)
+    agent_claim.add_argument("--executor-id", required=True)
+    agent_claim.add_argument(
+        "--executor-kind",
+        required=True,
+        choices=[
+            "codebuddy-subagent", "codebuddy-main-session",
+            "codebuddy-agent-team", "external-session",
+        ],
+    )
+    agent_claim.add_argument("--wave-id", required=True)
+    agent_claim.add_argument("--page-probe-receipt-id")
+    agent_claim.add_argument("--page-probe-receipt-fingerprint")
+    agent_claim.add_argument("--json", action="store_true")
+
     agent_submit = sub.add_parser("agent-submit", help="Validate and submit one isolated AgentResult, then advance safely.")
     agent_submit.add_argument("--run-dir", required=True, type=Path)
     agent_submit.add_argument("--task-id", required=True)
+    agent_submit.add_argument("--execution-id", required=True)
     agent_submit.add_argument("--result", required=True, type=Path)
     agent_submit.add_argument("--json", action="store_true")
+
+    agent_release = sub.add_parser(
+        "agent-release",
+        help="Release a durable task claim only after explicitly confirming that execution caused no side effects.",
+    )
+    agent_release.add_argument("--run-dir", required=True, type=Path)
+    agent_release.add_argument("--task-id", required=True)
+    agent_release.add_argument("--execution-id", required=True)
+    agent_release.add_argument("--coordinator-id", required=True)
+    agent_release.add_argument("--reason", required=True)
+    agent_release.add_argument("--confirm-no-side-effects", action="store_true")
+    agent_release.add_argument("--json", action="store_true")
 
     agent_resume = sub.add_parser("agent-resume", help="Resume a genuinely external-blocked Agent phase.")
     agent_resume.add_argument("--run-dir", required=True, type=Path)
@@ -906,20 +1398,67 @@ def main() -> int:
                 print(f"command={status['command']}")
             for reason in status.get("reasons", []):
                 print(f"reason={reason}")
-    elif args.command in {"agent-run", "agent-status", "agent-submit", "agent-resume"}:
+    elif args.command in {
+        "agent-run", "agent-status", "page-probe-commit", "agent-claim", "agent-submit", "agent-release", "agent-resume"
+    }:
         with contextlib.redirect_stdout(io.StringIO()):
             if args.command == "agent-run":
                 status = advance_orchestration(args.run_dir)
             elif args.command == "agent-status":
                 status = orchestration_status(args.run_dir)
+            elif args.command == "page-probe-commit":
+                status = commit_page_probe_receipt(
+                    args.run_dir,
+                    args.task_id,
+                    execution_id=args.execution_id,
+                    coordinator_id=args.coordinator_id,
+                    session_sha256=args.session_sha256,
+                    transcript_sha256=args.transcript_sha256,
+                    record_ids=args.record_id,
+                    evidence_paths=args.evidence,
+                )
+            elif args.command == "agent-claim":
+                status = claim_agent_task(
+                    args.run_dir,
+                    args.task_id,
+                    execution_id=args.execution_id,
+                    coordinator_id=args.coordinator_id,
+                    executor_id=args.executor_id,
+                    executor_kind=args.executor_kind,
+                    wave_id=args.wave_id,
+                    page_probe_receipt_id=args.page_probe_receipt_id,
+                    page_probe_receipt_fingerprint=args.page_probe_receipt_fingerprint,
+                )
             elif args.command == "agent-submit":
-                status = submit_agent_result(args.run_dir, args.task_id, args.result)
+                status = submit_agent_result(
+                    args.run_dir,
+                    args.task_id,
+                    args.result,
+                    execution_id=args.execution_id,
+                )
+            elif args.command == "agent-release":
+                status = release_agent_claim(
+                    args.run_dir,
+                    args.task_id,
+                    execution_id=args.execution_id,
+                    coordinator_id=args.coordinator_id,
+                    reason=args.reason,
+                    confirm_no_side_effects=args.confirm_no_side_effects,
+                )
             else:
                 status = resume_external_block(args.run_dir)
         if args.json:
             print(json.dumps(status, ensure_ascii=False, indent=2))
         else:
             print(f"state={status['state']}")
+            if status.get("claim"):
+                print(f"execution_id={status['claim']['execution_id']}")
+            if status.get("page_probe_receipt"):
+                receipt = status["page_probe_receipt"]
+                print(f"page_probe_receipt_id={receipt['receipt_id']}")
+                print(f"page_probe_receipt_fingerprint={receipt['receipt_fingerprint']}")
+                for tool_name in receipt["approved_mcp_tools"]:
+                    print(f"approved_page_mcp_tool={tool_name}")
             for task in status.get("runnable_tasks", []):
                 task_id = task.get("task_id", "")
                 role = task.get("agent_role", "")

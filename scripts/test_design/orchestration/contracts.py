@@ -22,6 +22,7 @@ from typing import Any, ClassVar, Mapping
 SCHEMA_VERSION = "1.0.0"
 SOURCE_FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+MCP_TOOL_RE = re.compile(r"^mcp__([A-Za-z0-9_.:-]+)__([A-Za-z0-9_.:-]+)$")
 GATE_NAMES = frozenset({"discovery", "plan", "risk", "cases-worker", "cases", "review", "delivery"})
 INPUT_FILE_PREFIXES = (
     "artifacts/data/",
@@ -41,11 +42,64 @@ class AgentRole(str, Enum):
     REVIEWER = "reviewer"
 
 
+COMMON_AGENT_CONTRACT_PATHS = (
+    "docs/test-design/schemas/orchestration/agent-task.schema.json",
+    "docs/test-design/schemas/orchestration/agent-result.schema.json",
+    "docs/test-design/schemas/orchestration/rework-request.schema.json",
+)
+
+ROLE_AGENT_CONTRACT_PATHS = {
+    AgentRole.DISCOVERY: (
+        "docs/test-assets/batch-runs/templates/page-element-inventory-template.csv",
+        "docs/test-assets/batch-runs/templates/page-discovery-template.csv",
+        "docs/test-assets/batch-runs/templates/selection-option-observations-template.csv",
+        "docs/test-assets/batch-runs/templates/interaction-branch-observations-template.csv",
+        "docs/test-assets/batch-runs/templates/test-data-lifecycle-template.csv",
+        "docs/test-design/schemas/orchestration/binary-evidence-audit.schema.json",
+    ),
+    AgentRole.PLAN_DFX: (
+        "docs/test-assets/batch-runs/templates/element-case-plan-template.csv",
+        "docs/test-assets/batch-runs/templates/selection-option-observations-template.csv",
+        "docs/test-assets/batch-runs/templates/interaction-branch-observations-template.csv",
+        "docs/test-assets/batch-runs/templates/test-data-lifecycle-template.csv",
+        "scripts/test_design/contracts/sheet_data.py",
+        "docs/test-design/schemas/orchestration/dfx-assessment.schema.json",
+        "docs/test-design/schemas/orchestration/risk-candidates.schema.json",
+    ),
+    AgentRole.RISK_ARBITER: (
+        "docs/test-assets/batch-runs/templates/risk-confirmation-template.csv",
+        "scripts/test_design/contracts/sheet_data.py",
+        "docs/test-design/schemas/orchestration/risk-candidates.schema.json",
+    ),
+    AgentRole.CASE_WORKER: (
+        "scripts/test_design/contracts/function_cases.py",
+        "docs/test-design/schemas/orchestration/traceability-record.schema.json",
+    ),
+    AgentRole.REVIEWER: (
+        "docs/test-design/schemas/orchestration/review-report.schema.json",
+        "docs/test-design/schemas/orchestration/binary-evidence-audit.schema.json",
+        "docs/test-design/schemas/orchestration/traceability-record.schema.json",
+    ),
+}
+
+
+def role_contract_relative_paths(role: AgentRole | str) -> tuple[str, ...]:
+    normalized = role if isinstance(role, AgentRole) else AgentRole(role)
+    return (*COMMON_AGENT_CONTRACT_PATHS, *ROLE_AGENT_CONTRACT_PATHS[normalized])
+
+
 class TaskStatus(str, Enum):
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     NEEDS_REWORK = "NEEDS_REWORK"
     EXTERNAL_BLOCKED = "EXTERNAL_BLOCKED"
+
+
+class ExecutorKind(str, Enum):
+    CODEBUDDY_SUBAGENT = "codebuddy-subagent"
+    CODEBUDDY_MAIN_SESSION = "codebuddy-main-session"
+    CODEBUDDY_AGENT_TEAM = "codebuddy-agent-team"
+    EXTERNAL_SESSION = "external-session"
 
 
 class ReworkTarget(str, Enum):
@@ -133,6 +187,13 @@ def _scope_identifier(value: object, name: str) -> str:
     text = _required_string(value, name)
     if len(text) > 128 or text in {".", ".."} or any(char in text for char in "/\\\x00"):
         raise ValueError(f"{name} must be a single safe run/batch identifier")
+    return text
+
+
+def _execution_label(value: object, name: str) -> str:
+    text = _required_string(value, name)
+    if len(text) > 256 or any(char in text for char in "\r\n\x00"):
+        raise ValueError(f"{name} must be a single line of at most 256 characters")
     return text
 
 
@@ -315,6 +376,326 @@ class AgentTask:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentClaim:
+    schema_version: str
+    execution_id: str
+    task_id: str
+    coordinator_id: str
+    executor_id: str
+    executor_kind: ExecutorKind
+    wave_id: str
+    claimed_at: str
+    source_fingerprint: str
+    input_snapshot_fingerprint: str
+    task_packet_fingerprint: str
+    context_fingerprint: str
+    page_probe_receipt_id: str | None
+    page_probe_receipt_fingerprint: str | None
+    approved_page_mcp_tools: tuple[str, ...]
+
+    FIELDS: ClassVar[set[str]] = {
+        "schema_version", "execution_id", "task_id", "coordinator_id", "executor_id",
+        "executor_kind", "wave_id", "claimed_at", "source_fingerprint",
+        "input_snapshot_fingerprint", "task_packet_fingerprint", "context_fingerprint",
+        "page_probe_receipt_id", "page_probe_receipt_fingerprint",
+        "approved_page_mcp_tools",
+    }
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "schema_version", _schema_version(self.schema_version))
+        object.__setattr__(self, "execution_id", _identifier(self.execution_id, "execution_id"))
+        object.__setattr__(self, "task_id", _identifier(self.task_id, "task_id"))
+        object.__setattr__(self, "coordinator_id", _execution_label(self.coordinator_id, "coordinator_id"))
+        object.__setattr__(self, "executor_id", _execution_label(self.executor_id, "executor_id"))
+        object.__setattr__(self, "executor_kind", _enum(self.executor_kind, ExecutorKind, "executor_kind"))
+        object.__setattr__(self, "wave_id", _execution_label(self.wave_id, "wave_id"))
+        claimed_at = _required_string(self.claimed_at, "claimed_at")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", claimed_at):
+            raise ValueError("claimed_at must be an RFC 3339 UTC timestamp with second precision")
+        object.__setattr__(self, "claimed_at", claimed_at)
+        for field_name in (
+            "source_fingerprint", "input_snapshot_fingerprint",
+            "task_packet_fingerprint", "context_fingerprint",
+        ):
+            object.__setattr__(self, field_name, _fingerprint(getattr(self, field_name), field_name))
+        receipt_id = _optional_string(self.page_probe_receipt_id, "page_probe_receipt_id")
+        if receipt_id is not None:
+            receipt_id = _identifier(receipt_id, "page_probe_receipt_id")
+            if re.fullmatch(r"PPR-[0-9a-f]{24}", receipt_id) is None:
+                raise ValueError("page_probe_receipt_id must be a canonical PPR identifier")
+        object.__setattr__(self, "page_probe_receipt_id", receipt_id)
+        receipt_fingerprint = self.page_probe_receipt_fingerprint
+        if receipt_fingerprint is not None:
+            receipt_fingerprint = _fingerprint(
+                receipt_fingerprint, "page_probe_receipt_fingerprint"
+            )
+        object.__setattr__(self, "page_probe_receipt_fingerprint", receipt_fingerprint)
+        tools = _string_tuple(
+            self.approved_page_mcp_tools,
+            "approved_page_mcp_tools",
+        )
+        if any(MCP_TOOL_RE.fullmatch(tool) is None for tool in tools):
+            raise ValueError("approved_page_mcp_tools must contain exact canonical MCP tools")
+        if tools != tuple(sorted(tools)):
+            raise ValueError("approved_page_mcp_tools must be deterministically sorted")
+        if (receipt_id is None) != (receipt_fingerprint is None) or bool(receipt_id) != bool(tools):
+            raise ValueError(
+                "page probe receipt id, fingerprint and approved MCP tools must be all present or all absent"
+            )
+        object.__setattr__(self, "approved_page_mcp_tools", tools)
+
+    @classmethod
+    def from_dict(cls, value: object) -> "AgentClaim":
+        data = _require_mapping(value, "AgentClaim")
+        _strict_keys(data, cls.FIELDS, "AgentClaim")
+        return cls(**data)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "execution_id": self.execution_id,
+            "task_id": self.task_id,
+            "coordinator_id": self.coordinator_id,
+            "executor_id": self.executor_id,
+            "executor_kind": self.executor_kind.value,
+            "wave_id": self.wave_id,
+            "claimed_at": self.claimed_at,
+            "source_fingerprint": self.source_fingerprint,
+            "input_snapshot_fingerprint": self.input_snapshot_fingerprint,
+            "task_packet_fingerprint": self.task_packet_fingerprint,
+            "context_fingerprint": self.context_fingerprint,
+            "page_probe_receipt_id": self.page_probe_receipt_id,
+            "page_probe_receipt_fingerprint": self.page_probe_receipt_fingerprint,
+            "approved_page_mcp_tools": list(self.approved_page_mcp_tools),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PageProbeReceipt:
+    schema_version: str
+    receipt_id: str
+    receipt_fingerprint: str
+    run_id: str
+    batch_id: str
+    task_id: str
+    execution_id: str
+    coordinator_id: str
+    source_fingerprint: str
+    committed_at: str
+    probe_session_sha256: str
+    probe_transcript_sha256: str
+    mcp_server: str
+    approved_mcp_tools: tuple[str, ...]
+    records: tuple[Mapping[str, Any], ...]
+    evidence: tuple[Mapping[str, Any], ...]
+
+    FIELDS: ClassVar[set[str]] = {
+        "schema_version", "receipt_id", "receipt_fingerprint", "run_id", "batch_id",
+        "task_id", "execution_id", "coordinator_id", "source_fingerprint",
+        "committed_at", "probe_session_sha256", "probe_transcript_sha256",
+        "mcp_server", "approved_mcp_tools", "records", "evidence",
+    }
+    RECORD_FIELDS: ClassVar[set[str]] = {
+        "record_id", "sequence", "recorded_at", "tool_name", "operation_kind", "operation_name",
+        "tool_input_sha256", "tool_response_sha256", "call_content_sha256",
+        "response_nonempty", "response_error",
+    }
+    EVIDENCE_FIELDS: ClassVar[set[str]] = {
+        "path", "sha256", "bytes", "sidecar_path", "sidecar_sha256",
+    }
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "schema_version", _schema_version(self.schema_version))
+        receipt_id = _identifier(self.receipt_id, "receipt_id")
+        if re.fullmatch(r"PPR-[0-9a-f]{24}", receipt_id) is None:
+            raise ValueError("receipt_id must be a canonical PPR identifier")
+        object.__setattr__(self, "receipt_id", receipt_id)
+        object.__setattr__(
+            self, "receipt_fingerprint", _fingerprint(self.receipt_fingerprint, "receipt_fingerprint")
+        )
+        object.__setattr__(self, "run_id", _scope_identifier(self.run_id, "run_id"))
+        object.__setattr__(self, "batch_id", _scope_identifier(self.batch_id, "batch_id"))
+        object.__setattr__(self, "task_id", _identifier(self.task_id, "task_id"))
+        object.__setattr__(self, "execution_id", _identifier(self.execution_id, "execution_id"))
+        object.__setattr__(
+            self, "coordinator_id", _execution_label(self.coordinator_id, "coordinator_id")
+        )
+        object.__setattr__(self, "source_fingerprint", _fingerprint(self.source_fingerprint))
+        committed_at = _required_string(self.committed_at, "committed_at")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", committed_at):
+            raise ValueError("committed_at must be an RFC 3339 UTC timestamp with second precision")
+        object.__setattr__(self, "committed_at", committed_at)
+        for name in ("probe_session_sha256", "probe_transcript_sha256"):
+            object.__setattr__(self, name, _fingerprint(getattr(self, name), name))
+        server = _required_string(self.mcp_server, "mcp_server")
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", server):
+            raise ValueError("mcp_server must be one exact canonical MCP server namespace")
+        object.__setattr__(self, "mcp_server", server)
+        tools = _string_tuple(
+            self.approved_mcp_tools, "approved_mcp_tools", allow_empty=False
+        )
+        if tools != tuple(sorted(tools)):
+            raise ValueError("approved_mcp_tools must be deterministically sorted")
+        for tool in tools:
+            matched = MCP_TOOL_RE.fullmatch(tool)
+            if matched is None or matched.group(1) != server:
+                raise ValueError("approved_mcp_tools must be exact tools from mcp_server")
+        object.__setattr__(self, "approved_mcp_tools", tools)
+
+        if not isinstance(self.records, (list, tuple)) or len(self.records) < 3:
+            raise ValueError("page probe receipt requires at least three ordered records")
+        normalized_records: list[Mapping[str, Any]] = []
+        record_ids: set[str] = set()
+        content_ids: set[str] = set()
+        previous_sequence = 0
+        seen_tools: set[str] = set()
+        for index, raw in enumerate(self.records):
+            record = _require_mapping(raw, f"records[{index}]")
+            _strict_keys(record, self.RECORD_FIELDS, f"records[{index}]")
+            normalized = dict(record)
+            for field_name in (
+                "record_id", "tool_input_sha256", "tool_response_sha256",
+                "call_content_sha256",
+            ):
+                normalized[field_name] = _fingerprint(
+                    normalized[field_name], f"records[{index}].{field_name}"
+                )
+            if normalized["record_id"] in record_ids:
+                raise ValueError("page probe receipt cannot reuse a record_id")
+            if normalized["call_content_sha256"] in content_ids:
+                raise ValueError("page probe receipt cannot replay identical call content")
+            record_ids.add(normalized["record_id"])
+            content_ids.add(normalized["call_content_sha256"])
+            sequence = normalized.get("sequence")
+            if type(sequence) is not int or sequence <= previous_sequence:
+                raise ValueError("page probe receipt record sequences must strictly increase")
+            previous_sequence = sequence
+            recorded_at = normalized.get("recorded_at")
+            if not isinstance(recorded_at, str) or re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z",
+                recorded_at,
+            ) is None:
+                raise ValueError("page probe receipt record recorded_at is invalid")
+            tool = _required_string(normalized.get("tool_name"), f"records[{index}].tool_name")
+            if tool not in tools:
+                raise ValueError("page probe receipt record tool is outside approved_mcp_tools")
+            seen_tools.add(tool)
+            operation_kind = normalized.get("operation_kind")
+            operation_name = normalized.get("operation_name")
+            if operation_kind not in {"read", "mutation"}:
+                raise ValueError("page probe receipt records must have a known read/mutation operation")
+            if operation_name not in {
+                "read", "click", "select", "input", "toggle", "expand", "navigate",
+                "other_mutation",
+            }:
+                raise ValueError("page probe receipt record operation_name is invalid")
+            if (operation_kind == "read") != (operation_name == "read"):
+                raise ValueError(
+                    "page probe receipt operation_kind/name must consistently describe read or mutation"
+                )
+            if normalized.get("response_nonempty") is not True or normalized.get("response_error") is not False:
+                raise ValueError("page probe receipt records require non-empty successful responses")
+            normalized_records.append(MappingProxyType(normalized))
+        if seen_tools != set(tools):
+            raise ValueError("every approved MCP tool requires a selected successful record")
+        valid_transition = any(
+            normalized_records[before]["operation_kind"] == "read"
+            and normalized_records[mutation]["operation_kind"] == "mutation"
+            and normalized_records[after]["operation_kind"] == "read"
+            and normalized_records[before]["tool_response_sha256"]
+            != normalized_records[after]["tool_response_sha256"]
+            for before in range(len(normalized_records))
+            for mutation in range(before + 1, len(normalized_records))
+            for after in range(mutation + 1, len(normalized_records))
+        )
+        if not valid_transition:
+            raise ValueError(
+                "page probe receipt requires ordered pre-read -> mutation -> changed post-read"
+            )
+        object.__setattr__(self, "records", tuple(normalized_records))
+
+        if not isinstance(self.evidence, (list, tuple)) or not self.evidence:
+            raise ValueError("page probe receipt requires non-empty hash-bound evidence")
+        normalized_evidence: list[Mapping[str, Any]] = []
+        evidence_paths: set[str] = set()
+        for index, raw in enumerate(self.evidence):
+            evidence = _require_mapping(raw, f"evidence[{index}]")
+            _strict_keys(evidence, self.EVIDENCE_FIELDS, f"evidence[{index}]")
+            normalized = dict(evidence)
+            normalized["path"] = _relative_posix_path(
+                normalized.get("path"), f"evidence[{index}].path"
+            )
+            evidence_prefix = f"artifacts/page-probe-evidence/{self.execution_id}/"
+            if not normalized["path"].startswith(evidence_prefix):
+                raise ValueError(
+                    "page probe evidence must stay under its dedicated execution prefix"
+                )
+            if normalized["path"] in evidence_paths:
+                raise ValueError("page probe evidence paths must be unique")
+            evidence_paths.add(normalized["path"])
+            normalized["sha256"] = _fingerprint(
+                normalized.get("sha256"), f"evidence[{index}].sha256"
+            )
+            if type(normalized.get("bytes")) is not int or normalized["bytes"] < 1:
+                raise ValueError("page probe evidence must be non-empty")
+            sidecar_path = normalized.get("sidecar_path")
+            sidecar_sha = normalized.get("sidecar_sha256")
+            if sidecar_path is None and sidecar_sha is not None:
+                raise ValueError("page probe evidence sidecar path/hash must be both present or absent")
+            if sidecar_path is not None:
+                normalized["sidecar_path"] = _relative_posix_path(
+                    sidecar_path, f"evidence[{index}].sidecar_path"
+                )
+                if normalized["sidecar_path"] != normalized["path"] + ".sensitive-audit.json":
+                    raise ValueError(
+                        "page probe evidence sidecar must be the adjacent hash-audit file"
+                    )
+                normalized["sidecar_sha256"] = _fingerprint(
+                    sidecar_sha, f"evidence[{index}].sidecar_sha256"
+                )
+            normalized_evidence.append(MappingProxyType(normalized))
+        object.__setattr__(self, "evidence", tuple(normalized_evidence))
+
+        content = self.content_dict()
+        expected = canonical_fingerprint(content)
+        if self.receipt_fingerprint != expected:
+            raise ValueError("page probe receipt_fingerprint does not match canonical content")
+        if self.receipt_id != f"PPR-{expected[:24]}":
+            raise ValueError("page probe receipt_id does not match receipt_fingerprint")
+
+    def content_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "run_id": self.run_id,
+            "batch_id": self.batch_id,
+            "task_id": self.task_id,
+            "execution_id": self.execution_id,
+            "coordinator_id": self.coordinator_id,
+            "source_fingerprint": self.source_fingerprint,
+            "committed_at": self.committed_at,
+            "probe_session_sha256": self.probe_session_sha256,
+            "probe_transcript_sha256": self.probe_transcript_sha256,
+            "mcp_server": self.mcp_server,
+            "approved_mcp_tools": list(self.approved_mcp_tools),
+            "records": [dict(item) for item in self.records],
+            "evidence": [dict(item) for item in self.evidence],
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "PageProbeReceipt":
+        data = _require_mapping(value, "PageProbeReceipt")
+        _strict_keys(data, cls.FIELDS, "PageProbeReceipt")
+        return cls(**data)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **self.content_dict(),
+            "receipt_id": self.receipt_id,
+            "receipt_fingerprint": self.receipt_fingerprint,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ReworkRequest:
     schema_version: str
     request_id: str
@@ -436,6 +817,8 @@ class AgentResult:
             raise ValueError("SUCCEEDED results must not contain rework_requests or error_message")
         if self.status is TaskStatus.NEEDS_REWORK and not requests:
             raise ValueError("NEEDS_REWORK results require at least one rework request")
+        if self.status is TaskStatus.NEEDS_REWORK and self.error_message is not None:
+            raise ValueError("NEEDS_REWORK results must use rework_requests and must not contain error_message")
         if self.status is not TaskStatus.NEEDS_REWORK and requests:
             raise ValueError("only NEEDS_REWORK results may contain rework_requests")
         if self.status in {TaskStatus.FAILED, TaskStatus.EXTERNAL_BLOCKED} and self.error_message is None:
@@ -590,9 +973,13 @@ class RunConfig:
 
 
 __all__ = [
+    "AgentClaim",
     "AgentResult",
     "AgentRole",
     "AgentTask",
+    "ExecutorKind",
+    "MCP_TOOL_RE",
+    "PageProbeReceipt",
     "ReworkReason",
     "ReworkRequest",
     "ReworkTarget",
@@ -601,4 +988,5 @@ __all__ = [
     "TaskStatus",
     "TraceabilityRecord",
     "canonical_fingerprint",
+    "role_contract_relative_paths",
 ]

@@ -17,9 +17,11 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from test_design.orchestration import workspace as workspace_module
 from test_design.orchestration.contracts import (
+    AgentClaim,
     AgentResult,
     AgentRole,
     AgentTask,
+    ExecutorKind,
     ReworkReason,
     ReworkRequest,
     ReworkTarget,
@@ -113,11 +115,36 @@ def _result_value() -> dict[str, object]:
     }
 
 
+def _claim_value() -> dict[str, object]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "execution_id": "EXEC-TASK-CASE-PAGING",
+        "task_id": "TASK-CASE-PAGING",
+        "coordinator_id": "CODEBUDDY-COORD-001",
+        "executor_id": "CODEBUDDY-WORKER-001",
+        "executor_kind": "codebuddy-subagent",
+        "wave_id": "WAVE-CASES-001",
+        "claimed_at": "2026-07-13T01:02:03Z",
+        "source_fingerprint": FINGERPRINT,
+        "input_snapshot_fingerprint": FINGERPRINT,
+        "task_packet_fingerprint": FINGERPRINT,
+        "context_fingerprint": FINGERPRINT,
+        "page_probe_receipt_id": None,
+        "page_probe_receipt_fingerprint": None,
+        "approved_page_mcp_tools": [],
+    }
+
+
 class OrchestrationContractTests(unittest.TestCase):
     def test_all_contracts_have_strict_lossless_round_trips(self) -> None:
         task = AgentTask.from_dict(_task_value())
         self.assertEqual(_task_value(), task.to_dict())
         self.assertEqual(task, AgentTask.from_dict(task.to_dict()))
+
+        claim = AgentClaim.from_dict(_claim_value())
+        self.assertEqual(ExecutorKind.CODEBUDDY_SUBAGENT, claim.executor_kind)
+        self.assertEqual(_claim_value(), claim.to_dict())
+        self.assertEqual(claim, AgentClaim.from_dict(claim.to_dict()))
 
         rework = ReworkRequest.from_dict(_rework_value())
         self.assertEqual(_rework_value(), rework.to_dict())
@@ -184,6 +211,19 @@ class OrchestrationContractTests(unittest.TestCase):
                 invalid[field] = value
                 with self.assertRaises((TypeError, ValueError)):
                     AgentTask.from_dict(invalid)
+
+        for mutation in (
+            {"execution_id": ""},
+            {"executor_kind": "unisolated-model"},
+            {"claimed_at": "2026-07-13T01:02:03+00:00"},
+            {"coordinator_id": " leading"},
+            {"context_fingerprint": "not-a-fingerprint"},
+            {"unknown": "field"},
+        ):
+            with self.subTest(claim_mutation=mutation):
+                invalid_claim = {**_claim_value(), **mutation}
+                with self.assertRaises((TypeError, ValueError)):
+                    AgentClaim.from_dict(invalid_claim)
 
     def test_task_contract_rejects_path_escape_and_non_whitelisted_inputs(self) -> None:
         invalid_inputs = (
@@ -258,6 +298,13 @@ class OrchestrationContractTests(unittest.TestCase):
         needs_rework_without_request["status"] = "NEEDS_REWORK"
         with self.assertRaisesRegex(ValueError, "at least one rework"):
             AgentResult.from_dict(needs_rework_without_request)
+
+        needs_rework_with_error = _result_value()
+        needs_rework_with_error["status"] = "NEEDS_REWORK"
+        needs_rework_with_error["rework_requests"] = [_rework_value()]
+        needs_rework_with_error["error_message"] = "duplicate channel"
+        with self.assertRaisesRegex(ValueError, "must not contain error_message"):
+            AgentResult.from_dict(needs_rework_with_error)
 
         failed_without_error = _result_value()
         failed_without_error["status"] = "FAILED"
@@ -594,6 +641,14 @@ class OrchestrationWorkspaceTests(unittest.TestCase):
             self.assertEqual("ROLLED_BACK", rolled_back["status"])
             self.assertEqual("old-first", (formal / "first.json").read_text(encoding="utf-8"))
             self.assertFalse((formal / "nested" / "second.json").exists())
+            transaction_dir = (manager.run_dir / receipt.receipt_path).parent
+            self.assertFalse((transaction_dir / "backups").exists())
+            self.assertFalse((transaction_dir / "staged").exists())
+            (transaction_dir / "backups").mkdir()
+            (transaction_dir / "staged").mkdir()
+            manager.rollback_promotion(receipt)
+            self.assertFalse((transaction_dir / "backups").exists())
+            self.assertFalse((transaction_dir / "staged").exists())
 
     def test_promotion_failure_rolls_back_every_already_replaced_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -631,6 +686,109 @@ class OrchestrationWorkspaceTests(unittest.TestCase):
             self.assertTrue(failure_injected)
             self.assertEqual("old-first", first_target.read_text(encoding="utf-8"))
             self.assertEqual("old-second", second_target.read_text(encoding="utf-8"))
+            receipts = list(manager.promotion_root.glob("*/receipt.json"))
+            self.assertEqual(1, len(receipts))
+            value = json.loads(receipts[0].read_text(encoding="utf-8"))
+            self.assertEqual("ROLLED_BACK", value["status"])
+            self.assertFalse((receipts[0].parent / "backups").exists())
+            self.assertFalse((receipts[0].parent / "staged").exists())
+
+    def test_hard_interruption_resumes_same_durable_promotion(self) -> None:
+        class HardStop(BaseException):
+            pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            manager = WorkspaceManager(Path(temporary) / "run")
+            manager.create_task_workspace("case_worker", "TASK-001")
+            output = manager.task_output_root("case_worker", "TASK-001")
+            (output / "first.json").write_text("new-first", encoding="utf-8")
+            (output / "second.json").write_text("new-second", encoding="utf-8")
+            formal = manager.formal_data_root
+            formal.mkdir(parents=True, exist_ok=True)
+            first_target = formal / "first.json"
+            second_target = formal / "second.json"
+            first_target.write_text("old-first", encoding="utf-8")
+            second_target.write_text("old-second", encoding="utf-8")
+
+            original_copy = workspace_module._atomic_copy
+            interrupted = False
+
+            def hard_stop_copy(source: Path, target: Path) -> None:
+                nonlocal interrupted
+                if target == second_target and not interrupted:
+                    interrupted = True
+                    raise HardStop("simulated process termination")
+                original_copy(source, target)
+
+            items = {"first.json": "first.json", "second.json": "second.json"}
+            with mock.patch.object(workspace_module, "_atomic_copy", side_effect=hard_stop_copy):
+                with self.assertRaises(HardStop):
+                    manager.atomic_promote(
+                        "case_worker", "TASK-001", items, transaction_id="TXN-HARD-STOP"
+                    )
+            receipt_path = manager.promotion_root / "TXN-HARD-STOP" / "receipt.json"
+            self.assertEqual("APPLYING", json.loads(receipt_path.read_text(encoding="utf-8"))["status"])
+            self.assertEqual("new-first", first_target.read_text(encoding="utf-8"))
+            self.assertEqual("old-second", second_target.read_text(encoding="utf-8"))
+
+            receipt = manager.atomic_promote(
+                "case_worker", "TASK-001", items, transaction_id="TXN-HARD-STOP"
+            )
+            self.assertEqual("PROMOTED", receipt.status)
+            self.assertEqual("new-first", first_target.read_text(encoding="utf-8"))
+            self.assertEqual("new-second", second_target.read_text(encoding="utf-8"))
+            manager.finalize_promotion(receipt)
+            self.assertFalse((receipt_path.parent / "backups").exists())
+            self.assertFalse((receipt_path.parent / "staged").exists())
+            (receipt_path.parent / "backups").mkdir()
+            (receipt_path.parent / "staged").mkdir()
+            manager.finalize_promotion(receipt)
+            self.assertFalse((receipt_path.parent / "backups").exists())
+            self.assertFalse((receipt_path.parent / "staged").exists())
+
+    def test_resume_drift_restores_only_transaction_owned_targets(self) -> None:
+        class HardStop(BaseException):
+            pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            manager = WorkspaceManager(Path(temporary) / "run")
+            manager.create_task_workspace("case_worker", "TASK-001")
+            output = manager.task_output_root("case_worker", "TASK-001")
+            (output / "first.json").write_text("new-first", encoding="utf-8")
+            (output / "second.json").write_text("new-second", encoding="utf-8")
+            formal = manager.formal_data_root
+            formal.mkdir(parents=True, exist_ok=True)
+            first_target = formal / "first.json"
+            second_target = formal / "second.json"
+            first_target.write_text("old-first", encoding="utf-8")
+            second_target.write_text("old-second", encoding="utf-8")
+            original_copy = workspace_module._atomic_copy
+
+            def hard_stop_copy(source: Path, target: Path) -> None:
+                if target == second_target:
+                    raise HardStop("simulated process termination")
+                original_copy(source, target)
+
+            items = {"first.json": "first.json", "second.json": "second.json"}
+            with mock.patch.object(workspace_module, "_atomic_copy", side_effect=hard_stop_copy):
+                with self.assertRaises(HardStop):
+                    manager.atomic_promote(
+                        "case_worker", "TASK-001", items, transaction_id="TXN-DRIFT"
+                    )
+            second_target.write_text("external-newer-change", encoding="utf-8")
+            with self.assertRaisesRegex(WorkspaceError, "has drifted"):
+                manager.atomic_promote(
+                    "case_worker", "TASK-001", items, transaction_id="TXN-DRIFT"
+                )
+            self.assertEqual("old-first", first_target.read_text(encoding="utf-8"))
+            self.assertEqual("external-newer-change", second_target.read_text(encoding="utf-8"))
+            transaction = manager.promotion_root / "TXN-DRIFT"
+            self.assertEqual(
+                "APPLYING",
+                json.loads((transaction / "receipt.json").read_text(encoding="utf-8"))["status"],
+            )
+            self.assertTrue((transaction / "backups").is_dir())
+            self.assertTrue((transaction / "staged").is_dir())
 
     def test_rollback_refuses_to_overwrite_newer_formal_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

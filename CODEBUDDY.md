@@ -22,7 +22,7 @@
 - [TD-GATE-CASE-QUALITY] 前置、步骤、预期编号换行并完整导航；标题“功能点-当前用例标题”；折叠 AI_TEST/CODEX_TEST 实例编号后步骤/预期仍分别唯一、可判定；实探→计划→用例一致；同功能点连续区块；状态分类计数从用例派生；确定性字段逐行有序一致；交互闭环。
 <!-- TEST-DESIGN-GENERATED:END -->
 
-执行统一使用 `scripts/run-test-design.ps1`：用 `agent-run` 推进最终架构、`agent-submit` 提交隔离结果、`agent-status` 查看状态；`pipeline-status` 仅作事实诊断，独立 Review 通过后运行 `complete-deliverables`。框架自检使用 `scripts/validate-test-design.ps1 -Mode Fast|Full`。
+正式入口是 `/test-design-run <run-dir>`，负责能力探针、claim、派发、execution 绑定、Review 和交付；禁止绕过 claim。诊断用 `agent-status` / `pipeline-status`；恢复时 `agent-submit` 必须带原 `--execution-id`。自检用 `scripts/validate-test-design.ps1 -Mode Fast|Full`。
 
 <!-- LOCAL-OVERRIDES:BEGIN -->
 <!-- 业务项目可以在本区块追加本地约束；同步脚本不得覆盖。 -->

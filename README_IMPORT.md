@@ -9,12 +9,22 @@ your-project/
   AGENTS.md
   CODEBUDDY.md
   .codebuddy/
+    settings.json
+    hooks/guard-agent-tool.py
+    agents/
+      test-discovery.md
+      test-plan-dfx.md
+      test-risk-arbiter.md
+      test-case-worker.md
+      test-reviewer.md
+    commands/test-design-run.md
     skills/test-design/SKILL.md
     .rules/test-design-rule.mdc
     rules/test-design-rule.md
   docs/
     ARCHITECTURE.md
     AGENT_ORCHESTRATION.md
+    CODEBUDDY_AGENT_ADAPTER.md
     RULE_OWNERSHIP.md
     test-design/
       codebuddy-test-design-template.xlsx
@@ -38,10 +48,12 @@ your-project/
 - 主 Skill：`.codebuddy/skills/test-design/SKILL.md`
 - 主 Rule：`.codebuddy/.rules/test-design-rule.mdc`
 - 兼容 Rule 镜像：`.codebuddy/rules/test-design-rule.md`
+- CodeBuddy 冻结输入读取与输出写入保护：`.codebuddy/settings.json`、`.codebuddy/hooks/guard-agent-tool.py`
 - 项目 Memory：`CODEBUDDY.md`
 - 规则归属：`docs/RULE_OWNERSHIP.md`
 - 架构说明：`docs/ARCHITECTURE.md`
 - 最终多 Agent 运行架构：`docs/AGENT_ORCHESTRATION.md`
+- CodeBuddy Agent 注册、串并行和降级：`docs/CODEBUDDY_AGENT_ADAPTER.md`
 
 详细规则按任务类型读取 `docs/test-design/rules/`：
 
@@ -63,7 +75,7 @@ your-project/
 如果涉及页面、截图、原型或可访问系统，请按 docs/test-design/rules/page-discovery.md 做页面实探。
 如果范围超过一个最小标题，请按 docs/test-design/rules/batch-run.md 分批执行。
 如果需要导入测试系统，请复制 docs/test-design/测试用例模板.xlsx 生成独立导入文件，不要修改原模板。
-批次先用 agent-run 获取最终多 Agent 架构任务，按 AgentTask 隔离执行并用 agent-submit 提交；独立 Review Gate 通过后，再运行 scripts/test_design_excel_tools.py complete-deliverables 一站式生成导入文件、同步交付件并校验。
+在 CodeBuddy 主会话执行 /test-design-run <run-dir>；它用 agent-run 获取最终多 Agent 架构任务，按 AgentTask 调度项目 Agent 并用 agent-submit 提交。独立 Review Gate 通过后，再运行 complete-deliverables 一站式生成导入文件、同步交付件并校验。
 ```
 
 ## 测试系统导入
@@ -96,7 +108,9 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
 大范围任务必须建立 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/`，并维护 `batch-scope.json`、`batch-plan.md`、`batch-status.csv`、`batch-review.md`、独立采集的 `page-element-inventory.csv`、带稳定交互实例 ID 的 `page-discovery.csv`、`selection-option-observations.csv`、`interaction-branch-observations.csv`、结构化计划、生命周期和 `artifacts/`。页面证据必须是当前批次 `artifacts/` 内非空文件。
 页面实探或批次任务开始前，先运行 `powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-run --project-root . --run-id <YYYYMMDD_任务标识> --module-path "一级模块>二级菜单>三级菜单" --product-name "<产品/系统名称>" --batch-id BATCH-001` 初始化标准批次账本和 `batch-scope.json`；已存在批次使用 `--resume` 并传入原产品名，不得重复初始化覆盖；传入 `--page-discovery` 收口时必须同时传入 `--batch-status`。
 
-初始化会直接启用必选的最终多 Agent 架构。调度器用 `agent-run --run-dir <run-dir> --json` 取得任务，Agent 只写 task packet 指定的 workspace，再用 `agent-submit --task-id <task-id> --result <agent-result.json>` 提交；`agent-status` 可只读查看状态，真实外部阻塞解除后使用 `agent-resume`。完整角色、契约、返工和 Review 规则见 `docs/AGENT_ORCHESTRATION.md`。
+初始化会直接启用必选的最终多 Agent 架构。调度器用 `agent-run --run-dir <run-dir> --json` 取得任务，先生成稳定唯一 `execution_id`，再用 `agent-claim --task-id <task-id> --execution-id <execution_id> --coordinator-id <协调器ID> --executor-id <执行器ID> --executor-kind <执行器类型> --wave-id <波次ID>` 原子领取；领取响应丢失时以完全相同参数重试。Agent 只写 task packet 指定的 workspace，再用 `agent-submit --task-id <task-id> --execution-id <execution_id> --result <agent-result.json>` 提交；`agent-status` 可只读查看状态，真实外部阻塞解除后使用 `agent-resume`。领取无自动超时重派；仅在确认没有业务或页面副作用时，才可用 `agent-release ... --confirm-no-side-effects` 显式释放。完整角色、契约、返工和 Review 规则见 `docs/AGENT_ORCHESTRATION.md`。
+
+CodeBuddy Code 通过项目根目录 `.codebuddy/agents/` 加载 5 个认知角色。复制、升级或修改 `.codebuddy` 配置后，用户必须在新 CodeBuddy Code 会话中分别执行 `/agents` 检查角色、执行 `/hooks` 审核 guard 与 page-probe recorder，再另发一条消息用 `/test-design-run <run-dir>` 启动主会话协调；这两个交互式预检不能由协调命令内嵌。导入项目不会自动创建任务，CodeBuddy IDE 的 Agent 页面只是任务/会话列表，也不等同于项目 Agent 注册表。Windows Discovery 在 claim 前必须实际探测一个已连接、可点击并观察结果的精确页面控制 MCP，通过 `page-probe-commit` 生成持久化 receipt 并绑定 claim；没有有效 receipt 时不得 claim。Case 支持后台 Agent 时按冻结波次并行，不支持后台执行时按相同门禁串行。完全不支持 sub-agent 时只能诊断；`codebuddy-main-session`、`external-session` 和 Agent Team 当前均未通过本适配的隔离认证，不能正式交付。详见 `docs/CODEBUDDY_AGENT_ADAPTER.md`。
 
 ## 自检命令
 

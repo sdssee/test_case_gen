@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "page-probe-receipt.schema.json",
+  "title": "Durable Page Probe Receipt",
+  "type": "object",
+  "required": [
+    "schema_version", "receipt_id", "receipt_fingerprint", "run_id",
+    "batch_id", "task_id", "execution_id", "coordinator_id",
+    "source_fingerprint", "committed_at", "probe_session_sha256",
+    "probe_transcript_sha256", "mcp_server", "approved_mcp_tools",
+    "records", "evidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "receipt_id": {"type": "string", "pattern": "^PPR-[0-9a-f]{24}$"},
+    "receipt_fingerprint": {"$ref": "#/$defs/fingerprint"},
+    "run_id": {"$ref": "#/$defs/scopeIdentifier"},
+    "batch_id": {"$ref": "#/$defs/scopeIdentifier"},
+    "task_id": {"$ref": "#/$defs/identifier"},
+    "execution_id": {"$ref": "#/$defs/identifier"},
+    "coordinator_id": {"$ref": "#/$defs/executionLabel"},
+    "source_fingerprint": {"$ref": "#/$defs/fingerprint"},
+    "committed_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    },
+    "probe_session_sha256": {"$ref": "#/$defs/fingerprint"},
+    "probe_transcript_sha256": {"$ref": "#/$defs/fingerprint"},
+    "mcp_server": {"type": "string", "pattern": "^[A-Za-z0-9_.:-]+$"},
+    "approved_mcp_tools": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/mcpTool"}
+    },
+    "records": {
+      "type": "array", "minItems": 3,
+      "items": {"$ref": "#/$defs/record"}
+    },
+    "evidence": {
+      "type": "array", "minItems": 1,
+      "items": {"$ref": "#/$defs/evidence"}
+    }
+  },
+  "$defs": {
+    "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "identifier": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "scopeIdentifier": {
+      "type": "string", "minLength": 1, "maxLength": 128,
+      "pattern": "^(?!\\.{1,2}$)[^/\\\\\\u0000]+$"
+    },
+    "executionLabel": {
+      "type": "string", "minLength": 1, "maxLength": 256,
+      "pattern": "^(?:\\S(?:[^\\r\\n\\u0000]*\\S)?)$"
+    },
+    "mcpTool": {"type": "string", "pattern": "^mcp__[A-Za-z0-9_.:-]+__[A-Za-z0-9_.:-]+$"},
+    "record": {
+      "type": "object",
+      "required": [
+        "record_id", "sequence", "recorded_at", "tool_name", "operation_kind",
+        "operation_name", "tool_input_sha256", "tool_response_sha256",
+        "call_content_sha256", "response_nonempty", "response_error"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"operation_kind": {"const": "read"}}},
+          "then": {"properties": {"operation_name": {"const": "read"}}},
+          "else": {
+            "properties": {
+              "operation_name": {
+                "enum": ["click", "select", "input", "toggle", "expand", "navigate", "other_mutation"]
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "record_id": {"$ref": "#/$defs/fingerprint"},
+        "sequence": {"type": "integer", "minimum": 1},
+        "recorded_at": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$"},
+        "tool_name": {"$ref": "#/$defs/mcpTool"},
+        "operation_kind": {"enum": ["read", "mutation"]},
+        "operation_name": {
+          "enum": ["read", "click", "select", "input", "toggle", "expand", "navigate", "other_mutation"]
+        },
+        "tool_input_sha256": {"$ref": "#/$defs/fingerprint"},
+        "tool_response_sha256": {"$ref": "#/$defs/fingerprint"},
+        "call_content_sha256": {"$ref": "#/$defs/fingerprint"},
+        "response_nonempty": {"const": true},
+        "response_error": {"const": false}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["path", "sha256", "bytes", "sidecar_path", "sidecar_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^artifacts/page-probe-evidence/(?!(?:\\.{1,2})(?:/|$))(?!.*?/\\.{1,2}(?:/|$))[^/\\\\\\u0000]+(?:/[^/\\\\\\u0000]+)*$"
+        },
+        "sha256": {"$ref": "#/$defs/fingerprint"},
+        "bytes": {"type": "integer", "minimum": 1},
+        "sidecar_path": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "string",
+              "pattern": "^artifacts/page-probe-evidence/(?!(?:\\.{1,2})(?:/|$))(?!.*?/\\.{1,2}(?:/|$))[^/\\\\\\u0000]+(?:/[^/\\\\\\u0000]+)*\\.sensitive-audit\\.json$"
+            }
+          ]
+        },
+        "sidecar_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/fingerprint"}]}
+      }
+    }
+  }
+}

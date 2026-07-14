@@ -13,12 +13,14 @@
 | `.codebuddy/skills/test-design/SKILL.md` | 测试设计执行流程。 |
 | `.codebuddy/.rules/test-design-rule.mdc` | CodeBuddy IDE 硬规则。 |
 | `.codebuddy/rules/test-design-rule.md` | CodeBuddy Code/CLI 硬规则。 |
+| `.codebuddy/settings.json`、`.codebuddy/hooks/guard-agent-tool.py` | CodeBuddy 认知 sub-agent 的冻结输入读取与输出写入边界保护。 |
 | `docs/test-design/codebuddy-test-design-template.xlsx` | 正式测试设计模板，固定 8 个 Sheet。 |
 | `docs/test-design/测试用例模板.xlsx` | 测试系统导入模板，使用时复制副本，不修改原模板。 |
 | `docs/test-assets/catalog/` | 按模块 JSON 保存的内部产品测试权威事实源。 |
 | `docs/test-assets/product-map.xlsx` | 从 catalog 重建的 Excel 查询视图，不作为默认客户交付件。 |
 | `docs/RULE_OWNERSHIP.md` | 规则归属矩阵，避免重复和漂移。 |
 | `docs/AGENT_ORCHESTRATION.md` | 最终多 Agent 架构、角色、契约、状态机、返工、Review 与 CLI。 |
+| `docs/CODEBUDDY_AGENT_ADAPTER.md` | CodeBuddy Agent 注册、串并行调度、UI 显示边界与降级方案。 |
 
 详细规则按任务读取 `docs/test-design/rules/`；Excel 字段以 `docs/test-design/excel-template-spec.md` 为准；归档和跨模块依赖以 `docs/test-design/archive-and-index-guidelines.md` 为准。
 
@@ -57,8 +59,13 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-
 ```powershell
 scripts/run-test-design.ps1 agent-run --run-dir <批次目录> --json
 scripts/run-test-design.ps1 agent-status --run-dir <批次目录> --json
-scripts/run-test-design.ps1 agent-submit --run-dir <批次目录> --task-id <任务ID> --result <agent-result.json> --json
+scripts/run-test-design.ps1 agent-claim --run-dir <批次目录> --task-id <任务ID> --execution-id <调用方稳定唯一执行ID> --coordinator-id <协调器ID> --executor-id <执行器ID> --executor-kind codebuddy-subagent --wave-id <波次ID> --json
+scripts/run-test-design.ps1 agent-submit --run-dir <批次目录> --task-id <任务ID> --execution-id <同一执行ID> --result <agent-result.json> --json
 ```
+
+每个任务必须先由调用方生成稳定唯一 `execution_id` 并原子领取再执行；领取响应丢失时用完全相同参数重试会返回同一 claim，`agent-run` 不会重新返回已领取任务。领取没有自动超时或租约重派，避免 Discovery/CRUD 在崩溃后被重复执行；只有确认没有业务或页面副作用时，才可用 `agent-release ... --confirm-no-side-effects` 显式释放。`codebuddy-main-session` 只允许诊断降级，任何生成任务使用该身份都会阻断 Reviewer 和正式交付；Reviewer 不得使用该身份，且执行身份必须与全部成功生成者不同。
+
+在 CodeBuddy Code 主会话中执行项目命令 `/test-design-run <run-dir>`。`.codebuddy/agents/` 注册 5 个认知角色，但导入仓库不会自动创建或启动任务；CodeBuddy IDE 的 Agent 页面只是任务/会话列表，不是项目 Agent 注册表。首次导入、升级或修改 `.codebuddy` 配置后，用户必须新开 CodeBuddy Code 会话，分别执行 `/agents` 检查角色、执行 `/hooks` 审核 guard 与 page-probe recorder，再另行调用 `/test-design-run`；协调命令不能内嵌这两个交互式预检。Windows Discovery 在 claim 前必须实际探测一个已连接、可点击并观察结果的页面控制 MCP；若页面 MCP 拆分多个 exact tools，本批预计使用的每个工具都必须逐个成功预探并由同 server receipt 精确授权，未预探工具保持拒绝。支持 sub-agent 但不支持后台并行时，Case 仍先 claim 全波、逐个前台执行并暂存，收齐全波后才统一决策和顺序提交；`codebuddy-main-session`、`external-session` 与 Agent Team 当前均未通过本适配的隔离认证，只可诊断，不能正式交付。完整边界见 `docs/CODEBUDDY_AGENT_ADAPTER.md`。
 
 进入 `DELIVERY_RUNNING` 后使用一站式组装与收口命令。该命令从 manifest 和 7 个 Sheet JSON 生成 8 Sheet 正式工作簿，并同时写入 `current/`、`deliverables/`、内部归档和独立导入文件：
 
@@ -71,7 +78,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
   --batch-id BATCH-001
 ```
 
-交付事务会在同一排他锁与回滚边界内复核 receipt、文件哈希和产品事实，并直接把运行状态原子收口为 `COMPLETE`；无需也不得再用额外 `agent-run` 补写完成状态。
+交付事务会在同一排他锁与回滚边界内复核 receipt、文件哈希和产品事实，并直接把运行状态原子收口为 `COMPLETE`；无需也不得再用额外 `agent-run` 补写完成状态。正式持久输出只有事务内的 5 份规范发布文件，调用参数中的临时组装路径不是第六份交付副本；最终架构拒绝把 `--import-workbook` 指向外部兼容路径，`FINALIZED` 后不再执行任何事后复制。编排模式只接受当前 run-dir 的 `batch-status.csv`、`page-discovery.csv` 和项目规范 `docs/test-assets/product-map.xlsx`，不能用命令行覆盖文件把未经过 Review 的页面事实带入 catalog。
 
 如需排查组装问题，可先运行 `assemble-formal-workbook --run-dir <批次目录> --output <批次目录>/artifacts/previews/临时检查.xlsx`；该命令仅可生成 run-dir 内预览，正式目录和产品事实只能由 `complete-deliverables --run-dir` 在 Review 后写入。禁止在批次目录编写 `gen_excel.py` 之类脚本绕过标准组装器。
 

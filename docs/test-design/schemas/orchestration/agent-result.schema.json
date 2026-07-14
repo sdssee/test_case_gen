@@ -42,7 +42,12 @@
     },
     {
       "if": {"properties": {"status": {"const": "NEEDS_REWORK"}}, "required": ["status"]},
-      "then": {"properties": {"rework_requests": {"minItems": 1}}}
+      "then": {
+        "properties": {
+          "rework_requests": {"minItems": 1},
+          "error_message": {"type": "null"}
+        }
+      }
     },
     {
       "if": {"properties": {"status": {"enum": ["FAILED", "EXTERNAL_BLOCKED"]}}, "required": ["status"]},

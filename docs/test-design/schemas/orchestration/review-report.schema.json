@@ -49,6 +49,7 @@
         "dfx_within_plan",
         "traceability_complete",
         "binary_evidence_privacy_verified",
+        "page_probe_receipts_verified",
         "no_open_rework"
       ],
       "additionalProperties": false,
@@ -65,6 +66,7 @@
         "dfx_within_plan": {"const": true},
         "traceability_complete": {"const": true},
         "binary_evidence_privacy_verified": {"const": true},
+        "page_probe_receipts_verified": {"const": true},
         "no_open_rework": {"const": true}
       }
     },

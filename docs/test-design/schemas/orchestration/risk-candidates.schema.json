@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "risk-candidates.schema.json",
+  "title": "External Semantic Risk Candidates",
+  "type": "object",
+  "required": ["candidates"],
+  "additionalProperties": false,
+  "properties": {
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "risk_id", "question", "page_verifiability", "page_action", "page_result",
+          "external_reason", "affected_interaction_ids", "evidence", "dfx_dimensions"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "risk_id": {"type": "string", "minLength": 1},
+          "question": {"type": "string", "minLength": 1},
+          "page_verifiability": {"const": "external_semantics"},
+          "page_action": {"type": "string", "minLength": 1},
+          "page_result": {"type": "string", "minLength": 1},
+          "external_reason": {"type": "string", "minLength": 1},
+          "affected_interaction_ids": {
+            "type": "array", "minItems": 1, "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "evidence": {
+            "type": "array", "minItems": 1, "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "dfx_dimensions": {
+            "type": "array", "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    }
+  },
+  "$comment": "The deterministic Python gate additionally grounds interaction IDs and evidence in the current discovery ledger and checks canonical DFX names."
+}

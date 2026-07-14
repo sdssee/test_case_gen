@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dfx-assessment.schema.json",
+  "title": "DFX 12x4 Assessment",
+  "type": "object",
+  "required": ["dimensions"],
+  "additionalProperties": false,
+  "properties": {
+    "dimensions": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "required": ["dimension", "status", "reason", "scenarios"],
+        "additionalProperties": false,
+        "properties": {
+          "dimension": {"type": "string", "minLength": 1},
+          "status": {"enum": ["适用", "不适用", "待确认", "需补充证据"]},
+          "reason": {"type": "string", "minLength": 1},
+          "scenarios": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    }
+  },
+  "$comment": "The deterministic Python gate additionally requires every canonical DFX dimension exactly once and its exact four canonical scenarios."
+}

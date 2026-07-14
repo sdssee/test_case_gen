@@ -6,6 +6,10 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $versionFile = Join-Path $repoRoot "VERSION"
 $manifest = Join-Path $repoRoot "UPGRADE_MANIFEST.md"
+$removalManifestName = "FRAMEWORK_REMOVALS.json"
+$deprecatedFiles = @(
+  ".codebuddy/agents/test-delivery.md"
+)
 
 if (-not (Test-Path $versionFile)) {
   throw "Missing VERSION file."
@@ -35,15 +39,24 @@ $includeFiles = @(
   "CODEBUDDY.md",
   "README.md",
   "README_IMPORT.md",
+  ".codebuddy/settings.json",
+  ".codebuddy/hooks/guard-agent-tool.py",
+  ".codebuddy/hooks/record-page-probe.py",
   "requirements.txt",
   "pyproject.toml",
   "VERSION",
   "UPGRADE_MANIFEST.md",
   "docs/ARCHITECTURE.md",
   "docs/AGENT_ORCHESTRATION.md",
+  "docs/CODEBUDDY_AGENT_ADAPTER.md",
+  "docs/RULE_OWNERSHIP.md",
   "docs/UPGRADE.md",
   "docs/test-assets/README.md",
-  "docs/test-assets/batch-runs/README.md"
+  "docs/test-assets/batch-runs/README.md",
+  "scripts/test_design/orchestration/execution_binding.py",
+  "tests/test_codebuddy_agent_guard.py",
+  "tests/test_codebuddy_page_probe_recorder.py",
+  "tests/test_page_probe_receipts.py"
 )
 
 $includeDirs = @(
@@ -91,6 +104,12 @@ function Test-GeneratedPath {
   return $false
 }
 
+function Test-DeprecatedPath {
+  param([string]$RelativePath)
+  $normalized = $RelativePath.Replace("\", "/").TrimStart("/")
+  return $deprecatedFiles -contains $normalized
+}
+
 function Get-RelativePath {
   param(
     [string]$BasePath,
@@ -117,7 +136,7 @@ foreach ($dir in $includeDirs) {
   if (Test-Path $absoluteDir) {
     Get-ChildItem -Path $absoluteDir -Recurse -File | ForEach-Object {
       $relative = Get-RelativePath -BasePath $repoRoot -FullPath $_.FullName
-      if (-not (Test-ProtectedPath $relative) -and -not (Test-GeneratedPath $relative)) {
+      if (-not (Test-ProtectedPath $relative) -and -not (Test-GeneratedPath $relative) -and -not (Test-DeprecatedPath $relative)) {
         $files.Add($relative)
       }
     }
@@ -127,7 +146,7 @@ foreach ($dir in $includeDirs) {
 foreach ($glob in $includeGlobs) {
   Get-ChildItem -Path (Join-Path $repoRoot $glob) -File | ForEach-Object {
     $relative = Get-RelativePath -BasePath $repoRoot -FullPath $_.FullName
-    if (-not (Test-ProtectedPath $relative) -and -not (Test-GeneratedPath $relative)) {
+    if (-not (Test-ProtectedPath $relative) -and -not (Test-GeneratedPath $relative) -and -not (Test-DeprecatedPath $relative)) {
       $files.Add($relative)
     }
   }
@@ -147,6 +166,15 @@ try {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
     Copy-Item -LiteralPath $source -Destination $target -Force
   }
+  $removalManifest = [ordered]@{
+    schema_version = "1.0.0"
+    remove_files = @($deprecatedFiles)
+  } | ConvertTo-Json -Depth 10
+  [System.IO.File]::WriteAllText(
+    (Join-Path $staging $removalManifestName),
+    $removalManifest + [Environment]::NewLine,
+    [System.Text.UTF8Encoding]::new($false)
+  )
   Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $packagePath -Force
 }
 finally {

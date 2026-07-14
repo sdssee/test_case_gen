@@ -1,22 +1,19 @@
 ---
 name: test-design
-description: 测试设计与测试用例生成专家，覆盖页面实探、结构化计划、风险确认、用例分片、Excel 交付和产品资产同步。
-allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
+description: 测试设计编排：实探、计划、风险、用例、Review、交付。
+allowed-tools: Read, Write, Bash, Grep, Glob, Agent, TaskOutput, ToolSearch, DeferExecuteTool, WaitForMcpServers
 ---
 
 # 测试设计执行 Skill
 
-本 Skill 只负责编排。硬门禁读取当前运行时对应的 Rule；专题规则通过 `docs/test-design/rules/README.md` 延迟加载，避免一次性加载全部文档。
+本 Skill 只负责编排；硬门禁读 Rule，专题规则按 `docs/test-design/rules/README.md` 延迟加载。
 
 ## 阶段编排
 
-1. 读取 catalog 事实、相关模块归档和需求材料，形成模块理解摘要。
-2. 初始化并全量深探；复合交互分支写入 `interaction-branch-observations.csv`。
-3. 生成结构化 `element-case-plan.csv` 与逐修改项 `test-data-lifecycle.csv`，通过 plan 门禁。
-4. 汇总模型不理解项；有问题才请用户确认，无问题运行 `record-risk-none`。
-5. 完成 DFX 评估，按功能点 Case Worker 生成用例并由编排器确定性分片。
-6. 由独立只读 Reviewer 通过 Review Gate；存在问题时按结构化返工回到责任阶段。
-7. 由单写者组装 8 Sheet 正式设计、独立导入文件，归档并同步产品事实。
+1. 读 catalog/需求并全量深探；分支写入 `interaction-branch-observations.csv`。
+2. 生成 `element-case-plan.csv`、`test-data-lifecycle.csv` 和 DFX；仅确认模型不理解项，否则 `record-risk-none`。
+3. Case Worker 按功能点生成，独立 Reviewer 审查并结构化返工。
+4. 单写者组装 8 Sheet、导入文件、归档和产品事实。
 
 <!-- TEST-DESIGN-GENERATED:BEGIN -->
 - [TD-GATE-DELIVERY] 正式测试设计只含 8 个标准 Sheet；测试系统导入文件必须由独立模板副本生成。
@@ -39,14 +36,13 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 ## 命令
 
 ```powershell
-scripts/run-test-design.ps1 agent-run --run-dir <run-dir> --json
+/test-design-run <run-dir>
 scripts/run-test-design.ps1 agent-status --run-dir <run-dir> --json
-scripts/run-test-design.ps1 agent-submit --run-dir <run-dir> --task-id <任务ID> --result <agent-result.json> --json
 scripts/run-test-design.ps1 validate-review-artifacts --run-dir <run-dir>
 scripts/run-test-design.ps1 complete-deliverables --run-dir <run-dir> --module-path "<模块路径>" --batch-id <批次ID>
 ```
 
-`pipeline-status`、`validate-batch-artifacts`、`record-risk-none` 和 `prepare-function-case-generation` 是编排器复用的诊断/门禁能力，不是绕过 Agent 与 Review 的手工捷径。
+正式入口是 `/test-design-run`；恢复时 `agent-submit` 必须带原 `--execution-id`。`pipeline-status` 等命令仅供诊断/门禁，不得绕过 Agent 与 Review。
 
 <!-- LOCAL-OVERRIDES:BEGIN -->
 <!-- 业务项目可以在本区块追加本地约束；同步脚本不得覆盖。 -->

@@ -49,10 +49,10 @@ def _exclusive_lock(path: Path) -> Iterator[None]:
     stream = path.open("a+b")
     acquired = False
     try:
-        stream.seek(0, os.SEEK_END)
-        if stream.tell() == 0:
-            stream.write(b"0")
-            stream.flush()
+        # Locking one byte from offset zero is valid even when the file is
+        # empty.  Do not write a marker before acquiring the lock: concurrent
+        # Windows writers can otherwise both observe an empty file and one of
+        # their buffered marker flushes races a peer's byte-range lock.
         stream.seek(0)
         try:
             if os.name == "nt":

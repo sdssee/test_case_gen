@@ -27,6 +27,7 @@ FRAMEWORK_VERSION = next(
 MODULE_PATH = REPO_ROOT / "scripts" / "test_design_excel_tools.py"
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from test_design.contracts.sheet_data import SHEET_DATA_HEADERS
+from test_design import io_utils as io_utils_module
 
 SPEC = importlib.util.spec_from_file_location("test_design_excel_tools", MODULE_PATH)
 assert SPEC and SPEC.loader
@@ -45,12 +46,80 @@ RUN_VALIDATION_SPEC.loader.exec_module(RUN_VALIDATION)
 
 
 class ArchitectureSafetyTests(unittest.TestCase):
+    def test_rule_ownership_is_a_framework_upgrade_asset(self) -> None:
+        markers = (
+            "docs/RULE_OWNERSHIP.md",
+            ".codebuddy/settings.json",
+            ".codebuddy/hooks/guard-agent-tool.py",
+            ".codebuddy/hooks/record-page-probe.py",
+            "tests/test_codebuddy_agent_guard.py",
+            "tests/test_codebuddy_page_probe_recorder.py",
+        )
+        for relative in (
+            "scripts/new-framework-upgrade-package.ps1",
+            "scripts/upgrade-framework.ps1",
+            "UPGRADE_MANIFEST.md",
+            "docs/UPGRADE.md",
+        ):
+            with self.subTest(path=relative):
+                text = (REPO_ROOT / relative).read_text(encoding="utf-8-sig")
+                for marker in markers:
+                    self.assertIn(marker, text)
+
+        ownership = (REPO_ROOT / "docs" / "RULE_OWNERSHIP.md").read_text(encoding="utf-8-sig")
+        self.assertIn("不要求把适配摘要重复同步进 `CODEBUDDY.md` 或 Skill", ownership)
+        self.assertNotIn("README/README_IMPORT/CODEBUDDY/Skill 摘要", ownership)
+
+    def test_upgrade_package_has_transactional_codebuddy_metadata(self) -> None:
+        package_script = (REPO_ROOT / "scripts" / "new-framework-upgrade-package.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        upgrade_script = (REPO_ROOT / "scripts" / "upgrade-framework.ps1").read_text(
+            encoding="utf-8-sig"
+        )
+        for script in (package_script, upgrade_script):
+            self.assertIn("scripts/test_design/orchestration/execution_binding.py", script)
+        for marker in (
+            "FRAMEWORK_REMOVALS.json",
+            ".codebuddy/agents/test-delivery.md",
+            "Test-DeprecatedPath",
+        ):
+            self.assertIn(marker, package_script)
+        for marker in (
+            "FRAMEWORK_REMOVALS.json",
+            ".codebuddy/agents/test-delivery.md",
+            "Merge-CodeBuddySettings",
+            "Existing .codebuddy/settings.json",
+            "Refusing to remove non-regular legacy path",
+            "Restore-UpgradeSnapshot",
+        ):
+            self.assertIn(marker, upgrade_script)
+
     def test_full_validation_accepts_platform_only_upgrade_skips_on_linux(self) -> None:
+        self.assertTrue(
+            {
+                "test_upgrade_merges_codebuddy_settings_and_removes_legacy_delivery_agent",
+                "test_upgrade_rejects_allowlist_suffix_collisions_and_missing_execution_binding",
+                "test_upgrade_rejects_invalid_existing_codebuddy_settings_without_data_loss",
+            }.issubset(RUN_VALIDATION.SLOW_TEST_MARKERS)
+        )
         upgrade_test = mock.Mock()
         upgrade_test.id.return_value = "suite.test_upgrade_failure_restores_framework_and_protected_assets"
-        result = mock.Mock(skipped=[(upgrade_test, "PowerShell integration runs on Windows")])
+        malicious_package_test = mock.Mock()
+        malicious_package_test.id.return_value = (
+            "suite.test_upgrade_rejects_allowlist_suffix_collisions_and_missing_execution_binding"
+        )
+        result = mock.Mock(
+            skipped=[
+                (upgrade_test, "PowerShell integration runs on Windows"),
+                (malicious_package_test, "PowerShell integration runs on Windows"),
+            ]
+        )
         self.assertEqual([], RUN_VALIDATION.skipped_required_upgrade_tests(result, "posix"))
-        self.assertEqual([upgrade_test.id()], RUN_VALIDATION.skipped_required_upgrade_tests(result, "nt"))
+        self.assertEqual(
+            [upgrade_test.id(), malicious_package_test.id()],
+            RUN_VALIDATION.skipped_required_upgrade_tests(result, "nt"),
+        )
 
     def test_entry_contract_rejects_incomplete_runtime_graph(self) -> None:
         with self.assertRaisesRegex(ValueError, "exactly codex and codebuddy"):
@@ -131,6 +200,18 @@ class ArchitectureSafetyTests(unittest.TestCase):
         source = REPO_ROOT / "docs" / "test-assets" / "batch-runs" / "templates"
         target = root / "docs" / "test-assets" / "batch-runs" / "templates"
         shutil.copytree(source, target)
+        shutil.copytree(
+            REPO_ROOT / "docs" / "test-design" / "schemas" / "orchestration",
+            root / "docs" / "test-design" / "schemas" / "orchestration",
+        )
+        for relative in (
+            "scripts/test_design/contracts/function_cases.py",
+            "scripts/test_design/contracts/sheet_data.py",
+            "scripts/test_design/validators/function_cases.py",
+        ):
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO_ROOT / relative, destination)
 
     def write_csv_rows(self, path: Path, rows: list[dict[str, str]]) -> None:
         with path.open("r", encoding="utf-8-sig", newline="") as stream:
@@ -1232,6 +1313,179 @@ class ArchitectureSafetyTests(unittest.TestCase):
             self.assertEqual("before", existing.read_text(encoding="utf-8"))
             self.assertFalse(created.exists())
 
+    def test_durable_delivery_transaction_recovers_mid_publication_and_cleans_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value).resolve()
+            targets = [
+                root / "docs/test-design/current/formal.xlsx",
+                root / "docs/test-design/deliverables/formal.xlsx",
+                root / "docs/test-design/deliverables/import.xlsx",
+                root / "docs/test-assets/modules/formal.xlsx",
+                root / "docs/test-assets/imports/import.xlsx",
+                root / "docs/test-assets/catalog/index.json",
+                root / "run/artifacts/data/delivery-receipt.json",
+            ]
+            desired: dict[Path, Path] = {}
+            for index, target in enumerate(targets):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(f"before-{index}", encoding="utf-8")
+                source = root / "desired" / f"{index:02d}.bin"
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(f"desired-{index}", encoding="utf-8")
+                desired[target] = source
+
+            identity = {"operation": "complete-deliverables", "run_id": "RUN-001"}
+            transaction_dir = root / "run/orchestration/delivery-transaction"
+            transaction = TOOLS.DurableFileTransaction(root, transaction_dir, identity)
+            transaction.prepare(desired, metadata={"assembly_counts": {"功能测试用例": 7}})
+            journal = transaction.load()
+            self.assertIsNotNone(journal)
+            assert journal is not None
+
+            # Simulate a process dying after three atomic target replacements,
+            # before any of their applied flags reached the journal.
+            for record in journal["files"][:3]:
+                shutil.copy2(
+                    transaction_dir / record["payload"],
+                    root / Path(record["target"]),
+                )
+
+            recovered = TOOLS.DurableFileTransaction(root, transaction_dir, identity)
+            committed = recovered.apply_all()
+            self.assertEqual("FILES_COMMITTED", committed["status"])
+            for index, target in enumerate(targets):
+                self.assertEqual(f"desired-{index}", target.read_text(encoding="utf-8"))
+
+            recovered.set_status("FINALIZING")
+            recovered.set_status("FINALIZED")
+            recovered.cleanup_payloads()
+            self.assertFalse((transaction_dir / "backups").exists())
+            self.assertFalse((transaction_dir / "payloads").exists())
+            self.assertEqual("FINALIZED", recovered.load()["status"])
+            recovered.verify_committed()
+            targets[0].write_text("external-after-finalize", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "committed target drifted"):
+                recovered.verify_committed()
+            self.assertEqual(
+                "external-after-finalize", targets[0].read_text(encoding="utf-8")
+            )
+
+    def test_durable_delivery_transaction_never_overwrites_external_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value).resolve()
+            first = root / "published/first.xlsx"
+            second = root / "published/second.xlsx"
+            first.parent.mkdir(parents=True)
+            first.write_text("before-first", encoding="utf-8")
+            second.write_text("before-second", encoding="utf-8")
+            source_first = root / "desired-first.xlsx"
+            source_second = root / "desired-second.xlsx"
+            source_first.write_text("desired-first", encoding="utf-8")
+            source_second.write_text("desired-second", encoding="utf-8")
+            identity = {"operation": "complete-deliverables", "run_id": "RUN-DRIFT"}
+            transaction_dir = root / "run/orchestration/delivery-transaction"
+            transaction = TOOLS.DurableFileTransaction(root, transaction_dir, identity)
+            transaction.prepare({first: source_first, second: source_second})
+            journal = transaction.load()
+            assert journal is not None
+            first_record = next(row for row in journal["files"] if row["target"].endswith("first.xlsx"))
+            shutil.copy2(transaction_dir / first_record["payload"], first)
+            first.write_text("external-newer-value", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "external target drift"):
+                transaction.apply_all()
+            self.assertEqual("external-newer-value", first.read_text(encoding="utf-8"))
+            self.assertEqual("before-second", second.read_text(encoding="utf-8"))
+            with self.assertRaisesRegex(RuntimeError, "rollback blocked by external target drift"):
+                transaction.rollback()
+            self.assertEqual("external-newer-value", first.read_text(encoding="utf-8"))
+
+    def test_durable_delivery_transaction_rechecks_drift_immediately_before_mutation(self) -> None:
+        for operation in ("apply", "rollback"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as value:
+                root = Path(value).resolve()
+                target = root / "published/value.txt"
+                source = root / "desired.txt"
+                target.parent.mkdir(parents=True)
+                target.write_text("before", encoding="utf-8")
+                source.write_text("desired", encoding="utf-8")
+                transaction = TOOLS.DurableFileTransaction(
+                    root,
+                    root / "run/orchestration/delivery-transaction",
+                    {"operation": "complete-deliverables", "run_id": operation},
+                )
+                transaction.prepare({target: source})
+                if operation == "rollback":
+                    transaction.apply_all()
+
+                original_state = io_utils_module._file_state
+                target_checks = 0
+
+                def drift_on_second_target_check(path: Path) -> dict[str, object]:
+                    nonlocal target_checks
+                    if path.resolve(strict=False) == target.resolve(strict=False):
+                        target_checks += 1
+                        if target_checks == 2:
+                            target.write_text("external-third-state", encoding="utf-8")
+                    return original_state(path)
+
+                with mock.patch.object(
+                    io_utils_module, "_file_state", side_effect=drift_on_second_target_check
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError, "external target drift immediately before overwrite"
+                    ):
+                        if operation == "apply":
+                            transaction.apply_all()
+                        else:
+                            transaction.rollback()
+                self.assertEqual(
+                    "external-third-state", target.read_text(encoding="utf-8")
+                )
+
+    def test_durable_delivery_transaction_binds_identity_and_rolls_back_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value).resolve()
+            target = root / "published/value.json"
+            source = root / "desired.json"
+            target.parent.mkdir(parents=True)
+            target.write_text("before", encoding="utf-8")
+            source.write_text("desired", encoding="utf-8")
+            transaction_dir = root / "run/orchestration/delivery-transaction"
+            identity = {"operation": "complete-deliverables", "run_id": "RUN-IDENTITY"}
+            transaction = TOOLS.DurableFileTransaction(root, transaction_dir, identity)
+            transaction.prepare({target: source})
+
+            with self.assertRaisesRegex(RuntimeError, "different frozen invocation"):
+                TOOLS.DurableFileTransaction(
+                    root,
+                    transaction_dir,
+                    {**identity, "run_id": "RUN-OTHER"},
+                ).load()
+            transaction.apply_all()
+            rolled_back = transaction.rollback()
+            self.assertEqual("ROLLED_BACK", rolled_back["status"])
+            self.assertEqual("before", target.read_text(encoding="utf-8"))
+            self.assertEqual("ROLLED_BACK", transaction.rollback()["status"])
+            self.assertFalse((transaction_dir / "backups").exists())
+            self.assertFalse((transaction_dir / "payloads").exists())
+            with self.assertRaisesRegex(RuntimeError, "Invalid durable transaction status transition"):
+                transaction.set_status("FINALIZED")
+
+            orphan_dir = root / "run/orchestration/orphan-transaction"
+            (orphan_dir / "backups").mkdir(parents=True)
+            (orphan_dir / "payloads").mkdir()
+            (orphan_dir / "backups/stale.bin").write_bytes(b"stale")
+            (orphan_dir / "payloads/stale.bin").write_bytes(b"stale")
+            orphan = TOOLS.DurableFileTransaction(
+                root,
+                orphan_dir,
+                {"operation": "complete-deliverables", "run_id": "RUN-ORPHAN"},
+            )
+            orphan.prepare({target: source})
+            self.assertFalse((orphan_dir / "backups/stale.bin").exists())
+            self.assertFalse((orphan_dir / "payloads/stale.bin").exists())
+
     def test_delivery_lock_rejects_concurrent_writer(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             lock_path = Path(value) / "delivery.lock"
@@ -1506,6 +1760,333 @@ class ArchitectureSafetyTests(unittest.TestCase):
 
     @unittest.skipIf(os.name != "nt", "PowerShell upgrade rollback integration runs on Windows")
     @unittest.skipIf(os.environ.get("TEST_DESIGN_SKIP_UPGRADE_INTEGRATION") == "1", "Avoid recursive upgrade test")
+    def test_upgrade_merges_codebuddy_settings_and_removes_legacy_delivery_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            sandbox = root / "repo"
+            ignore = shutil.ignore_patterns(
+                ".git",
+                "__pycache__",
+                "*.pyc",
+                "dist",
+                "dist-test",
+                ".upgrade-backups",
+                ".test-design-locks",
+            )
+            shutil.copytree(REPO_ROOT, sandbox, ignore=ignore)
+            environment = os.environ.copy()
+            environment["TEST_DESIGN_SKIP_UPGRADE_INTEGRATION"] = "1"
+            legacy_agent = sandbox / ".codebuddy" / "agents" / "test-delivery.md"
+            legacy_agent.parent.mkdir(parents=True, exist_ok=True)
+            legacy_agent.write_text("LEGACY FILE MUST NOT ENTER PACKAGE\n", encoding="utf-8")
+
+            package_result = subprocess.run(
+                [
+                    "powershell",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(sandbox / "scripts" / "new-framework-upgrade-package.ps1"),
+                    "-OutputDir",
+                    "dist-test",
+                ],
+                cwd=sandbox,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, package_result.returncode, package_result.stderr)
+            package = sandbox / "dist-test" / f"framework-upgrade-{FRAMEWORK_VERSION}.zip"
+            with zipfile.ZipFile(package) as archive:
+                names = {name.replace("\\", "/") for name in archive.namelist()}
+                self.assertIn("FRAMEWORK_REMOVALS.json", names)
+                self.assertIn("scripts/test_design/orchestration/execution_binding.py", names)
+                self.assertNotIn(".codebuddy/agents/test-delivery.md", names)
+                removals = json.loads(archive.read("FRAMEWORK_REMOVALS.json").decode("utf-8"))
+            self.assertEqual([".codebuddy/agents/test-delivery.md"], removals["remove_files"])
+
+            incoming_settings = json.loads(
+                (sandbox / ".codebuddy" / "settings.json").read_text(encoding="utf-8")
+            )
+            guard_entry = incoming_settings["hooks"]["PreToolUse"][0]
+            recorder_entry = incoming_settings["hooks"]["PostToolUse"][0]
+            custom_pre_tool = {
+                "matcher": "^Read$",
+                "hooks": [{"type": "command", "command": "echo custom-read"}],
+            }
+            custom_post_tool = {
+                "matcher": "^Write$",
+                "hooks": [{"type": "command", "command": "echo custom-post-write"}],
+            }
+            mixed_guard_entry = json.loads(json.dumps(guard_entry))
+            mixed_guard_entry["hooks"].insert(
+                0, {"type": "command", "command": "echo keep-sibling-hook"}
+            )
+            relative_legacy_guard = {
+                "matcher": "^Write$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python .codebuddy/hooks/guard-agent-tool.py",
+                    }
+                ],
+            }
+            mixed_recorder_entry = json.loads(json.dumps(recorder_entry))
+            mixed_recorder_entry["hooks"].insert(
+                0, {"type": "command", "command": "echo keep-recorder-sibling"}
+            )
+            relative_legacy_recorder = {
+                "matcher": "^mcp__.*$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python .codebuddy/hooks/record-page-probe.py",
+                    }
+                ],
+            }
+            company_guard = {
+                "matcher": "^Read$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python .codebuddy/hooks/company-guard-agent-tool.py",
+                    }
+                ],
+            }
+            guard_argument_collision = {
+                "matcher": "^Read$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python company-hook.py --note .codebuddy/hooks/guard-agent-tool.py",
+                    }
+                ],
+            }
+            guard_comment_collision = {
+                "matcher": "^Read$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "echo keep-guard-comment # python .codebuddy/hooks/guard-agent-tool.py",
+                    }
+                ],
+            }
+            company_recorder = {
+                "matcher": "^Write$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python .codebuddy/hooks/company-record-page-probe.py",
+                    }
+                ],
+            }
+            recorder_argument_collision = {
+                "matcher": "^Write$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python company-hook.py --note .codebuddy/hooks/record-page-probe.py",
+                    }
+                ],
+            }
+            recorder_comment_collision = {
+                "matcher": "^Write$",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "echo keep-recorder-comment # python .codebuddy/hooks/record-page-probe.py",
+                    }
+                ],
+            }
+            existing_settings = {
+                "permissions": {
+                    "allow": ["Read", "Write"],
+                    "deny": ["Bash(rm:*)"],
+                },
+                "companySetting": {"keep": True},
+                "hooks": {
+                    "PreToolUse": [
+                        custom_pre_tool,
+                        mixed_guard_entry,
+                        guard_entry,
+                        relative_legacy_guard,
+                    ],
+                    "PostToolUse": [
+                        custom_post_tool,
+                        mixed_recorder_entry,
+                        recorder_entry,
+                        relative_legacy_recorder,
+                        company_recorder,
+                        recorder_argument_collision,
+                        recorder_comment_collision,
+                        company_guard,
+                        guard_argument_collision,
+                        guard_comment_collision,
+                    ],
+                },
+            }
+            settings_path = sandbox / ".codebuddy" / "settings.json"
+            settings_path.write_text(
+                json.dumps(existing_settings, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            legacy_agent.write_text("LEGACY DELIVERY AGENT MUST BE REMOVED\n", encoding="utf-8")
+
+            upgrade_result = subprocess.run(
+                [
+                    "powershell",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(sandbox / "scripts" / "upgrade-framework.ps1"),
+                    "-PackagePath",
+                    str(package),
+                ],
+                cwd=sandbox,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, upgrade_result.returncode, upgrade_result.stderr + upgrade_result.stdout)
+            self.assertFalse(legacy_agent.exists())
+            self.assertFalse((sandbox / "FRAMEWORK_REMOVALS.json").exists())
+
+            merged = json.loads(settings_path.read_text(encoding="utf-8-sig"))
+            self.assertEqual(existing_settings["permissions"], merged["permissions"])
+            self.assertEqual({"keep": True}, merged["companySetting"])
+            self.assertIn(custom_post_tool, merged["hooks"]["PostToolUse"])
+            self.assertIn(custom_pre_tool, merged["hooks"]["PreToolUse"])
+            for custom_entry in (
+                company_guard,
+                guard_argument_collision,
+                guard_comment_collision,
+            ):
+                self.assertIn(custom_entry, merged["hooks"]["PostToolUse"])
+            for custom_entry in (
+                company_recorder,
+                recorder_argument_collision,
+                recorder_comment_collision,
+            ):
+                self.assertIn(custom_entry, merged["hooks"]["PostToolUse"])
+            self.assertTrue(
+                any(
+                    hook.get("command") == "echo keep-sibling-hook"
+                    for entry in merged["hooks"]["PreToolUse"]
+                    for hook in entry.get("hooks", [])
+                )
+            )
+            self.assertEqual(1, merged["hooks"]["PreToolUse"].count(guard_entry))
+            self.assertNotIn(relative_legacy_guard, merged["hooks"]["PreToolUse"])
+            self.assertTrue(
+                any(
+                    hook.get("command") == "echo keep-recorder-sibling"
+                    for entry in merged["hooks"]["PostToolUse"]
+                    for hook in entry.get("hooks", [])
+                )
+            )
+            self.assertEqual(1, merged["hooks"]["PostToolUse"].count(recorder_entry))
+            self.assertNotIn(relative_legacy_recorder, merged["hooks"]["PostToolUse"])
+
+    @unittest.skipIf(os.name != "nt", "PowerShell upgrade package validation runs on Windows")
+    @unittest.skipIf(os.environ.get("TEST_DESIGN_SKIP_UPGRADE_INTEGRATION") == "1", "Avoid recursive upgrade test")
+    def test_upgrade_rejects_allowlist_suffix_collisions_and_missing_execution_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            sandbox = root / "repo"
+            ignore = shutil.ignore_patterns(
+                ".git",
+                "__pycache__",
+                "*.pyc",
+                "dist",
+                "dist-test",
+                ".upgrade-backups",
+                ".test-design-locks",
+            )
+            shutil.copytree(REPO_ROOT, sandbox, ignore=ignore)
+            environment = os.environ.copy()
+            environment["TEST_DESIGN_SKIP_UPGRADE_INTEGRATION"] = "1"
+
+            package_result = subprocess.run(
+                [
+                    "powershell",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(sandbox / "scripts" / "new-framework-upgrade-package.ps1"),
+                    "-OutputDir",
+                    "dist-test",
+                ],
+                cwd=sandbox,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, package_result.returncode, package_result.stderr)
+            valid_package = sandbox / "dist-test" / f"framework-upgrade-{FRAMEWORK_VERSION}.zip"
+
+            for index, malicious_path in enumerate(
+                ("AGENTS.md.evil", ".codebuddy/settings.json.bak", "VERSION.backdoor"),
+                start=1,
+            ):
+                with self.subTest(path=malicious_path):
+                    malicious_package = root / f"malicious-{index}.zip"
+                    shutil.copy2(valid_package, malicious_package)
+                    with zipfile.ZipFile(malicious_package, "a", zipfile.ZIP_DEFLATED) as archive:
+                        archive.writestr(malicious_path, "MUST NOT BE INSTALLED\n")
+                    result = subprocess.run(
+                        [
+                            "powershell",
+                            "-ExecutionPolicy",
+                            "Bypass",
+                            "-File",
+                            str(sandbox / "scripts" / "upgrade-framework.ps1"),
+                            "-PackagePath",
+                            str(malicious_package),
+                        ],
+                        cwd=sandbox,
+                        env=environment,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    output = result.stderr + result.stdout
+                    self.assertNotEqual(0, result.returncode, output)
+                    self.assertIn(f"unexpected path: {malicious_path}", output)
+                    self.assertFalse((sandbox / malicious_path).exists())
+
+            missing_relative = "scripts/test_design/orchestration/execution_binding.py"
+            missing_package = root / "missing-execution-binding.zip"
+            with zipfile.ZipFile(valid_package) as source, zipfile.ZipFile(
+                missing_package, "w", zipfile.ZIP_DEFLATED
+            ) as destination:
+                for info in source.infolist():
+                    if info.filename.replace("\\", "/") != missing_relative:
+                        destination.writestr(info, source.read(info.filename))
+            missing_result = subprocess.run(
+                [
+                    "powershell",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(sandbox / "scripts" / "upgrade-framework.ps1"),
+                    "-PackagePath",
+                    str(missing_package),
+                ],
+                cwd=sandbox,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            missing_output = missing_result.stderr + missing_result.stdout
+            self.assertNotEqual(0, missing_result.returncode, missing_output)
+            self.assertIn(f"missing required framework file: {missing_relative}", missing_output)
+
+    @unittest.skipIf(os.name != "nt", "PowerShell upgrade rollback integration runs on Windows")
+    @unittest.skipIf(os.environ.get("TEST_DESIGN_SKIP_UPGRADE_INTEGRATION") == "1", "Avoid recursive upgrade test")
     def test_upgrade_failure_restores_framework_and_protected_assets(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             root = Path(value)
@@ -1535,9 +2116,30 @@ class ArchitectureSafetyTests(unittest.TestCase):
             valid_package = sandbox / "dist-test" / f"framework-upgrade-{FRAMEWORK_VERSION}.zip"
             extracted = root / "broken-package"
             with zipfile.ZipFile(valid_package) as archive:
+                self.assertIn("docs/RULE_OWNERSHIP.md", {name.replace("\\", "/") for name in archive.namelist()})
                 archive.extractall(extracted)
             canonical_rule = Path(".codebuddy") / "rules" / "test-design-rule.md"
             (extracted / canonical_rule).write_text("BROKEN UPGRADE PACKAGE\n", encoding="utf-8")
+            absent_protected = sandbox / "docs" / "test-design" / "current"
+            shutil.rmtree(absent_protected)
+            existing_protected = sandbox / "docs" / "test-design" / "deliverables"
+            existing_protected_marker = existing_protected / "nested" / "keep.txt"
+            existing_protected_marker.parent.mkdir(parents=True, exist_ok=True)
+            existing_protected_marker.write_text("KEEP COMPLETE TREE\n", encoding="utf-8")
+            validation_script = extracted / "scripts" / "validate-test-design.ps1"
+            validation_script.write_text(
+                """$repository = Split-Path -Parent $PSScriptRoot
+$created = Join-Path $repository 'docs\\test-design\\current'
+New-Item -ItemType Directory -Force -Path $created | Out-Null
+Set-Content -LiteralPath (Join-Path $created 'created-during-failure.txt') -Value 'REMOVE'
+$deliverables = Join-Path $repository 'docs\\test-design\\deliverables'
+Remove-Item -LiteralPath (Join-Path $deliverables 'nested\\keep.txt') -Force
+Set-Content -LiteralPath (Join-Path $deliverables 'created-during-failure.txt') -Value 'REMOVE'
+Write-Host 'intentional validation failure after protected asset mutation'
+exit 23
+""",
+                encoding="utf-8",
+            )
             probe_file = extracted / "tests" / "new-file-probe.txt"
             probe_file.parent.mkdir(parents=True, exist_ok=True)
             probe_file.write_text("must be removed by rollback", encoding="utf-8")
@@ -1548,7 +2150,20 @@ class ArchitectureSafetyTests(unittest.TestCase):
                         archive.write(path, path.relative_to(extracted))
 
             rule_before = (sandbox / canonical_rule).read_bytes()
+            ownership_before = (sandbox / "docs" / "RULE_OWNERSHIP.md").read_bytes()
             product_map_before = (sandbox / "docs" / "test-assets" / "product-map.xlsx").read_bytes()
+            settings_path = sandbox / ".codebuddy" / "settings.json"
+            custom_settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            custom_settings["permissions"] = {"allow": ["Read"], "deny": ["Bash"]}
+            custom_settings["localRollbackProbe"] = "KEEP"
+            settings_path.write_text(
+                json.dumps(custom_settings, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            settings_before = settings_path.read_bytes()
+            legacy_agent = sandbox / ".codebuddy" / "agents" / "test-delivery.md"
+            legacy_agent.write_text("LEGACY DELIVERY RESTORE PROBE\n", encoding="utf-8")
+            legacy_before = legacy_agent.read_bytes()
             upgrade_result = subprocess.run(
                 [
                     "powershell",
@@ -1568,8 +2183,82 @@ class ArchitectureSafetyTests(unittest.TestCase):
             self.assertNotEqual(0, upgrade_result.returncode)
             self.assertIn("restoring framework and protected assets", upgrade_result.stderr + upgrade_result.stdout)
             self.assertEqual(rule_before, (sandbox / canonical_rule).read_bytes())
+            self.assertEqual(ownership_before, (sandbox / "docs" / "RULE_OWNERSHIP.md").read_bytes())
             self.assertEqual(product_map_before, (sandbox / "docs" / "test-assets" / "product-map.xlsx").read_bytes())
+            self.assertEqual(settings_before, settings_path.read_bytes())
+            self.assertEqual(legacy_before, legacy_agent.read_bytes())
             self.assertFalse((sandbox / "tests" / "new-file-probe.txt").exists())
+            self.assertFalse(absent_protected.exists())
+            self.assertEqual("KEEP COMPLETE TREE\n", existing_protected_marker.read_text(encoding="utf-8"))
+            self.assertFalse((existing_protected / "created-during-failure.txt").exists())
+
+    @unittest.skipIf(os.name != "nt", "PowerShell upgrade rollback integration runs on Windows")
+    @unittest.skipIf(os.environ.get("TEST_DESIGN_SKIP_UPGRADE_INTEGRATION") == "1", "Avoid recursive upgrade test")
+    def test_upgrade_rejects_invalid_existing_codebuddy_settings_without_data_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            root = Path(value)
+            sandbox = root / "repo"
+            ignore = shutil.ignore_patterns(
+                ".git",
+                "__pycache__",
+                "*.pyc",
+                "dist",
+                "dist-test",
+                ".upgrade-backups",
+                ".test-design-locks",
+            )
+            shutil.copytree(REPO_ROOT, sandbox, ignore=ignore)
+            environment = os.environ.copy()
+            environment["TEST_DESIGN_SKIP_UPGRADE_INTEGRATION"] = "1"
+
+            package_result = subprocess.run(
+                [
+                    "powershell",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(sandbox / "scripts" / "new-framework-upgrade-package.ps1"),
+                    "-OutputDir",
+                    "dist-test",
+                ],
+                cwd=sandbox,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, package_result.returncode, package_result.stderr)
+            package = sandbox / "dist-test" / f"framework-upgrade-{FRAMEWORK_VERSION}.zip"
+
+            settings_path = sandbox / ".codebuddy" / "settings.json"
+            invalid_settings = b'{"permissions":{"allow":["Read"]},"hooks":'
+            settings_path.write_bytes(invalid_settings)
+            legacy_agent = sandbox / ".codebuddy" / "agents" / "test-delivery.md"
+            legacy_agent.write_text("INVALID SETTINGS MUST NOT DELETE ME\n", encoding="utf-8")
+            legacy_before = legacy_agent.read_bytes()
+
+            upgrade_result = subprocess.run(
+                [
+                    "powershell",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(sandbox / "scripts" / "upgrade-framework.ps1"),
+                    "-PackagePath",
+                    str(package),
+                ],
+                cwd=sandbox,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            output = upgrade_result.stderr + upgrade_result.stdout
+            self.assertNotEqual(0, upgrade_result.returncode)
+            self.assertIn("Existing .codebuddy/settings.json contains invalid JSON", output)
+            self.assertIn("restoring framework and protected assets", output)
+            self.assertEqual(invalid_settings, settings_path.read_bytes())
+            self.assertEqual(legacy_before, legacy_agent.read_bytes())
 
     @unittest.skipIf(os.name != "nt", "PowerShell asset migration integration runs on Windows")
     @unittest.skipIf(os.environ.get("TEST_DESIGN_SKIP_UPGRADE_INTEGRATION") == "1", "Avoid recursive upgrade test")
@@ -1600,6 +2289,8 @@ class ArchitectureSafetyTests(unittest.TestCase):
             )
             self.assertEqual(0, package_result.returncode, package_result.stderr)
             package = sandbox / "dist-test" / f"framework-upgrade-{FRAMEWORK_VERSION}.zip"
+            ownership_path = sandbox / "docs" / "RULE_OWNERSHIP.md"
+            expected_ownership = ownership_path.read_bytes()
 
             agents_path = sandbox / "AGENTS.md"
             agents_text = agents_path.read_text(encoding="utf-8")
@@ -1632,6 +2323,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 agents_text,
             )
             agents_path.write_text(agents_text, encoding="utf-8")
+            ownership_path.write_text("# STALE RULE OWNERSHIP\n", encoding="utf-8")
 
             (sandbox / "VERSION").write_text(
                 "framework_version=1.2.0\nasset_schema_version=1.0.0\n",
@@ -1677,6 +2369,7 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(0, upgrade_result.returncode, upgrade_result.stderr + upgrade_result.stdout)
+            self.assertEqual(expected_ownership, ownership_path.read_bytes())
             self.assertIn("asset_schema_version=2.0.0", (sandbox / "VERSION").read_text(encoding="utf-8-sig"))
             legacy_path = sandbox / "docs" / "test-assets" / "catalog" / "modules" / "_legacy.json"
             self.assertTrue(legacy_path.exists())

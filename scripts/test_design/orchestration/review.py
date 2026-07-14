@@ -12,16 +12,36 @@ import hashlib
 import csv
 import json
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from .contracts import AgentResult, AgentRole, AgentTask, TaskStatus, TraceabilityRecord, canonical_fingerprint
+from .contracts import (
+    AgentClaim,
+    AgentResult,
+    AgentRole,
+    AgentTask,
+    ExecutorKind,
+    TaskStatus,
+    TraceabilityRecord,
+    canonical_fingerprint,
+    role_contract_relative_paths,
+)
 from ..sensitive_data import (
     BINARY_EVIDENCE_AUDIT_SUFFIX,
     assert_no_sensitive_artifact,
     binary_evidence_audit_path,
 )
 from ..validation_cache import fingerprint
+from .event_store import EventStore, EventStoreError
+from .execution_binding import ExecutionBindingError, validate_execution_binding
+from .page_probe import (
+    PageProbeError,
+    load_page_probe_receipt,
+    page_probe_event_registry,
+    receipt_path as page_probe_receipt_path,
+    validate_project_record_consumption,
+)
 
 
 REVIEW_REPORT = "orchestration/review-report.json"
@@ -67,6 +87,7 @@ REQUIRED_REVIEW_CHECKS = (
     "dfx_within_plan",
     "traceability_complete",
     "binary_evidence_privacy_verified",
+    "page_probe_receipts_verified",
     "no_open_rework",
 )
 
@@ -286,6 +307,166 @@ def _review_source_paths(run_dir: Path) -> tuple[Path, ...]:
                         )
                     paths.append(evidence)
     paths.extend(review_evidence_paths(run_dir))
+    manifest = _mapping(
+        _load_json(run_dir / RUN_MANIFEST, "run-manifest.json"),
+        "run-manifest.json",
+    )
+    tasks = _mapping(manifest.get("tasks"), "run-manifest tasks")
+    bound_page_probe_evidence: set[Path] = set()
+    for task_id, entry_value in tasks.items():
+        if not isinstance(entry_value, Mapping) or entry_value.get("status") != "SUCCEEDED":
+            continue
+        raw_task = entry_value.get("task")
+        if not isinstance(raw_task, Mapping) or raw_task.get("agent_role") != "discovery":
+            continue
+        link = entry_value.get("page_probe_receipt")
+        if not isinstance(link, Mapping) or not isinstance(link.get("receipt_id"), str):
+            raise ReviewValidationError(
+                f"successful Discovery task {task_id!r} has no page probe receipt projection"
+            )
+        try:
+            receipt = load_page_probe_receipt(
+                run_dir,
+                str(link["receipt_id"]),
+                expected_fingerprint=str(link.get("receipt_fingerprint") or ""),
+            )
+        except PageProbeError as exc:
+            raise ReviewValidationError(
+                f"successful Discovery task {task_id!r} page probe receipt is stale: {exc}"
+            ) from exc
+        paths.append(page_probe_receipt_path(run_dir, receipt.receipt_id))
+        for item in receipt.evidence:
+            evidence_path = _inside_run(
+                run_dir, item["path"], "page probe evidence"
+            )
+            paths.append(evidence_path)
+            bound_page_probe_evidence.add(evidence_path)
+            if item["sidecar_path"] is not None:
+                sidecar_path = _inside_run(
+                    run_dir,
+                    item["sidecar_path"],
+                    "page probe evidence sidecar",
+                )
+                paths.append(sidecar_path)
+                bound_page_probe_evidence.add(sidecar_path)
+    registered_receipts: dict[str, str] = {}
+    for task_id, entry_value in tasks.items():
+        if not isinstance(entry_value, Mapping):
+            raise ReviewValidationError(
+                f"run-manifest task {task_id!r} must be an object"
+            )
+        raw_task = entry_value.get("task")
+        history = entry_value.get("page_probe_history")
+        if history is None:
+            history = []
+        if not isinstance(history, list):
+            raise ReviewValidationError(
+                f"task {task_id!r} page_probe_history must be an array"
+            )
+        links: list[tuple[str, Mapping[str, Any]]] = []
+        current_link = entry_value.get("page_probe_receipt")
+        if current_link is not None:
+            if not isinstance(current_link, Mapping):
+                raise ReviewValidationError(
+                    f"task {task_id!r} page_probe_receipt must be an object or null"
+                )
+            links.append(("current", current_link))
+        for index, history_link in enumerate(history):
+            if not isinstance(history_link, Mapping):
+                raise ReviewValidationError(
+                    f"task {task_id!r} page_probe_history[{index}] must be an object"
+                )
+            links.append((f"history[{index}]", history_link))
+        if links and (
+            not isinstance(raw_task, Mapping)
+            or raw_task.get("agent_role") != "discovery"
+        ):
+            raise ReviewValidationError(
+                f"non-Discovery task {task_id!r} carries page probe receipt history"
+            )
+        for label, link in links:
+            receipt_id = link.get("receipt_id")
+            receipt_fingerprint = link.get("receipt_fingerprint")
+            if not isinstance(receipt_id, str) or not isinstance(
+                receipt_fingerprint, str
+            ):
+                raise ReviewValidationError(
+                    f"task {task_id!r} {label} page probe link is incomplete"
+                )
+            prior_fingerprint = registered_receipts.get(receipt_id)
+            if (
+                prior_fingerprint is not None
+                and prior_fingerprint != receipt_fingerprint
+            ):
+                raise ReviewValidationError(
+                    f"page probe receipt {receipt_id!r} has conflicting manifest bindings"
+                )
+            registered_receipts[receipt_id] = receipt_fingerprint
+            try:
+                receipt = load_page_probe_receipt(
+                    run_dir,
+                    receipt_id,
+                    expected_fingerprint=receipt_fingerprint,
+                )
+                validate_project_record_consumption(
+                    run_dir.parents[3], run_dir, receipt
+                )
+            except PageProbeError as exc:
+                raise ReviewValidationError(
+                    f"task {task_id!r} {label} page probe receipt is stale: {exc}"
+                ) from exc
+            if (
+                receipt.task_id != task_id
+                or link.get("execution_id") != receipt.execution_id
+                or link.get("coordinator_id") != receipt.coordinator_id
+                or link.get("source_fingerprint") != receipt.source_fingerprint
+            ):
+                raise ReviewValidationError(
+                    f"task {task_id!r} {label} page probe receipt binding is inconsistent"
+                )
+            paths.append(page_probe_receipt_path(run_dir, receipt.receipt_id))
+            for item in receipt.evidence:
+                evidence_path = _inside_run(
+                    run_dir, item["path"], "registered page probe evidence"
+                )
+                paths.append(evidence_path)
+                bound_page_probe_evidence.add(evidence_path)
+                if item["sidecar_path"] is not None:
+                    sidecar_path = _inside_run(
+                        run_dir,
+                        item["sidecar_path"],
+                        "registered page probe evidence sidecar",
+                    )
+                    paths.append(sidecar_path)
+                    bound_page_probe_evidence.add(sidecar_path)
+    page_probe_root = run_dir / "artifacts" / "page-probe-evidence"
+    actual_page_probe_evidence: set[Path] = set()
+    if page_probe_root.exists():
+        if page_probe_root.is_symlink() or not page_probe_root.is_dir():
+            raise ReviewValidationError(
+                "artifacts/page-probe-evidence must be a regular directory"
+            )
+        for candidate in page_probe_root.rglob("*"):
+            if candidate.is_symlink():
+                raise ReviewValidationError(
+                    "page probe evidence must not contain symbolic links: "
+                    f"{candidate.relative_to(run_dir).as_posix()}"
+                )
+            if candidate.is_file():
+                actual_page_probe_evidence.add(candidate.resolve())
+    if actual_page_probe_evidence != bound_page_probe_evidence:
+        orphaned = sorted(
+            path.relative_to(run_dir).as_posix()
+            for path in actual_page_probe_evidence - bound_page_probe_evidence
+        )
+        missing = sorted(
+            path.relative_to(run_dir).as_posix()
+            for path in bound_page_probe_evidence - actual_page_probe_evidence
+        )
+        raise ReviewValidationError(
+            "page probe evidence directory differs from registered receipt bindings: "
+            f"orphan={orphaned}, missing={missing}"
+        )
     # Guard against a manifest that hides stale formal shards from the review
     # fingerprint.  The cases gate checks this too, but the fingerprint helper
     # must be safe when called independently.
@@ -408,7 +589,7 @@ def _successful_result(
     task_id: str,
     entry: Mapping[str, Any],
     task: AgentTask,
-    generation_fingerprint: str,
+    generation_fingerprint: str | None = None,
 ) -> AgentResult:
     if entry.get("status") != TaskStatus.SUCCEEDED.value:
         raise ReviewValidationError(f"task {task_id!r} must have status SUCCEEDED")
@@ -417,15 +598,282 @@ def _successful_result(
         result = AgentResult.from_dict(_load_json(result_path, f"task {task_id} result"))
     except (TypeError, ValueError) as exc:
         raise ReviewValidationError(f"task {task_id!r} result contract is invalid: {exc}") from exc
+    result_fingerprint = entry.get("result_fingerprint")
+    if not isinstance(result_fingerprint, str) or not _FINGERPRINT_RE.fullmatch(result_fingerprint):
+        raise ReviewValidationError(f"task {task_id!r} has no valid result_fingerprint")
+    if hashlib.sha256(result_path.read_bytes()).hexdigest() != result_fingerprint:
+        raise ReviewValidationError(f"task {task_id!r} result_fingerprint is stale")
     if (
         result.task_id != task_id
         or result.agent_role is not task.agent_role
         or result.status is not TaskStatus.SUCCEEDED
     ):
         raise ReviewValidationError(f"task {task_id!r} result identity/status does not match run manifest")
-    if task.source_fingerprint != generation_fingerprint or result.source_fingerprint != generation_fingerprint:
+    if result.source_fingerprint != task.source_fingerprint:
+        raise ReviewValidationError(f"task {task_id!r} result source fingerprint differs from AgentTask")
+    if generation_fingerprint is not None and task.source_fingerprint != generation_fingerprint:
         raise ReviewValidationError(f"task {task_id!r} uses a stale generation source fingerprint")
+    required_outputs = entry.get("required_outputs")
+    if not isinstance(required_outputs, list) or not set(required_outputs).issubset(result.produced_files):
+        raise ReviewValidationError(f"task {task_id!r} successful result is missing required outputs")
+    if result.gate_summary.get(task.required_gate) is not True:
+        raise ReviewValidationError(
+            f"task {task_id!r} successful result did not pass gate {task.required_gate!r}"
+        )
     return result
+
+
+def _validate_task_contract_fingerprint(
+    run_dir: Path,
+    task_id: str,
+    entry: Mapping[str, Any],
+    task: AgentTask,
+) -> None:
+    project = run_dir.parents[3]
+    expected_paths = list(role_contract_relative_paths(task.agent_role))
+    if entry.get("contract_source_paths") != expected_paths:
+        raise ReviewValidationError(
+            f"task {task_id!r} does not record the complete frozen output-contract path set"
+        )
+    sources: list[Path] = []
+    for relative in expected_paths:
+        path = (project / relative).resolve()
+        try:
+            path.relative_to(project.resolve())
+        except ValueError as exc:
+            raise ReviewValidationError(f"task {task_id!r} contract path escapes project") from exc
+        if not path.is_file():
+            raise ReviewValidationError(f"task {task_id!r} contract is missing: {relative}")
+        sources.append(path)
+    if fingerprint(sources) != entry.get("contract_fingerprint"):
+        raise ReviewValidationError(f"task {task_id!r} frozen output contract changed after execution")
+
+
+def _task_claim(task_id: str, entry: Mapping[str, Any]) -> AgentClaim:
+    try:
+        claim = AgentClaim.from_dict(entry.get("claim"))
+    except (TypeError, ValueError) as exc:
+        raise ReviewValidationError(
+            f"successful task {task_id!r} has no valid durable execution claim: {exc}"
+        ) from exc
+    if claim.task_id != task_id:
+        raise ReviewValidationError(f"successful task {task_id!r} claim identity is inconsistent")
+    return claim
+
+
+def _validate_claim_binding(
+    run_dir: Path,
+    task_id: str,
+    entry: Mapping[str, Any],
+    task: AgentTask,
+    claim: AgentClaim,
+) -> None:
+    expected = {
+        "source_fingerprint": task.source_fingerprint,
+        "input_snapshot_fingerprint": entry.get("input_snapshot_fingerprint"),
+        "task_packet_fingerprint": entry.get("task_packet_fingerprint"),
+        "context_fingerprint": entry.get("context_fingerprint"),
+    }
+    actual = {
+        "source_fingerprint": claim.source_fingerprint,
+        "input_snapshot_fingerprint": claim.input_snapshot_fingerprint,
+        "task_packet_fingerprint": claim.task_packet_fingerprint,
+        "context_fingerprint": claim.context_fingerprint,
+    }
+    if actual != expected:
+        raise ReviewValidationError(f"task {task_id!r} claim no longer matches frozen task metadata")
+
+    workspace = run_dir / "artifacts" / "agent-work" / task.agent_role.value / task_id
+    input_paths = [_inside_run(run_dir, value, f"task {task_id} input") for value in task.input_files]
+    if fingerprint(input_paths) != entry.get("input_snapshot_fingerprint"):
+        raise ReviewValidationError(f"task {task_id!r} frozen input snapshot changed after execution")
+    if fingerprint([workspace / "meta" / "agent-task.json"]) != entry.get("task_packet_fingerprint"):
+        raise ReviewValidationError(f"task {task_id!r} frozen AgentTask packet changed after execution")
+    if fingerprint([workspace / "meta" / "task-context.json"]) != entry.get("context_fingerprint"):
+        raise ReviewValidationError(f"task {task_id!r} frozen task context changed after execution")
+
+
+def _validate_discovery_page_probe(
+    run_dir: Path,
+    task_id: str,
+    entry: Mapping[str, Any],
+    task: AgentTask,
+    claim: AgentClaim,
+    events: list[dict[str, object]],
+    registry: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Independently verify Discovery's durable preflight authority."""
+
+    if task.agent_role is not AgentRole.DISCOVERY:
+        if (
+            claim.page_probe_receipt_id is not None
+            or claim.page_probe_receipt_fingerprint is not None
+            or claim.approved_page_mcp_tools
+        ):
+            raise ReviewValidationError(
+                f"non-Discovery task {task_id!r} carries page probe authority"
+            )
+        return
+    if not claim.page_probe_receipt_id or not claim.page_probe_receipt_fingerprint:
+        raise ReviewValidationError(
+            f"successful Discovery task {task_id!r} has no durable page probe receipt"
+        )
+    expected_link = {
+        "receipt_id": claim.page_probe_receipt_id,
+        "receipt_path": (
+            f"orchestration/page-probe-receipts/{claim.page_probe_receipt_id}.json"
+        ),
+        "receipt_fingerprint": claim.page_probe_receipt_fingerprint,
+        "execution_id": claim.execution_id,
+        "coordinator_id": claim.coordinator_id,
+        "source_fingerprint": claim.source_fingerprint,
+        "approved_page_mcp_tools": list(claim.approved_page_mcp_tools),
+        "status": "ACTIVE",
+    }
+    link = entry.get("page_probe_receipt")
+    if not isinstance(link, Mapping) or dict(link) != expected_link:
+        raise ReviewValidationError(
+            f"successful Discovery task {task_id!r} page probe projection is stale"
+        )
+    try:
+        receipt = load_page_probe_receipt(
+            run_dir,
+            claim.page_probe_receipt_id,
+            expected_fingerprint=claim.page_probe_receipt_fingerprint,
+        )
+        validate_project_record_consumption(run_dir.parents[3], run_dir, receipt)
+    except (OSError, PageProbeError) as exc:
+        raise ReviewValidationError(
+            f"successful Discovery task {task_id!r} page probe proof is stale: {exc}"
+        ) from exc
+    if (
+        receipt.run_id != task.run_id
+        or receipt.batch_id != task.batch_id
+        or receipt.task_id != task_id
+        or receipt.execution_id != claim.execution_id
+        or receipt.coordinator_id != claim.coordinator_id
+        or receipt.source_fingerprint != task.source_fingerprint
+        or receipt.approved_mcp_tools != claim.approved_page_mcp_tools
+    ):
+        raise ReviewValidationError(
+            f"successful Discovery task {task_id!r} page probe identity is stale"
+        )
+    state = registry.get(receipt.receipt_id)
+    if (
+        not isinstance(state, Mapping)
+        or state.get("receipt") != receipt
+        or not isinstance(state.get("reserved_sequence"), int)
+        or not isinstance(state.get("committed_sequence"), int)
+        or state.get("tombstoned_sequence") is not None
+    ):
+        raise ReviewValidationError(
+            f"successful Discovery task {task_id!r} page probe is not uniquely committed"
+        )
+    matching_claim_events = []
+    for event in events:
+        if event.get("task_id") != task_id or event.get("event_type") not in {
+            "TASK_CLAIMED", "AUDIT_CLAIM_RECOVERED"
+        }:
+            continue
+        payload = event.get("payload")
+        if isinstance(payload, Mapping) and payload.get("claim") == claim.to_dict():
+            matching_claim_events.append(event)
+    if len(matching_claim_events) != 1 or not isinstance(
+        matching_claim_events[0].get("sequence"), int
+    ):
+        raise ReviewValidationError(
+            f"successful Discovery task {task_id!r} has no unique claim ordering proof"
+        )
+    if not (
+        int(state["reserved_sequence"])
+        < int(state["committed_sequence"])
+        < int(matching_claim_events[0]["sequence"])
+    ):
+        raise ReviewValidationError(
+            f"successful Discovery task {task_id!r} claimed before its page probe commit"
+        )
+
+    creation_events = [
+        event
+        for event in events
+        if event.get("task_id") == task_id
+        and event.get("event_type") in {"TASK_CREATED", "AUDIT_TASK_RECOVERED"}
+    ]
+    if len(creation_events) != 1:
+        raise ReviewValidationError(
+            f"successful Discovery task {task_id!r} has no unique creation timestamp"
+        )
+    try:
+        created_at = datetime.fromisoformat(
+            str(creation_events[0].get("occurred_at")).replace("Z", "+00:00")
+        )
+        if created_at.tzinfo is None:
+            raise ValueError("creation timestamp lacks timezone")
+        future_limit = datetime.now(timezone.utc) + timedelta(minutes=5)
+        for record in receipt.records:
+            recorded_at = datetime.fromisoformat(
+                str(record["recorded_at"]).replace("Z", "+00:00")
+            )
+            if recorded_at < created_at or recorded_at > future_limit:
+                raise ValueError("record is outside the Discovery task lifetime")
+    except (TypeError, ValueError) as exc:
+        raise ReviewValidationError(
+            f"successful Discovery task {task_id!r} uses old or future page probe records"
+        ) from exc
+
+
+def _validate_task_events(
+    task_id: str,
+    entry: Mapping[str, Any],
+    claim: AgentClaim,
+    events: list[dict[str, object]],
+    *,
+    allow_uncommitted_success: bool = False,
+) -> None:
+    claim_events: list[Mapping[str, Any]] = []
+    for event in events:
+        if event.get("task_id") != task_id or event.get("event_type") not in {
+            "TASK_CLAIMED", "AUDIT_CLAIM_RECOVERED"
+        }:
+            continue
+        payload = event.get("payload")
+        if isinstance(payload, Mapping) and isinstance(payload.get("claim"), Mapping):
+            claim_events.append(payload["claim"])
+    expected_claim = claim.to_dict()
+    current_claim_events = [
+        event for event in claim_events if event.get("execution_id") == claim.execution_id
+    ]
+    if len(current_claim_events) != 1 or current_claim_events[0] != expected_claim:
+        raise ReviewValidationError(f"task {task_id!r} has no matching durable full-claim event")
+
+    expected_fingerprint = entry.get("result_fingerprint")
+    stored = False
+    success_committed = False
+    for event in events:
+        if event.get("task_id") != task_id or event.get("event_type") not in {
+            "TASK_RESULT_STORED", "TASK_SUCCEEDED", "AUDIT_RESULT_RECOVERED"
+        }:
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        event_fingerprint = payload.get("result_fingerprint")
+        if event_fingerprint != expected_fingerprint:
+            raise ReviewValidationError(f"task {task_id!r} has a conflicting durable result event")
+        if event.get("event_type") in {"TASK_RESULT_STORED", "AUDIT_RESULT_RECOVERED"}:
+            if payload.get("status") != TaskStatus.SUCCEEDED.value:
+                raise ReviewValidationError(f"task {task_id!r} durable result event has wrong status")
+            stored = True
+        if event.get("event_type") == "TASK_SUCCEEDED":
+            success_committed = True
+        elif event.get("event_type") == "AUDIT_RESULT_RECOVERED" and payload.get(
+            "commit_proof"
+        ) is True:
+            success_committed = True
+    if not stored:
+        raise ReviewValidationError(f"task {task_id!r} has no durable successful result event")
+    if not success_committed and not allow_uncommitted_success:
+        raise ReviewValidationError(f"task {task_id!r} has no durable success commit event")
 
 
 def _validate_accepted_snapshot(
@@ -592,7 +1040,11 @@ def _validate_no_open_rework(run_dir: Path) -> None:
             raise ReviewValidationError(f"unclosed rework request blocks review: {path}")
 
 
-def validate_review_artifacts(run_dir: Path | str) -> bool:
+def validate_review_artifacts(
+    run_dir: Path | str,
+    *,
+    allow_uncommitted_reviewer_task_id: str | None = None,
+) -> bool:
     """Validate the current independent review without modifying the run.
 
     Returns ``False`` only for a legacy run that has no orchestration manifest;
@@ -663,9 +1115,58 @@ def validate_review_artifacts(run_dir: Path | str) -> bool:
         raise ReviewValidationError(
             f"run-manifest tasks do not use the manifest run_id/batch_id: {inconsistent_scope[:20]}"
         )
+    try:
+        event_rows = EventStore(root / "orchestration" / "events.jsonl").read_events()
+        page_probe_registry = page_probe_event_registry(event_rows)
+    except (EventStoreError, PageProbeError) as exc:
+        raise ReviewValidationError(f"orchestration event ledger is invalid: {exc}") from exc
+    successful_results: dict[str, AgentResult] = {}
     for task_id, (entry, task) in entries.items():
         if entry.get("status") == TaskStatus.SUCCEEDED.value:
+            result = _successful_result(
+                root,
+                task_id,
+                entry,
+                task,
+                current_task_fingerprint
+                if task.agent_role in {AgentRole.CASE_WORKER, AgentRole.REVIEWER}
+                else None,
+            )
+            successful_results[task_id] = result
+            claim = _task_claim(task_id, entry)
+            if claim.executor_kind is not ExecutorKind.CODEBUDDY_SUBAGENT:
+                raise ReviewValidationError(
+                    f"task {task_id!r} used diagnostic executor kind "
+                    f"{claim.executor_kind.value!r}; formal review requires codebuddy-subagent"
+                )
+            _validate_claim_binding(root, task_id, entry, task, claim)
+            try:
+                validate_execution_binding(root.parents[3], root, task, claim)
+            except ExecutionBindingError as exc:
+                raise ReviewValidationError(
+                    f"task {task_id!r} physical sub-agent execution binding is invalid: {exc}"
+                ) from exc
+            _validate_discovery_page_probe(
+                root,
+                task_id,
+                entry,
+                task,
+                claim,
+                event_rows,
+                page_probe_registry,
+            )
+            _validate_task_events(
+                task_id,
+                entry,
+                claim,
+                event_rows,
+                allow_uncommitted_success=(
+                    task.agent_role is AgentRole.REVIEWER
+                    and task_id == allow_uncommitted_reviewer_task_id
+                ),
+            )
             _validate_accepted_snapshot(root, task_id, entry, task)
+            _validate_task_contract_fingerprint(root, task_id, entry, task)
     case_order = manifest.get("case_task_order")
     if not isinstance(case_order, list) or len(case_order) != len(set(case_order)):
         raise ReviewValidationError("run-manifest case_task_order must be a unique array")
@@ -689,8 +1190,8 @@ def validate_review_artifacts(run_dir: Path | str) -> bool:
             "all successful case_worker tasks must appear exactly once in case_task_order"
         )
     for task_id in expected_generators:
-        entry, task = entries[task_id]
-        _successful_result(root, task_id, entry, task, current_task_fingerprint)
+        if task_id not in successful_results:
+            raise ReviewValidationError(f"case worker {task_id!r} has no validated successful result")
 
     from .case_merge import plan_groups, traceability_expectations
 
@@ -734,7 +1235,37 @@ def validate_review_artifacts(run_dir: Path | str) -> bool:
     entry, task = review_entry
     if task.agent_role is not AgentRole.REVIEWER:
         raise ReviewValidationError("review_task_id must reference a reviewer task")
-    _successful_result(root, review_task_id, entry, task, current_task_fingerprint)
+    if review_task_id not in successful_results:
+        raise ReviewValidationError("reviewer task has no validated successful result")
+    reviewer_claim = _task_claim(review_task_id, entry)
+    if reviewer_claim.executor_kind is not ExecutorKind.CODEBUDDY_SUBAGENT:
+        raise ReviewValidationError(
+            "Reviewer must use an authenticated codebuddy-subagent execution claim"
+        )
+    reviewer_identity = (reviewer_claim.executor_kind.value, reviewer_claim.executor_id)
+    conflicting_generators: list[str] = []
+    unguarded_generators: list[str] = []
+    for generator_task_id, (generator_entry, generator_task) in entries.items():
+        if (
+            generator_task.agent_role is AgentRole.REVIEWER
+            or generator_entry.get("status") != TaskStatus.SUCCEEDED.value
+        ):
+            continue
+        generator_claim = _task_claim(generator_task_id, generator_entry)
+        if generator_claim.executor_kind is not ExecutorKind.CODEBUDDY_SUBAGENT:
+            unguarded_generators.append(generator_task_id)
+        if (generator_claim.executor_kind.value, generator_claim.executor_id) == reviewer_identity:
+            conflicting_generators.append(generator_task_id)
+    if unguarded_generators:
+        raise ReviewValidationError(
+            "formal review is blocked because successful generators used diagnostic "
+            f"executor kinds instead of codebuddy-subagent: {unguarded_generators}"
+        )
+    if conflicting_generators:
+        raise ReviewValidationError(
+            "reviewer executor identity is not independent from successful generator tasks: "
+            f"{conflicting_generators}"
+        )
 
     _validate_traceability(
         root,

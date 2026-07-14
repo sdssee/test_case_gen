@@ -79,6 +79,9 @@ def _atomic_write_json(path: Path, value: object) -> None:
             json.dumps(value, ensure_ascii=False, allow_nan=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        # Windows requires a writable descriptor for fsync/commit.
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -235,6 +238,11 @@ class WorkspaceManager:
             raise WorkspaceError("promotion requires at least one file")
         return normalized
 
+    def _source_root(self, agent_role: str, task_id: str, source_root: Path | str | None) -> Path:
+        if source_root is None:
+            return self.task_output_root(agent_role, task_id).resolve()
+        return self._inside(self.run_dir, source_root, "promotion source root")
+
     def _target_root(self, target_root: Path | str | None) -> Path:
         if target_root is None:
             resolved = self.formal_data_root.resolve()
@@ -248,7 +256,10 @@ class WorkspaceManager:
                 raise WorkspaceError(f"promotion target root is reserved: {resolved}")
         return resolved
 
-    def _assert_formal_target(self, target: Path) -> None:
+    def _assert_formal_target(self, target: Path, allowed_reserved_targets: set[Path] | None = None) -> None:
+        allowed = allowed_reserved_targets or set()
+        if target in allowed:
+            return
         for forbidden in (
             self.agent_work_root.resolve(),
             self.orchestration_dir.resolve(),
@@ -263,6 +274,10 @@ class WorkspaceManager:
         items: Mapping[str, str] | Iterable[PromotionItem | tuple[str, str]],
         *,
         target_root: Path | str | None = None,
+        source_root: Path | str | None = None,
+        transaction_id: str | None = None,
+        allowed_reserved_targets: Sequence[Path | str] = (),
+        metadata: Mapping[str, object] | None = None,
     ) -> PromotionReceipt:
         """Promote an explicit file set and retain enough state for rollback.
 
@@ -274,15 +289,74 @@ class WorkspaceManager:
         self.initialize()
         role = _safe_component(agent_role, "agent_role")
         task = _safe_component(task_id, "task_id")
-        output_root = self.task_output_root(role, task).resolve()
+        output_root = self._source_root(role, task, source_root)
         if not output_root.is_dir():
-            raise WorkspaceError(f"task output directory does not exist: {output_root}")
+            raise WorkspaceError(f"promotion source directory does not exist: {output_root}")
         destination_root = self._target_root(target_root)
         destination_root.mkdir(parents=True, exist_ok=True)
         normalized = self._normalize_items(items)
-
-        transaction_id = uuid4().hex
+        transaction_id = _safe_component(transaction_id or uuid4().hex, "transaction_id")
         transaction_dir = self.promotion_root / transaction_id
+        receipt_path = transaction_dir / "receipt.json"
+        normalized_items = [
+            {"source": item.source, "destination": item.destination}
+            for item in normalized
+        ]
+        metadata_value = dict(metadata or {})
+        # Validate metadata before creating durable state.
+        json.dumps(metadata_value, ensure_ascii=False, allow_nan=False)
+        allowed_targets = {
+            self._inside(self.run_dir, value, "allowed reserved promotion target")
+            for value in allowed_reserved_targets
+        }
+        expected_target_root = _relative_text(destination_root, self.run_dir)
+        expected_source_root = _relative_text(output_root, self.run_dir)
+
+        if receipt_path.is_file():
+            _, existing = self._load_receipt(transaction_id)
+            expected = {
+                "agent_role": role,
+                "task_id": task,
+                "target_root": expected_target_root,
+                "source_root": expected_source_root,
+                "items": normalized_items,
+                "metadata": metadata_value,
+            }
+            if any(existing.get(key) != value for key, value in expected.items()):
+                raise WorkspaceError(
+                    f"durable promotion {transaction_id} does not match the retry request"
+                )
+            if existing.get("status") == "ROLLED_BACK":
+                shutil.rmtree(transaction_dir)
+            elif existing.get("status") == "FINALIZED":
+                raise WorkspaceError(
+                    f"durable promotion {transaction_id} was already finalized"
+                )
+            else:
+                existing_files = existing.get("files")
+                if not isinstance(existing_files, list) or len(existing_files) != len(normalized):
+                    raise WorkspaceError(
+                        f"durable promotion {transaction_id} file count does not match retry request"
+                    )
+                for item, record in zip(normalized, existing_files, strict=True):
+                    source = self._inside(output_root, item.source, "promotion source")
+                    if not source.is_file() or sha256_file(source) != record.get("source_sha256"):
+                        raise WorkspaceError(
+                            f"durable promotion retry source drifted: {item.source}"
+                        )
+                if existing.get("status") == "PROMOTED":
+                    for record in existing["files"]:
+                        target = self._inside(self.run_dir, str(record["target"]), "promotion target")
+                        if not target.is_file() or sha256_file(target) != record.get("promoted_sha256"):
+                            raise WorkspaceError(
+                                f"promoted target drifted before retry acknowledgement: {target}"
+                            )
+                    return self._receipt_object(receipt_path, existing)
+                return self._resume_prepared_promotion(receipt_path, existing, allowed_targets)
+        elif transaction_dir.exists():
+            # No target is touched before receipt.json is durable.
+            shutil.rmtree(transaction_dir)
+
         backup_dir = transaction_dir / "backups"
         staged_dir = transaction_dir / "staged"
         backup_dir.mkdir(parents=True, exist_ok=False)
@@ -300,7 +374,7 @@ class WorkspaceManager:
                 target = self._inside(destination_root, destination_raw, "promotion destination")
                 # The second check protects custom target roots and symlinked parents.
                 self._inside(self.run_dir, target, "formal promotion destination")
-                self._assert_formal_target(target)
+                self._assert_formal_target(target, allowed_targets)
                 if source.is_symlink() or not source.is_file():
                     raise WorkspaceError(f"promotion source is not a regular file: {source}")
                 if source.stat().st_size == 0:
@@ -339,58 +413,138 @@ class WorkspaceManager:
                         "backup": (
                             _relative_text(backup, self.run_dir) if existed else None
                         ),
-                        "_target": target,
-                        "_staged": staged,
+                        "staged": _relative_text(staged, self.run_dir),
                     }
                 )
-
-            changed: list[dict[str, object]] = []
-            try:
-                for record in prepared:
-                    target = record["_target"]
-                    staged = record["_staged"]
-                    assert isinstance(target, Path) and isinstance(staged, Path)
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(staged, target)
-                    if sha256_file(target) != record["promoted_sha256"]:
-                        raise WorkspaceError(f"promoted hash mismatch for {target}")
-                    changed.append(record)
-
-                public_records = tuple(
-                    {
-                        key: value
-                        for key, value in record.items()
-                        if not key.startswith("_")
-                    }
-                    for record in prepared
-                )
-                receipt_path = transaction_dir / "receipt.json"
-                receipt = PromotionReceipt(
-                    transaction_id=transaction_id,
-                    agent_role=role,
-                    task_id=task,
-                    status="PROMOTED",
-                    target_root=_relative_text(destination_root, self.run_dir),
-                    files=public_records,
-                    receipt_path=_relative_text(receipt_path, self.run_dir),
-                )
-                receipt_value = receipt.to_dict()
-                receipt_value["created_at"] = datetime.now(timezone.utc).isoformat(
-                    timespec="seconds"
-                ).replace("+00:00", "Z")
-                _atomic_write_json(receipt_path, receipt_value)
-                return receipt
-            except BaseException:
-                self._restore_pre_promotion(changed)
-                raise
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            receipt_value: dict[str, object] = {
+                "schema_version": 1,
+                "transaction_id": transaction_id,
+                "agent_role": role,
+                "task_id": task,
+                "status": "PREPARED",
+                "target_root": expected_target_root,
+                "source_root": expected_source_root,
+                "items": normalized_items,
+                "metadata": metadata_value,
+                "files": prepared,
+                "receipt_path": _relative_text(receipt_path, self.run_dir),
+                "created_at": now,
+                "updated_at": now,
+            }
+            _atomic_write_json(receipt_path, receipt_value)
+            return self._resume_prepared_promotion(receipt_path, receipt_value, allowed_targets)
         except BaseException:
-            # Retain backups for diagnosis/manual recovery if an exceptional
-            # filesystem failure also prevents automatic restoration.  The
-            # absent receipt ensures the incomplete transaction is never read
-            # as successfully promoted.
+            # PREPARED/APPLYING is deliberately retained for hard interruption
+            # recovery.  Before receipt creation no target has been changed.
             raise
 
     promote_files = atomic_promote
+
+    def _receipt_object(self, receipt_path: Path, value: Mapping[str, object]) -> PromotionReceipt:
+        files = value.get("files")
+        if not isinstance(files, list):
+            raise WorkspaceError(f"promotion receipt has invalid files: {receipt_path}")
+        return PromotionReceipt(
+            transaction_id=str(value["transaction_id"]),
+            agent_role=str(value["agent_role"]),
+            task_id=str(value["task_id"]),
+            status=str(value["status"]),
+            target_root=str(value["target_root"]),
+            files=tuple(dict(item) for item in files if isinstance(item, dict)),
+            receipt_path=_relative_text(receipt_path, self.run_dir),
+        )
+
+    def _resume_prepared_promotion(
+        self,
+        receipt_path: Path,
+        receipt: dict[str, object],
+        allowed_targets: set[Path],
+    ) -> PromotionReceipt:
+        if receipt.get("status") not in {"PREPARED", "APPLYING"}:
+            raise WorkspaceError(
+                f"promotion cannot resume from status {receipt.get('status')!r}"
+            )
+        receipt["status"] = "APPLYING"
+        receipt["updated_at"] = datetime.now(timezone.utc).isoformat(
+            timespec="seconds"
+        ).replace("+00:00", "Z")
+        _atomic_write_json(receipt_path, receipt)
+        records = receipt.get("files")
+        if not isinstance(records, list) or not records:
+            raise WorkspaceError("durable promotion has no prepared records")
+        applied: list[dict[str, object]] = []
+        drift_error: WorkspaceError | None = None
+        try:
+            for record in records:
+                if not isinstance(record, dict):
+                    raise WorkspaceError("durable promotion contains an invalid record")
+                target = self._inside(
+                    self.run_dir, str(record.get("target", "")), "promotion target"
+                )
+                self._assert_formal_target(target, allowed_targets)
+                staged = self._inside(
+                    self.run_dir, str(record.get("staged", "")), "promotion staged file"
+                )
+                if staged.is_symlink() or not staged.is_file() or sha256_file(staged) != record.get(
+                    "source_sha256"
+                ):
+                    raise WorkspaceError(f"invalid durable staged file: {staged}")
+                if target.is_symlink() or (target.exists() and not target.is_file()):
+                    raise WorkspaceError(f"promotion target is not a regular file: {target}")
+                current = sha256_file(target) if target.is_file() else None
+                previous = record.get("previous_sha256") if record.get("previous_existed") else None
+                desired = record.get("promoted_sha256")
+                if current == desired:
+                    applied.append(record)
+                    continue
+                if current != previous:
+                    drift_error = WorkspaceError(f"promotion target has drifted: {target}")
+                    raise drift_error
+                _atomic_copy(staged, target)
+                applied.append(record)
+                if sha256_file(target) != desired:
+                    raise WorkspaceError(f"promoted hash mismatch for {target}")
+        except Exception as exc:
+            try:
+                self._restore_pre_promotion(applied)
+            except Exception as rollback_exc:
+                receipt["last_error"] = (
+                    f"promotion failed ({exc}); partial rollback failed ({rollback_exc})"
+                )
+                receipt["updated_at"] = datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                ).replace("+00:00", "Z")
+                _atomic_write_json(receipt_path, receipt)
+                raise WorkspaceError(str(receipt["last_error"])) from rollback_exc
+            if drift_error is not None:
+                # The drifted target is not owned by this transaction.  Never
+                # overwrite it or claim that the whole transaction rolled back.
+                receipt["last_error"] = str(drift_error)
+                receipt["updated_at"] = datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                ).replace("+00:00", "Z")
+                _atomic_write_json(receipt_path, receipt)
+                raise drift_error
+            receipt["status"] = "ROLLED_BACK"
+            receipt["last_error"] = str(exc)
+            receipt["updated_at"] = datetime.now(timezone.utc).isoformat(
+                timespec="seconds"
+            ).replace("+00:00", "Z")
+            _atomic_write_json(receipt_path, receipt)
+            self._cleanup_transaction_payloads(receipt_path)
+            raise
+        receipt["status"] = "PROMOTED"
+        receipt["updated_at"] = datetime.now(timezone.utc).isoformat(
+            timespec="seconds"
+        ).replace("+00:00", "Z")
+        _atomic_write_json(receipt_path, receipt)
+        return self._receipt_object(receipt_path, receipt)
+
+    @staticmethod
+    def _cleanup_transaction_payloads(receipt_path: Path) -> None:
+        for name in ("backups", "staged"):
+            shutil.rmtree(receipt_path.parent / name, ignore_errors=True)
 
     def _restore_pre_promotion(self, records: Sequence[dict[str, object]]) -> None:
         errors: list[str] = []
@@ -442,6 +596,32 @@ class WorkspaceManager:
             raise WorkspaceError(f"promotion receipt has no files: {receipt_path}")
         return receipt_path, value
 
+    def resume_promotion(
+        self, receipt_or_transaction: PromotionReceipt | str
+    ) -> PromotionReceipt:
+        """Resume an interrupted prepared/applying transaction from durable staging."""
+
+        receipt_path, receipt = self._load_receipt(receipt_or_transaction)
+        status = receipt.get("status")
+        if status == "PROMOTED":
+            for record in receipt["files"]:
+                if not isinstance(record, dict):
+                    raise WorkspaceError("promotion receipt contains an invalid file record")
+                target = self._inside(
+                    self.run_dir, str(record.get("target", "")), "promotion target"
+                )
+                if target.is_symlink() or not target.is_file() or sha256_file(target) != record.get(
+                    "promoted_sha256"
+                ):
+                    raise WorkspaceError(f"promoted target drifted before reconciliation: {target}")
+            return self._receipt_object(receipt_path, receipt)
+        if status not in {"PREPARED", "APPLYING"}:
+            raise WorkspaceError(f"promotion cannot resume from status {status!r}")
+        allowed: set[Path] = set()
+        if receipt.get("agent_role") == "reviewer":
+            allowed.add((self.orchestration_dir / "review-report.json").resolve())
+        return self._resume_prepared_promotion(receipt_path, receipt, allowed)
+
     def rollback_promotion(
         self,
         receipt_or_transaction: PromotionReceipt | str,
@@ -452,11 +632,14 @@ class WorkspaceManager:
 
         receipt_path, receipt = self._load_receipt(receipt_or_transaction)
         if receipt.get("status") == "ROLLED_BACK":
+            self._cleanup_transaction_payloads(receipt_path)
             return receipt
-        if receipt.get("status") != "PROMOTED":
+        if receipt.get("status") == "FINALIZED":
             raise WorkspaceError(
                 f"promotion cannot be rolled back from status {receipt.get('status')!r}"
             )
+        if receipt.get("status") not in {"PREPARED", "APPLYING", "PROMOTED"}:
+            raise WorkspaceError(f"promotion has unsupported rollback status {receipt.get('status')!r}")
         records = receipt["files"]
         assert isinstance(records, list)
 
@@ -467,10 +650,15 @@ class WorkspaceManager:
             target = self._inside(
                 self.run_dir, str(record.get("target", "")), "rollback target"
             )
-            if not force and (
-                not target.is_file()
-                or sha256_file(target) != record.get("promoted_sha256")
-            ):
+            if target.is_symlink() or (target.exists() and not target.is_file()):
+                raise WorkspaceError(f"rollback target is not a regular file: {target}")
+            current_hash = sha256_file(target) if target.is_file() else None
+            previous_hash = (
+                record.get("previous_sha256") if record.get("previous_existed") else None
+            )
+            if not force and current_hash not in {
+                record.get("promoted_sha256"), previous_hash
+            }:
                 raise WorkspaceError(
                     f"refusing rollback because promoted target has drifted: {target}"
                 )
@@ -527,7 +715,9 @@ class WorkspaceManager:
             receipt["rolled_back_at"] = datetime.now(timezone.utc).isoformat(
                 timespec="seconds"
             ).replace("+00:00", "Z")
+            receipt["updated_at"] = receipt["rolled_back_at"]
             _atomic_write_json(receipt_path, receipt)
+            self._cleanup_transaction_payloads(receipt_path)
             return receipt
         finally:
             shutil.rmtree(rollback_snapshot, ignore_errors=True)
@@ -538,17 +728,20 @@ class WorkspaceManager:
         """Discard rollback copies after a higher-level checkpoint is durable."""
 
         receipt_path, receipt = self._load_receipt(receipt_or_transaction)
+        if receipt.get("status") == "FINALIZED":
+            self._cleanup_transaction_payloads(receipt_path)
+            return receipt
         if receipt.get("status") != "PROMOTED":
             raise WorkspaceError(
                 f"only a promoted transaction can be finalized: {receipt.get('status')!r}"
             )
-        backup_dir = receipt_path.parent / "backups"
-        shutil.rmtree(backup_dir, ignore_errors=True)
         receipt["status"] = "FINALIZED"
         receipt["finalized_at"] = datetime.now(timezone.utc).isoformat(
             timespec="seconds"
         ).replace("+00:00", "Z")
+        receipt["updated_at"] = receipt["finalized_at"]
         _atomic_write_json(receipt_path, receipt)
+        self._cleanup_transaction_payloads(receipt_path)
         return receipt
 
 

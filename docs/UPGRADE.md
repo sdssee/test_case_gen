@@ -12,8 +12,14 @@
 - `CODEBUDDY.md`
 - `.github/`
 - `.codebuddy/`
+- `.codebuddy/settings.json`
+- `.codebuddy/hooks/guard-agent-tool.py`
+- `.codebuddy/hooks/record-page-probe.py`
+- `FRAMEWORK_REMOVALS.json`（仅存在于升级包，用于声明受限 legacy 删除）
 - `docs/ARCHITECTURE.md`
 - `docs/AGENT_ORCHESTRATION.md`
+- `docs/CODEBUDDY_AGENT_ADAPTER.md`
+- `docs/RULE_OWNERSHIP.md`
 - `docs/UPGRADE.md`
 - `docs/test-design/*.md`
 - `docs/test-design/*.xlsx`
@@ -26,6 +32,9 @@
 - `requirements.txt`
 - `pyproject.toml`
 - `tests/`
+- `tests/test_codebuddy_agent_guard.py`
+- `tests/test_codebuddy_page_probe_recorder.py`
+- `tests/test_page_probe_receipts.py`
 - `VERSION`
 - `UPGRADE_MANIFEST.md`
 
@@ -69,7 +78,7 @@ powershell -ExecutionPolicy Bypass -File scripts\new-framework-upgrade-package.p
 
 2.3.0 新增按角色/权限和数据状态采集的 `page-element-inventory.csv`；discovery、逐选项、元素计划和生命周期新增 `交互实例ID`，仅 page discovery 新增证据定位及通用步骤/结果锚点，逐选项新增非平凡 `预期结果锚点`。本次创建对象以同一测试数据 ID 和创建 owner 用例贯穿，各生命周期行使用对应 mutation plan 的交互实例 ID。状态计数按明确 DFX taxonomy 派生；分片从 001 非空连续；正式表与导入表确定性字段有序一致。`--resume` 只补空模板/列，不伪造事实；旧批次必须按角色和数据状态重新独立盘点、补录 ID/锚点，并把真实非空文件迁入当前批次作为证据。
 
-3.0.0 直接启用最终多 Agent 架构，没有 legacy/optional/灰度模式。`init-batch-run` 会建立 `orchestration/` 与 `artifacts/agent-work/`；批次由确定性状态机按 `discovery → plan → risk → cases → review → delivery` 推进，Agent 只写隔离 workspace。新架构强制单 Discovery owner、Plan/DFX、条件 Risk Arbiter、按功能点 Case Worker、独立只读 Reviewer 与单写者交付，并使用冻结输入、source fingerprint、结构化返工和逐用例 traceability；输入、动态选择、分页和弹窗的必测分支统一记录到 `interaction-branch-observations.csv`。完整说明见 `docs/AGENT_ORCHESTRATION.md`。
+3.0.0 直接启用最终多 Agent 架构，没有 legacy/optional/灰度模式。`init-batch-run` 会建立 `orchestration/` 与 `artifacts/agent-work/`；批次由确定性状态机按 `discovery → plan → risk → cases → review → delivery` 推进，Agent 只写隔离 workspace。新架构强制单 Discovery owner、Plan/DFX、条件 Risk Arbiter、按功能点 Case Worker、独立只读 Reviewer 与单写者交付，并使用冻结输入、source fingerprint、结构化返工和逐用例 traceability；每个任务先用 `agent-claim` 绑定 coordinator、executor、wave 和唯一 `execution_id`，不使用会让 CRUD 静默重放的自动租约，Reviewer 身份必须独立于全部成功生成者。`codebuddy-subagent` 是当前唯一可认证的正式执行身份；`codebuddy-main-session`、`external-session` 与 Agent Team 均只允许诊断降级，任何成功生成链使用这些身份都会阻断 Reviewer 和正式交付；没有可用 sub-agent 时不得继续正式流程。输入、动态选择、分页和弹窗的必测分支统一记录到 `interaction-branch-observations.csv`。升级包同时安装 `.codebuddy/agents/` 的 5 个认知角色、`.codebuddy/commands/test-design-run.md`、独立适配文档和 `docs/RULE_OWNERSHIP.md`；主会话负责调度，不注册 Delivery Agent，不支持后台并行时按同一任务协议串行执行。核心架构见 `docs/AGENT_ORCHESTRATION.md`，CodeBuddy 客户端适配见 `docs/CODEBUDDY_AGENT_ADAPTER.md`。适配信息由项目 Agent、项目命令和该独立文档发现，不要求把正文重复同步到受字符预算约束的 `CODEBUDDY.md` 或 Skill。
 
 从旧框架恢复的批次使用 `init-batch-run --resume --product-name "<原产品名>"` 补齐编排目录，不会把旧文件存在当作阶段已通过。已有事实缺少最终架构所需证据、交互 ID、generation session、traceability 或 Review 时，状态机会停在对应阶段；完成任务并提交严格 AgentResult 后才能继续。3.0.0 不改变 `asset_schema_version=2.0.0`，不需要迁移产品事实 catalog。
 
@@ -85,13 +94,17 @@ powershell -ExecutionPolicy Bypass -File scripts\upgrade-framework.ps1 -PackageP
 
 1. 检查升级包和升级清单。
 2. 备份受保护目录。
-3. 只复制允许升级的框架文件。
-4. 跳过 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。
-5. 对比 `asset_schema_version`。
-6. 执行稳定性校验。
-7. 任一复制、迁移或校验步骤失败时，自动恢复全部被覆盖的框架文件、删除本次新增文件，并恢复受保护资产快照。
+3. 对已有 `.codebuddy/settings.json` 做结构化合并：保留原有 `permissions`、其他顶层配置与其他 hooks，移除重复/旧版 guard command，并只追加升级包中的一个当前 guard。
+4. 按升级包根目录 `FRAMEWORK_REMOVALS.json` 的严格白名单，仅精确删除已废弃的 `.codebuddy/agents/test-delivery.md` 普通文件。
+5. 只复制允许升级的框架文件。
+6. 跳过 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。
+7. 对比 `asset_schema_version`。
+8. 执行稳定性校验。
+9. 任一合并、删除、复制、迁移或校验步骤失败时，自动恢复全部被覆盖或删除的框架文件、删除本次新增文件，并恢复受保护资产快照。
 
 `AGENTS.md`、`CODEBUDDY.md` 和测试设计 Skill 的 `LOCAL-OVERRIDES` 区块会在升级时保留；旧入口若没有该区块，升级会在覆盖前中止，要求先人工迁移本地约束，避免静默丢失。
+
+已有 `.codebuddy/settings.json` 必须是合法 JSON object，且 `hooks`（若存在）必须是 object、各事件必须是数组；格式非法时升级失败并保持原文件。`FRAMEWORK_REMOVALS.json` 不能请求任意删除，只接受安装器内置支持的精确 legacy 路径；目录、符号链接、额外路径和安装/删除冲突均拒绝。
 
 从 `asset_schema_version=1.0.0` 升级到 `2.0.0` 时必须传入 `-RunMigrations`。迁移会读取现有 `product-map.xlsx` 的非模板真实行，保存到 `docs/test-assets/catalog/modules/_legacy.json`，再建立 catalog 索引；不会用空 JSON 覆盖既有资产。
 
@@ -151,4 +164,4 @@ scripts/migrations/1.0.0_to_1.1.0.ps1
 .upgrade-backups/
 ```
 
-如果升级失败，优先恢复备份目录，再检查 Git 状态。已经提交过的内网项目也可以通过备份分支或 Git 历史恢复。
+如果升级失败，优先恢复备份目录，再检查 Git 状态。事务快照同时覆盖结构化合并前的 `.codebuddy/settings.json` 和删除前的 legacy `test-delivery.md`；因此后续校验失败也会恢复原 settings 与旧文件。已经提交过的内网项目还可以通过备份分支或 Git 历史恢复。

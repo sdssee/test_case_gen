@@ -467,7 +467,7 @@ def assert_no_sensitive_batch_files(run_dir: Path) -> None:
         if (
             len(parts) >= 3
             and parts[0] == "artifacts"
-            and parts[1] in {"evidence", "screenshots"}
+            and parts[1] in {"evidence", "screenshots", "page-probe-evidence"}
         ):
             binary_audit_candidates.add(path)
         elif (

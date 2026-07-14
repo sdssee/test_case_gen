@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-claim.schema.json",
+  "title": "Test Design Agent Execution Claim",
+  "type": "object",
+  "required": [
+    "schema_version", "execution_id", "task_id", "coordinator_id", "executor_id",
+    "executor_kind", "wave_id", "claimed_at", "source_fingerprint",
+    "input_snapshot_fingerprint", "task_packet_fingerprint", "context_fingerprint",
+    "page_probe_receipt_id", "page_probe_receipt_fingerprint",
+    "approved_page_mcp_tools"
+  ],
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "properties": {
+        "page_probe_receipt_id": {"type": "null"},
+        "page_probe_receipt_fingerprint": {"type": "null"},
+        "approved_page_mcp_tools": {"maxItems": 0}
+      }
+    },
+    {
+      "properties": {
+        "page_probe_receipt_id": {"type": "string", "pattern": "^PPR-[0-9a-f]{24}$"},
+        "page_probe_receipt_fingerprint": {"$ref": "#/$defs/fingerprint"},
+        "approved_page_mcp_tools": {"minItems": 1}
+      }
+    }
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "execution_id": {"$ref": "#/$defs/identifier"},
+    "task_id": {"$ref": "#/$defs/identifier"},
+    "coordinator_id": {"$ref": "#/$defs/executionLabel"},
+    "executor_id": {"$ref": "#/$defs/executionLabel"},
+    "executor_kind": {
+      "enum": [
+        "codebuddy-subagent", "codebuddy-main-session",
+        "codebuddy-agent-team", "external-session"
+      ]
+    },
+    "wave_id": {"$ref": "#/$defs/executionLabel"},
+    "claimed_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    },
+    "source_fingerprint": {"$ref": "#/$defs/fingerprint"},
+    "input_snapshot_fingerprint": {"$ref": "#/$defs/fingerprint"},
+    "task_packet_fingerprint": {"$ref": "#/$defs/fingerprint"},
+    "context_fingerprint": {"$ref": "#/$defs/fingerprint"},
+    "page_probe_receipt_id": {
+      "oneOf": [{"type": "null"}, {"type": "string", "pattern": "^PPR-[0-9a-f]{24}$"}]
+    },
+    "page_probe_receipt_fingerprint": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/fingerprint"}]
+    },
+    "approved_page_mcp_tools": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^mcp__[A-Za-z0-9_.:-]+__[A-Za-z0-9_.:-]+$"}
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "executionLabel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?:\\S(?:[^\\r\\n\\u0000]*\\S)?)$"
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

@@ -8,6 +8,7 @@
 - 摘要引用文件只说明入口、边界、读取路由和必须读取的权威源，不复制完整规则。
 - 校验脚本优先检查权威源是否完整，再检查摘要引用是否指向权威源。
 - `.codebuddy/rules/test-design-rule.md` 是唯一 Rule 权威源；`.codebuddy/.rules/test-design-rule.mdc` 是自动生成镜像。入口的 Gate 区块由稳定 Gate ID 自动生成，本地扩展只写入 `LOCAL-OVERRIDES` 区块。
+- CodeBuddy 适配通过 `.codebuddy/agents/`、`.codebuddy/commands/` 和独立适配文档按需发现；受轻量入口字符预算约束，不要求把适配摘要重复同步进 `CODEBUDDY.md` 或 Skill。
 
 ## 规则归属矩阵
 
@@ -22,6 +23,7 @@
 | 产品版图、资产归档、跨模块依赖 | `docs/test-design/archive-and-index-guidelines.md`、`docs/test-design/rules/product-map-sync.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | `README.md` |
 | 批次运行状态与质量门禁 | `docs/test-design/rules/batch-run.md`、`docs/test-assets/batch-runs/README.md`、`docs/test-assets/batch-runs/templates/` | Rule、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md`、`docs/test-design/archive-and-index-guidelines.md` | `README.md`、`docs/test-design/README.md` |
 | 最终多 Agent 编排、契约、状态、返工与 Review | `docs/AGENT_ORCHESTRATION.md`、`scripts/test_design/orchestration/`、`docs/test-design/schemas/orchestration/` | Rule Gate、Skill、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md`、专题规则 | 在架构文档中复制页面、DFX、用例或 Excel 规则正文 |
+| CodeBuddy Agent 注册、最小权限、串并行适配与降级 | `.codebuddy/agents/`、`.codebuddy/commands/test-design-run.md`、`.codebuddy/settings.json`、`.codebuddy/hooks/guard-agent-tool.py`、`docs/CODEBUDDY_AGENT_ADAPTER.md` | `README.md`、`README_IMPORT.md`、`docs/ARCHITECTURE.md`；CodeBuddy Code 在新会话通过 `/agents`、`/hooks` 和项目命令直接发现 | `CODEBUDDY.md`、Skill 中重复适配正文；在 Agent 定义中重建状态机、门禁或 Delivery 实现 |
 | 交付件质量校验 | `scripts/validate-test-design-deliverable.py`、`scripts/validate-test-design-deliverable.ps1`、`scripts/validate-generated-python-scripts.py`、`scripts/validate-generated-python-scripts.ps1`、`scripts/test_design_excel_tools.py`、`docs/test-design/excel-template-spec.md` | `README.md`、`README_IMPORT.md`、Skill、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | Rule 中的脚本实现细节 |
 | 客户交付与内部资产边界 | `docs/test-design/archive-and-index-guidelines.md`、`docs/test-assets/README.md` | `README.md`、`README_IMPORT.md`、`docs/ARCHITECTURE.md` | Skill 中的长篇资产目录说明 |
 | 外网到内网升级 | `docs/UPGRADE.md`、`UPGRADE_MANIFEST.md`、`scripts/new-framework-upgrade-package.ps1`、`scripts/upgrade-framework.ps1` | `README.md`、`README_IMPORT.md`、`docs/ARCHITECTURE.md` | Skill、Rule 中的长篇升级流程 |
@@ -54,3 +56,4 @@
 | 修改升级机制 | `docs/UPGRADE.md`、`UPGRADE_MANIFEST.md`、升级脚本、校验脚本 | README/README_IMPORT |
 | 修改架构分层 | `docs/ARCHITECTURE.md`、`docs/RULE_OWNERSHIP.md`、校验脚本 | README |
 | 修改多 Agent 编排或 Review | `docs/AGENT_ORCHESTRATION.md`、orchestration 实现与 schema、专题规则、校验脚本、测试 | Rule/Skill/AGENTS/CODEBUDDY 的 Gate 摘要 |
+| 修改 CodeBuddy Agent 适配 | `.codebuddy/agents/`、`.codebuddy/commands/test-design-run.md`、`.codebuddy/settings.json`、`.codebuddy/hooks/guard-agent-tool.py`、`docs/CODEBUDDY_AGENT_ADAPTER.md`、校验脚本、测试 | README/README_IMPORT/ARCHITECTURE 摘要；不因适配变更扩张 CODEBUDDY/Skill 字符预算 |

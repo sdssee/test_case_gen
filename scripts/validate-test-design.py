@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import shlex
 import sys
 import zipfile
 from functools import lru_cache
@@ -96,6 +97,63 @@ CASE_BODY_MARKERS = [
 ]
 
 ENTRY_FILE_CHAR_LIMIT = 10000
+
+CODEBUDDY_AGENT_SPECS = {
+    "test-discovery.md": ("test-discovery", "discovery"),
+    "test-plan-dfx.md": ("test-plan-dfx", "plan_dfx"),
+    "test-risk-arbiter.md": ("test-risk-arbiter", "risk_arbiter"),
+    "test-case-worker.md": ("test-case-worker", "case_worker"),
+    "test-reviewer.md": ("test-reviewer", "reviewer"),
+}
+
+CODEBUDDY_AGENT_TOOLS = {
+    "test-discovery.md": {
+        "Read", "Write", "ToolSearch", "DeferExecuteTool", "WaitForMcpServers",
+    },
+    "test-plan-dfx.md": {"Read", "Write"},
+    "test-risk-arbiter.md": {"Read", "Write"},
+    "test-case-worker.md": {"Read", "Write"},
+    "test-reviewer.md": {"Read", "Write"},
+}
+
+CODEBUDDY_GUARD_MATCHER = (
+    "^(?:Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|Bash|PowerShell|"
+    "ToolSearch|DeferExecuteTool|WaitForMcpServers|mcp__.*)$"
+)
+CODEBUDDY_PROBE_RECORDER_MATCHER = "^(?:DeferExecuteTool|mcp__.*)$"
+
+
+def command_invokes_framework_hook(command: object, script_name: str) -> bool:
+    """Return true only when Python executes the exact framework hook path."""
+
+    lexer = shlex.shlex(str(command), posix=True, punctuation_chars=";&|()")
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    command_position = True
+    for index, token in enumerate(tokens):
+        if token and all(character in ";&|()" for character in token):
+            command_position = True
+            continue
+        if not command_position:
+            continue
+        lowered = token.casefold()
+        if lowered in {"if", "then", "elif", "else", "do", "command", "env", "nohup"}:
+            continue
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", token):
+            continue
+        interpreter = token.replace("\\", "/").rsplit("/", 1)[-1]
+        if re.fullmatch(r"(?:python(?:3(?:\.\d+)*)?|py)(?:\.exe)?", interpreter, re.IGNORECASE):
+            if index + 1 < len(tokens):
+                candidate = tokens[index + 1].replace("\\", "/").casefold()
+                expected = f".codebuddy/hooks/{script_name}".casefold()
+                if candidate == expected or candidate.endswith(f"/{expected}"):
+                    return True
+        command_position = False
+    return False
 
 
 def fail(message: str) -> None:
@@ -264,6 +322,248 @@ def assert_not_contains(path: Path, markers: list[str]) -> None:
             fail(f"{path.relative_to(path.parents[1])} contains stale marker: {marker}")
 
 
+def parse_markdown_frontmatter(path: Path) -> tuple[dict[str, str], str]:
+    """Parse the deliberately flat YAML subset used by CodeBuddy agent files."""
+
+    text = read_text(path)
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        fail(f"{path} must start with YAML frontmatter")
+    try:
+        closing = next(index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---")
+    except StopIteration:
+        fail(f"{path} has no closing YAML frontmatter delimiter")
+    metadata: dict[str, str] = {}
+    for line in lines[1:closing]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if ":" not in line:
+            fail(f"{path} has invalid flat frontmatter line: {line}")
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if key in metadata:
+            fail(f"{path} has duplicate frontmatter key: {key}")
+        metadata[key] = value.strip().strip("'\"")
+    return metadata, "\n".join(lines[closing + 1 :])
+
+
+def validate_codebuddy_agent_adapter(repo_root: Path) -> None:
+    """Keep the native CodeBuddy adapter aligned with the deterministic core."""
+
+    agents_dir = repo_root / ".codebuddy" / "agents"
+    if not agents_dir.is_dir():
+        fail("Missing CodeBuddy project agent directory: .codebuddy/agents")
+    if (agents_dir / "test-delivery.md").exists():
+        fail("Delivery must remain deterministic; test-delivery.md is forbidden")
+
+    for filename, (expected_name, expected_role) in CODEBUDDY_AGENT_SPECS.items():
+        path = agents_dir / filename
+        if not path.is_file():
+            fail(f"Missing CodeBuddy project agent: .codebuddy/agents/{filename}")
+        metadata, body = parse_markdown_frontmatter(path)
+        if metadata.get("name") != expected_name:
+            fail(f"{filename} must declare name: {expected_name}")
+        if not metadata.get("description"):
+            fail(f"{filename} must declare a non-empty description")
+        if metadata.get("model") != "inherit":
+            fail(f"{filename} must declare model: inherit")
+        if "skills" in metadata:
+            fail(f"{filename} must not auto-load skills; task-context is the frozen authority")
+        tools = {item.strip() for item in metadata.get("tools", "").split(",") if item.strip()}
+        if tools != CODEBUDDY_AGENT_TOOLS[filename]:
+            fail(f"{filename} must declare the exact least-privilege tools: {sorted(CODEBUDDY_AGENT_TOOLS[filename])}")
+        if {"Bash", "PowerShell", "Edit", "Grep", "Glob"} & tools:
+            fail(f"{filename} grants a forbidden shell/edit/search tool")
+        for marker in [
+            "agent-task.json",
+            "task-context.json",
+            "agent_role",
+            expected_role,
+            "source_fingerprint",
+            "allowed_output_files",
+            "allowed_output_prefixes",
+            "AgentResult",
+            "agent-result.schema.json",
+            "rework-request.schema.json",
+            "白名单之外",
+            "不得启动或派生其他 Agent",
+        ]:
+            if marker not in body:
+                fail(f"{filename} is missing native adapter contract marker: {marker}")
+
+    command = repo_root / ".codebuddy" / "commands" / "test-design-run.md"
+    if not command.is_file():
+        fail("Missing CodeBuddy coordinator command: .codebuddy/commands/test-design-run.md")
+    command_metadata, command_body = parse_markdown_frontmatter(command)
+    if not command_metadata.get("description"):
+        fail("test-design-run.md must declare a non-empty description")
+    for marker in [
+        "$1",
+        "agent-run",
+        "agent-claim",
+        "agent-submit",
+        "agent-release",
+        "execution_id",
+        "confirm-no-side-effects",
+        "runnable_tasks",
+        "task_id",
+        "冻结",
+        "并行",
+        "串行",
+        "Reviewer",
+        "独立",
+        "全部释放成功后",
+        "complete-deliverables",
+        "ToolSearch",
+        "DeferExecuteTool",
+        "PAGE_PROBE_RECORD",
+        "page-probe-commit",
+        "--page-probe-receipt-id",
+        "--page-probe-receipt-fingerprint",
+        "不得把页面 MCP allowlist",
+        "不得 claim Discovery",
+        "AgentResult",
+        "没有也不得新增 `execution_id`",
+    ]:
+        if marker not in command_body:
+            fail(f"test-design-run.md is missing coordinator protocol marker: {marker}")
+
+    legacy_prompt_authority = "APPROVED" + "_PAGE_MCP"
+    adapter_doc = repo_root / "docs" / "CODEBUDDY_AGENT_ADAPTER.md"
+    formal_adapter_files = [command, *sorted(agents_dir.glob("*.md"))]
+    formal_adapter_files.extend(
+        path
+        for path in (
+            repo_root / "README.md",
+            repo_root / "CODEBUDDY.md",
+            adapter_doc,
+        )
+        if path.is_file()
+    )
+    for formal_path in formal_adapter_files:
+        if legacy_prompt_authority in read_text(formal_path):
+            fail(
+                f"{formal_path} contains legacy prompt-only page authority; "
+                "Discovery must use a durable page-probe receipt"
+            )
+
+    settings_path = repo_root / ".codebuddy" / "settings.json"
+    guard_path = repo_root / ".codebuddy" / "hooks" / "guard-agent-tool.py"
+    recorder_path = repo_root / ".codebuddy" / "hooks" / "record-page-probe.py"
+    if not settings_path.is_file() or not guard_path.is_file() or not recorder_path.is_file():
+        fail("Missing mandatory CodeBuddy guard or page probe recorder configuration")
+    try:
+        settings = json.loads(read_text(settings_path))
+        hooks = settings["hooks"]
+        entries = hooks["PreToolUse"]
+        post_entries = hooks["PostToolUse"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        fail(f"Invalid .codebuddy/settings.json hook configuration: {exc}")
+    if not isinstance(entries, list):
+        fail(".codebuddy/settings.json PreToolUse must be a list")
+    if not isinstance(post_entries, list):
+        fail(".codebuddy/settings.json PostToolUse must be a list")
+    guard_entries: list[tuple[dict[str, object], list[dict[str, object]]]] = []
+    for candidate in entries:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_hooks = candidate.get("hooks")
+        if not isinstance(candidate_hooks, list):
+            continue
+        guard_hooks = [
+            hook for hook in candidate_hooks
+            if isinstance(hook, dict)
+            and hook.get("type") == "command"
+            and command_invokes_framework_hook(hook.get("command", ""), "guard-agent-tool.py")
+        ]
+        if guard_hooks:
+            guard_entries.append((candidate, guard_hooks))
+    if len(guard_entries) != 1:
+        fail(".codebuddy/settings.json must contain exactly one test-design guard entry")
+    entry, guard_hooks = guard_entries[0]
+    if entry.get("matcher") != CODEBUDDY_GUARD_MATCHER:
+        fail("CodeBuddy PreToolUse guard must use the exact fail-closed matcher")
+    if len(guard_hooks) != 1:
+        fail("CodeBuddy PreToolUse guard entry must contain exactly one guard command")
+    guard_command = str(guard_hooks[0].get("command", ""))
+    if (
+        "python3" not in guard_command
+        or "elif python " not in guard_command
+        or guard_command.count("exit 2") < 2
+        or "$CODEBUDDY_PROJECT_DIR" not in guard_command
+        or "guard-agent-tool.py" not in guard_command
+    ):
+        fail("CodeBuddy PreToolUse guard command is incomplete")
+    assert_contains(
+        guard_path,
+        [
+            "TEST_DESIGN_AGENT_GUARD",
+            "allowed_output_files",
+            "allowed_output_prefixes",
+            "permissionDecision",
+            "subagents",
+            "casefold",
+            "input_snapshot_fingerprint",
+            "events.jsonl",
+            "TASK_CLAIMED",
+            "AUDIT_CLAIM_RECOVERED",
+            "_verify_append_only_prefix",
+            "_cached_fingerprint",
+            "claim_digest",
+            "_deferred_input_selects",
+        ],
+    )
+    recorder_entries: list[tuple[dict[str, object], list[dict[str, object]]]] = []
+    for candidate in post_entries:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_hooks = candidate.get("hooks")
+        if not isinstance(candidate_hooks, list):
+            continue
+        recorder_hooks = [
+            hook for hook in candidate_hooks
+            if isinstance(hook, dict)
+            and hook.get("type") == "command"
+            and command_invokes_framework_hook(hook.get("command", ""), "record-page-probe.py")
+        ]
+        if recorder_hooks:
+            recorder_entries.append((candidate, recorder_hooks))
+    if len(recorder_entries) != 1:
+        fail(".codebuddy/settings.json must contain exactly one page probe recorder entry")
+    recorder_entry, recorder_hooks = recorder_entries[0]
+    if recorder_entry.get("matcher") != CODEBUDDY_PROBE_RECORDER_MATCHER:
+        fail("CodeBuddy PostToolUse recorder must use the exact MCP matcher")
+    if len(recorder_hooks) != 1:
+        fail("CodeBuddy PostToolUse recorder entry must contain exactly one recorder command")
+    recorder_command = str(recorder_hooks[0].get("command", ""))
+    if (
+        "python3" not in recorder_command
+        or "elif python " not in recorder_command
+        or recorder_command.count("exit 2") < 2
+        or "$CODEBUDDY_PROJECT_DIR" not in recorder_command
+        or "record-page-probe.py" not in recorder_command
+    ):
+        fail("CodeBuddy PostToolUse recorder command is incomplete")
+    assert_contains(
+        recorder_path,
+        [
+            "PAGE_PROBE_RECORDER_VERSION",
+            "session_id",
+            "transcript_path",
+            "cwd",
+            "tool_name",
+            "tool_input",
+            "tool_response",
+            ".test-design-locks",
+            "call_content_sha256",
+            "record_id",
+            "additionalContext",
+            "_exclusive_lock",
+        ],
+    )
+    assert_not_contains(recorder_path, ["tool_use_id"])
+
+
 def parse_key_value_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     for raw_line in read_text(path).splitlines():
@@ -384,6 +684,10 @@ def main() -> int:
     requirements_file = repo_root / "requirements.txt"
     project_file = repo_root / "pyproject.toml"
     architecture_tests = repo_root / "tests" / "test_architecture_safety.py"
+    codebuddy_adapter_tests = repo_root / "tests" / "test_codebuddy_agent_adapter.py"
+    codebuddy_guard_tests = repo_root / "tests" / "test_codebuddy_agent_guard.py"
+    codebuddy_probe_recorder_tests = repo_root / "tests" / "test_codebuddy_page_probe_recorder.py"
+    page_probe_receipt_tests = repo_root / "tests" / "test_page_probe_receipts.py"
     validation_runner = repo_root / "scripts" / "run-validation.py"
     pipeline_module = domain_dir / "pipeline.py"
     validation_cache_module = domain_dir / "validation_cache.py"
@@ -393,6 +697,7 @@ def main() -> int:
     function_case_contract = domain_dir / "contracts" / "function_cases.py"
     sheet_data_contract = domain_dir / "contracts" / "sheet_data.py"
     agent_architecture_doc = repo_root / "docs" / "AGENT_ORCHESTRATION.md"
+    codebuddy_adapter_doc = repo_root / "docs" / "CODEBUDDY_AGENT_ADAPTER.md"
     orchestration_dir = domain_dir / "orchestration"
     orchestration_contracts = orchestration_dir / "contracts.py"
     orchestration_state_machine = orchestration_dir / "state_machine.py"
@@ -401,14 +706,21 @@ def main() -> int:
     orchestration_case_merge = orchestration_dir / "case_merge.py"
     orchestration_engine = orchestration_dir / "engine.py"
     orchestration_review = orchestration_dir / "review.py"
+    orchestration_page_probe = orchestration_dir / "page_probe.py"
+    orchestration_execution_binding = orchestration_dir / "execution_binding.py"
     orchestration_schema_dir = repo_root / "docs" / "test-design" / "schemas" / "orchestration"
     orchestration_schemas = [
         orchestration_schema_dir / name
         for name in [
             "binary-evidence-audit.schema.json",
             "agent-task.schema.json",
+            "agent-claim.schema.json",
+            "page-probe-hook-record.schema.json",
+            "page-probe-receipt.schema.json",
             "agent-result.schema.json",
             "rework-request.schema.json",
+            "dfx-assessment.schema.json",
+            "risk-candidates.schema.json",
             "run-config.schema.json",
             "traceability-record.schema.json",
             "review-report.schema.json",
@@ -468,6 +780,10 @@ def main() -> int:
         requirements_file,
         project_file,
         architecture_tests,
+        codebuddy_adapter_tests,
+        codebuddy_guard_tests,
+        codebuddy_probe_recorder_tests,
+        page_probe_receipt_tests,
         validation_runner,
         pipeline_module,
         validation_cache_module,
@@ -477,6 +793,7 @@ def main() -> int:
         function_case_contract,
         sheet_data_contract,
         agent_architecture_doc,
+        codebuddy_adapter_doc,
         orchestration_contracts,
         orchestration_state_machine,
         orchestration_event_store,
@@ -484,6 +801,8 @@ def main() -> int:
         orchestration_case_merge,
         orchestration_engine,
         orchestration_review,
+        orchestration_page_probe,
+        orchestration_execution_binding,
         *orchestration_schemas,
         *rule_docs,
     ]:
@@ -491,6 +810,7 @@ def main() -> int:
             fail(f"Missing upgrade mechanism file: {path}")
     for path in lightweight_entries:
         assert_max_chars(path, ENTRY_FILE_CHAR_LIMIT)
+    validate_codebuddy_agent_adapter(repo_root)
     validate_entry_contract_v2(repo_root, entry_contract)
     assert_max_chars(repo_root / "README.md", ENTRY_FILE_CHAR_LIMIT)
     assert_contains(requirements_file, ["openpyxl==3.1.5"])
@@ -558,8 +878,107 @@ def main() -> int:
     assert_contains(version_file, ["framework_version=3.0.0", "asset_schema_version=2.0.0"])
     assert_contains(upgrade_manifest, ["framework_version: 3.0.0", "最终多 Agent", "docs/AGENT_ORCHESTRATION.md"])
     assert_contains(upgrade_doc, ["framework_version=3.0.0", "最终多 Agent", "docs/AGENT_ORCHESTRATION.md"])
+    adapter_upgrade_files = [
+        "docs/CODEBUDDY_AGENT_ADAPTER.md",
+        "docs/RULE_OWNERSHIP.md",
+        ".codebuddy/agents/",
+        ".codebuddy/commands/test-design-run.md",
+        ".codebuddy/settings.json",
+        ".codebuddy/hooks/guard-agent-tool.py",
+        ".codebuddy/hooks/record-page-probe.py",
+        "tests/test_codebuddy_agent_guard.py",
+        "tests/test_codebuddy_page_probe_recorder.py",
+        "tests/test_page_probe_receipts.py",
+    ]
+    assert_contains(upgrade_manifest, adapter_upgrade_files)
+    assert_contains(upgrade_doc, adapter_upgrade_files)
     assert_contains(package_script, ["docs/AGENT_ORCHESTRATION.md"])
     assert_contains(upgrade_script, ["docs/AGENT_ORCHESTRATION.md"])
+    assert_contains(package_script, ["docs/CODEBUDDY_AGENT_ADAPTER.md", "docs/RULE_OWNERSHIP.md", ".codebuddy/settings.json", ".codebuddy/hooks/guard-agent-tool.py", ".codebuddy/hooks/record-page-probe.py", "scripts/test_design/orchestration/execution_binding.py", "tests/test_codebuddy_agent_guard.py", "tests/test_codebuddy_page_probe_recorder.py", "tests/test_page_probe_receipts.py"])
+    assert_contains(upgrade_script, ["docs/CODEBUDDY_AGENT_ADAPTER.md", "docs/RULE_OWNERSHIP.md", ".codebuddy/settings.json", ".codebuddy/hooks/guard-agent-tool.py", ".codebuddy/hooks/record-page-probe.py", "scripts/test_design/orchestration/execution_binding.py", "tests/test_codebuddy_agent_guard.py", "tests/test_codebuddy_page_probe_recorder.py", "tests/test_page_probe_receipts.py"])
+    assert_contains(
+        codebuddy_adapter_doc,
+        [
+            ".codebuddy/agents/",
+            "/agents",
+            "/hooks",
+            "/test-design-run",
+            "agent-claim",
+            "execution_id",
+            "external-session",
+            "codebuddy-main-session",
+            "runnable_tasks",
+            "冻结",
+            "串行",
+            "并行",
+            "Reviewer",
+            "物理 `agentId`",
+            "Agent Teams",
+            "PreToolUse",
+            "拒绝接纳越界产物",
+            "全部释放成功后",
+            "未认证且默认阻断",
+            "complete-deliverables",
+            "append-only checkpoint",
+            "不设置 transcript 总大小硬上限",
+            "顶层唯一 `tool_name`",
+        ],
+    )
+    assert_contains(
+        codebuddy_adapter_tests,
+        [
+            "test_required_project_agents_have_complete_runtime_contracts",
+            "test_delivery_remains_deterministic_and_is_not_a_model_agent",
+            "test_coordinator_command_covers_native_parallel_and_safe_fallbacks",
+        ],
+    )
+    assert_contains(
+        codebuddy_guard_tests,
+        [
+            "test_large_transcript_is_incrementally_verified_without_total_size_limit",
+            "test_middle_prefix_rewrite_plus_append_is_poisoned",
+            "test_truncation_cannot_remove_already_verified_transcript_history",
+            "test_deferred_mcp_requires_one_exact_top_level_selector",
+            "test_noncanonical_file_inside_subagents_directory_fails_closed",
+            "test_guard_persists_one_idempotent_physical_execution_binding",
+            "test_concurrent_transcripts_have_exactly_one_binding_winner",
+            "test_deleted_binding_is_not_silently_recreated_after_checkpoint",
+        ],
+    )
+    assert_contains(
+        codebuddy_probe_recorder_tests,
+        [
+            "test_direct_mcp_record_is_strict_hashed_and_does_not_persist_raw_content",
+            "test_records_form_an_ordered_hash_chain_and_capture_changed_response",
+            "test_only_stable_hook_fields_affect_call_content_identity",
+            "test_post_tool_output_exposes_only_hashed_lookup_context",
+            "test_deferred_tool_requires_one_exact_top_level_canonical_selector",
+        ],
+    )
+    assert_contains(
+        page_probe_receipt_tests,
+        [
+            "test_one_receipt_can_bind_every_successfully_probed_exact_tool_on_one_server",
+            "test_project_consumption_registry_rejects_cross_run_record_replay",
+            "test_release_manifest_history_recovers_missing_tombstone_in_one_pass",
+        ],
+    )
+    assert_contains(
+        repo_root / "docs" / "ARCHITECTURE.md",
+        ["CodeBuddy Agent 适配", ".codebuddy/agents/", "冻结波次", "不调用模型"],
+    )
+    assert_contains(
+        repo_root / "docs" / "RULE_OWNERSHIP.md",
+        ["CodeBuddy Agent 注册、最小权限、串并行适配与降级", ".codebuddy/commands/test-design-run.md", ".codebuddy/settings.json", ".codebuddy/hooks/guard-agent-tool.py", "不要求把适配摘要重复同步进 `CODEBUDDY.md` 或 Skill"],
+    )
+    assert_not_contains(
+        repo_root / "docs" / "RULE_OWNERSHIP.md",
+        ["README/README_IMPORT/CODEBUDDY/Skill 摘要"],
+    )
+    assert_contains(
+        repo_root / "README_IMPORT.md",
+        ["test-discovery.md", "commands/test-design-run.md", "/agents", "/hooks", "/test-design-run", "IDE 的 Agent 页面只是任务/会话列表"],
+    )
     assert_contains(
         agent_architecture_doc,
         [
@@ -580,12 +999,23 @@ def main() -> int:
             "complete-deliverables",
         ],
     )
-    assert_contains(orchestration_contracts, ["class AgentTask", "class AgentResult", "class ReworkRequest", "class TraceabilityRecord", "branch_observation_ids", "class RunConfig", "source_fingerprint"])
+    assert_contains(orchestration_contracts, ["class AgentTask", "class AgentClaim", "class ExecutorKind", "class AgentResult", "class ReworkRequest", "class TraceabilityRecord", "branch_observation_ids", "class RunConfig", "source_fingerprint"])
     assert_contains(orchestration_state_machine, ["discovery -> plan -> risk -> cases -> review -> delivery", "EXTERNAL_BLOCKED", "request_rework", "COMPLETE"])
     assert_contains(orchestration_event_store, ["monotonically increasing sequence", "previous_hash", "event_hash", "_exclusive_lock"])
     assert_contains(orchestration_workspace, ["Isolated agent workspaces", "transactional artifact promotion", "rollback_promotion", "finalize_promotion"])
     assert_contains(orchestration_case_merge, ["FUNCTION_CASE_MANIFEST", "case-traceability.json", "TraceabilityRecord", "interaction-branch-observations.csv", "branch_observation_ids", "rollback_files_on_error"])
-    assert_contains(orchestration_engine, ["multi-agent-final", 'agent_mode="required"', "parallel_discovery=False", "review_required=True", "delivery_single_writer=True", "interaction-branch-observations.csv", "branch_facts", "validate_review_artifacts"])
+    assert_contains(orchestration_engine, ["multi-agent-final", 'agent_mode="required"', "parallel_discovery=False", "review_required=True", "delivery_single_writer=True", "interaction-branch-observations.csv", "branch_facts", "claim_agent_task", "release_agent_claim", "execution_id", "validate_review_artifacts"])
+    assert_contains(
+        orchestration_execution_binding,
+        [
+            "EXECUTION_BINDING_DIR",
+            "validate_execution_binding",
+            "transcript_bound_size",
+            "transcript_prefix_sha256",
+            "transcript_device",
+            "transcript_inode",
+        ],
+    )
     assert_contains(
         orchestration_review,
         [
@@ -615,7 +1045,26 @@ def main() -> int:
         [".sensitive-audit.json", "evidence_sha256", "visible_text", "status=PASSED"],
     )
     assert_contains(agent_architecture_doc, [".sensitive-audit.json", "证据 SHA256", "二进制明文元数据"])
-    assert_contains(excel_tools, ["agent-run", "agent-status", "agent-submit", "agent-resume", "validate-review-artifacts"])
+    assert_contains(excel_tools, ["agent-run", "agent-status", "page-probe-commit", "--record-id", "--evidence", "--page-probe-receipt-id", "--page-probe-receipt-fingerprint", "agent-claim", "agent-submit", "agent-release", "--execution-id", "agent-resume", "validate-review-artifacts"])
+    assert_contains(
+        orchestration_page_probe,
+        [
+            "PAGE_PROBE_RECEIPT_DIR",
+            "reserve_project_record_consumption",
+            "validate_project_record_consumption",
+            "page-probe-consumption",
+            "selected page probe record predates this Discovery task or is future-dated",
+        ],
+    )
+    assert_contains(
+        orchestration_engine,
+        [
+            "commit_page_probe_receipt",
+            "PAGE_PROBE_RECORDS_RESERVED",
+            "PAGE_PROBE_TOMBSTONED",
+            "_recover_page_probe_receipts",
+        ],
+    )
     for schema_path in orchestration_schemas:
         schema = json.loads(read_text(schema_path))
         if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":

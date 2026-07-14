@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(?:Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|Bash|PowerShell|ToolSearch|DeferExecuteTool|WaitForMcpServers|mcp__.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if python3 -c \"import sys\" >/dev/null 2>&1; then python3 \"$CODEBUDDY_PROJECT_DIR/.codebuddy/hooks/guard-agent-tool.py\" || exit 2; elif python -c \"import sys\" >/dev/null 2>&1; then python \"$CODEBUDDY_PROJECT_DIR/.codebuddy/hooks/guard-agent-tool.py\" || exit 2; else echo 'CodeBuddy test-design guard: Python interpreter unavailable' >&2; exit 2; fi",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(?:DeferExecuteTool|mcp__.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if python3 -c \"import sys\" >/dev/null 2>&1; then python3 \"$CODEBUDDY_PROJECT_DIR/.codebuddy/hooks/record-page-probe.py\" || exit 2; elif python -c \"import sys\" >/dev/null 2>&1; then python \"$CODEBUDDY_PROJECT_DIR/.codebuddy/hooks/record-page-probe.py\" || exit 2; else echo 'CodeBuddy page probe recorder: Python interpreter unavailable' >&2; exit 2; fi",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

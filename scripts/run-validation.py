@@ -10,7 +10,10 @@ from pathlib import Path
 
 
 SLOW_TEST_MARKERS = {
+    "test_upgrade_merges_codebuddy_settings_and_removes_legacy_delivery_agent",
     "test_upgrade_failure_restores_framework_and_protected_assets",
+    "test_upgrade_rejects_allowlist_suffix_collisions_and_missing_execution_binding",
+    "test_upgrade_rejects_invalid_existing_codebuddy_settings_without_data_loss",
     "test_upgrade_migrates_asset_schema_1_to_2_without_losing_excel_facts",
 }
 

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from copy import copy
 
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, range_boundaries
+from openpyxl.worksheet.cell_range import MultiCellRange
 
 
 def header_map(worksheet, header_row: int = 1) -> dict[str, int]:
@@ -39,11 +40,22 @@ def write_mapped_row(worksheet, headers: dict[str, int], row_index: int, values:
             worksheet.cell(row=row_index, column=headers[field], value=value)
 
 
-def remove_workbook_tables_and_refresh_filters(workbook) -> None:
+def resize_workbook_structures(workbook) -> None:
+    """Resize template-owned tables, filters and validations without deleting them."""
     for worksheet in workbook.worksheets:
-        for table_name in list(worksheet.tables.keys()):
-            del worksheet.tables[table_name]
-        worksheet.auto_filter.ref = (
-            f"A1:{get_column_letter(worksheet.max_column)}{max(worksheet.max_row, 1)}"
-            if worksheet.max_column > 1 else None
-        )
+        last_row = max(worksheet.max_row, 2)
+        for table in worksheet.tables.values():
+            min_col, min_row, max_col, _ = range_boundaries(table.ref)
+            table.ref = f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{last_row}"
+        if worksheet.auto_filter.ref:
+            min_col, min_row, max_col, _ = range_boundaries(worksheet.auto_filter.ref)
+            worksheet.auto_filter.ref = f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{last_row}"
+        for validation in worksheet.data_validations.dataValidation:
+            ranges = []
+            for cell_range in validation.ranges.ranges:
+                min_col, min_row, max_col, _ = range_boundaries(str(cell_range))
+                if min_row >= 2:
+                    ranges.append(f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{last_row}")
+                else:
+                    ranges.append(str(cell_range))
+            validation.sqref = MultiCellRange(ranges)

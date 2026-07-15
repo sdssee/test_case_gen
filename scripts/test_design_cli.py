@@ -11,6 +11,7 @@ from test_design.formal_assembler import complete_deliverables
 from test_design.session_runtime import (
     append_events,
     artifact_paths,
+    build_plan_skeleton,
     compile_facts,
     ensure_run,
     pipeline_status,
@@ -42,10 +43,12 @@ def main() -> int:
     record.add_argument("--module-path", default="", help="Required only on the first record")
     record.add_argument("--product-name", default="")
     record.add_argument("--source", default="")
-    record.add_argument("--menu-path", default="")
 
     compile_command = sub.add_parser("compile", help="Rebuild the compact facts view once")
     compile_command.add_argument("--run-dir", required=True, type=Path)
+
+    skeleton = sub.add_parser("plan-skeleton", help="Build the factual plan skeleton without another artifact")
+    skeleton.add_argument("--run-dir", required=True, type=Path)
 
     write_plan = sub.add_parser("write-plan", help="Write a plan with generation-time constraints")
     write_plan.add_argument("--run-dir", required=True, type=Path)
@@ -76,7 +79,6 @@ def main() -> int:
                 args.module_path,
                 args.product_name,
                 args.source,
-                menu_path=args.menu_path or args.module_path,
             )
         payload = _payload(args.file)
         events = payload if isinstance(payload, list) else [payload]
@@ -87,6 +89,8 @@ def main() -> int:
         _print({"recorded": len(events), "fact_count": facts["fact_count"]})
     elif args.command == "compile":
         _print(compile_facts(args.run_dir))
+    elif args.command == "plan-skeleton":
+        _print(build_plan_skeleton(args.run_dir))
     elif args.command == "write-plan":
         payload = _payload(args.file)
         if not isinstance(payload, dict):

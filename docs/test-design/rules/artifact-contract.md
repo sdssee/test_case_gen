@@ -18,14 +18,16 @@ run-dir/
 
 ## events.jsonl 与 facts.json
 
-事件类型只有 `scope`、`page`、`function`、`element`、`transaction`、`test_object`、`open_item`。每行包含 `kind`、`fact_id`、`data`；同一 `fact_id` 的最后有效事件形成当前事实。
+事件类型只有 `scope`、`page`、`function`、`element`、`transaction`、`test_object`、`open_item`。新事实只需提交 `kind` 和 `data`，运行时自动生成 `fact_id`；同批事件可声明 `local_ref`，并在后续字段中用 `@local_ref` 建立关系。更新既有事实时使用运行时已返回的 `fact_id`。同一 `fact_id` 的最后有效事件形成当前事实。
+
+页面事实必须记录实际观察到的 `menu_path` 数组和页面名称。用例导航由该页面事实生成，不从测试范围文字推断。一个完整业务事务通过校验后才追加为一行；进程中断时只自动丢弃无法解析的最后一个未完整行，中间行损坏仍立即报错。
 
 一个连续分页事务示例：
 
 ```json
 {
   "kind": "transaction",
-  "fact_id": "TX-PAGE",
+  "local_ref": "pagination_transaction",
   "data": {
     "function_ref": "FN-PAGE",
     "element_refs": ["EL-PAGE-SIZE", "EL-PAGER"],
@@ -51,8 +53,10 @@ run-dir/
   "functions": [{
     "function_ref": "FN-PAGE",
     "name": "分页",
+    "dfx_decisions": [{"element_ref": "EL-PAGE-SIZE", "code": "finite_options", "disposition": "covered_by_baseline", "case_ids": ["TC-PAGE-001"], "reason": "有限选项在基线用例中逐项验证"}],
     "cases": [{
       "case_id": "TC-PAGE-001",
+      "page_ref": "PAGE-LIST",
       "title": "每页条数切换",
       "strategy": "baseline",
       "dfx_dimension": "DFT功能",
@@ -82,12 +86,13 @@ run-dir/
     "test_data": "每页条数：10条、20条",
     "steps": [
       {"action": "进入告警管理-告警列表", "expected": "显示告警查询区、列表和分页区域"},
-      {"action": "在每页条数中选择10条/页", "expected": "列表最多显示10条，总页数按10条重新计算"}
+      {"action": "在每页条数中选择10条/页", "expected": "列表最多显示10条，总页数按10条重新计算", "source_check": {"transaction_ref": "TX-PAGE", "check_index": 1}},
+      {"action": "在每页条数中选择20条/页", "expected": "列表最多显示20条，总页数按20条重新计算", "source_check": {"transaction_ref": "TX-PAGE", "check_index": 2}}
     ],
     "fact_refs": ["FN-PAGE", "EL-PAGE-SIZE", "TX-PAGE"]
   }]
 }
 ```
 
-步骤必须以 `action+expected` 配对保存；Excel 组装时再拆成编号换行的“操作步骤”和“预期结果”。
+步骤必须以 `action+expected` 配对保存；除导航外，每一步只关联一个 `source_check`，不同检查结果不得压缩成“依次操作”的笼统步骤。`source_check` 只用于内部追溯，Excel 不导出。Excel 组装时再拆成编号换行的“操作步骤”和“预期结果”。
 用例通过内部 `write-cases` 写入；标题、菜单路径、配对步骤、具体数据、功能顺序和事实引用在生成时完成约束。

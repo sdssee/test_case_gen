@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from openpyxl import load_workbook
+from openpyxl.formula.translate import Translator
 from openpyxl.styles import Alignment
 
-from .excel_utils import clear_data_rows, header_map, remove_workbook_tables_and_refresh_filters, write_mapped_row
+from .excel_utils import clear_data_rows, header_map, resize_workbook_structures, write_mapped_row
 from .io_utils import atomic_save_workbook, temporary_sibling
 from .session_runtime import artifact_digest, artifact_paths, load_cases, load_facts, load_plan
 
@@ -56,6 +57,58 @@ def _visual_line_count(value: Any, characters_per_line: int = 36) -> int:
 def _row_height(values: Iterable[Any]) -> float:
     lines = max((_visual_line_count(value) for value in values), default=1)
     return float(max(36, min(180, 8 + lines * 16)))
+
+
+def _workbook_structure(workbook) -> dict[str, Any]:
+    """Capture template-owned structure while excluding expandable data ranges."""
+    result: dict[str, Any] = {"sheetnames": list(workbook.sheetnames), "sheets": {}}
+    for worksheet in workbook.worksheets:
+        validations = sorted((
+            validation.type, validation.operator, str(validation.formula1 or ""), str(validation.formula2 or ""),
+            bool(validation.allow_blank), str(validation.errorTitle or ""), str(validation.error or ""),
+            str(validation.promptTitle or ""), str(validation.prompt or ""),
+        ) for validation in worksheet.data_validations.dataValidation)
+        tables = sorted((
+            table.name, table.displayName, str(getattr(table.tableStyleInfo, "name", "") or ""),
+            tuple(column.name for column in table.tableColumns),
+        ) for table in worksheet.tables.values())
+        result["sheets"][worksheet.title] = {
+            "state": worksheet.sheet_state,
+            "headers": tuple(cell.value for cell in worksheet[1]),
+            "widths": tuple((key, value.width, value.hidden) for key, value in sorted(worksheet.column_dimensions.items())),
+            "header_hidden": bool(worksheet.row_dimensions[1].hidden),
+            "freeze": str(worksheet.freeze_panes or ""),
+            "merged": tuple(sorted(str(item) for item in worksheet.merged_cells.ranges)),
+            "validations": validations,
+            "tables": tables,
+            "has_filter": bool(worksheet.auto_filter.ref),
+            "print_area": str(worksheet.print_area or ""),
+            "print_titles": str(worksheet.print_titles or ""),
+            "orientation": str(worksheet.page_setup.orientation or ""),
+        }
+    return result
+
+
+def _assert_structure_preserved(before: dict[str, Any], workbook, label: str) -> None:
+    after = _workbook_structure(workbook)
+    if before != after:
+        changed = [name for name in before.get("sheets", {}) if before["sheets"].get(name) != after.get("sheets", {}).get(name)]
+        raise ValueError(f"{label} template structure changed unexpectedly: {changed or 'sheet order'}")
+
+
+def _sample_formulas(worksheet, row: int = 2) -> dict[int, str]:
+    return {
+        cell.column: str(cell.value)
+        for cell in worksheet[row]
+        if isinstance(cell.value, str) and cell.value.startswith("=")
+    }
+
+
+def _apply_sample_formulas(worksheet, formulas: dict[int, str], target_row: int) -> None:
+    for column, formula in formulas.items():
+        origin = worksheet.cell(2, column).coordinate
+        destination = worksheet.cell(target_row, column).coordinate
+        worksheet.cell(target_row, column).value = Translator(formula, origin=origin).translate_formula(destination)
 
 
 def _function_names(facts: dict[str, Any], plan: dict[str, Any]) -> dict[str, str]:
@@ -234,10 +287,12 @@ def assemble_formal_workbook(run_dir: Path, template: Path, output: Path) -> dic
     workbook = load_workbook(temporary)
     if workbook.sheetnames != SHEETS:
         raise ValueError(f"formal template must contain exactly the 8 standard sheets: {SHEETS}")
+    structure = _workbook_structure(workbook)
     counts: dict[str, int] = {}
     for sheet_name in SHEETS:
         worksheet = workbook[sheet_name]
         headers = header_map(worksheet)
+        formulas = _sample_formulas(worksheet)
         clear_data_rows(worksheet)
         if not rows_by_sheet[sheet_name] and worksheet.max_row >= 2:
             worksheet.delete_rows(2, worksheet.max_row - 1)
@@ -246,6 +301,7 @@ def assemble_formal_workbook(run_dir: Path, template: Path, output: Path) -> dic
             if unknown:
                 raise ValueError(f"{sheet_name} row uses unknown headers: {sorted(unknown)}")
             write_mapped_row(worksheet, headers, row_index, row)
+            _apply_sample_formulas(worksheet, formulas, row_index)
             for header in MULTILINE_HEADERS:
                 if header in headers:
                     cell = worksheet.cell(row_index, headers[header])
@@ -253,7 +309,8 @@ def assemble_formal_workbook(run_dir: Path, template: Path, output: Path) -> dic
             multiline_values = [row.get(header, "") for header in MULTILINE_HEADERS if header in headers]
             worksheet.row_dimensions[row_index].height = _row_height(multiline_values)
         counts[sheet_name] = len(rows_by_sheet[sheet_name])
-    remove_workbook_tables_and_refresh_filters(workbook)
+    resize_workbook_structures(workbook)
+    _assert_structure_preserved(structure, workbook, "formal workbook")
     atomic_save_workbook(workbook, temporary)
     os.replace(temporary, output)
     return counts
@@ -268,8 +325,10 @@ def generate_import_workbook(run_dir: Path, template: Path, output: Path, module
     shutil.copy2(template, temporary)
     cases = load_cases(run_dir).get("cases", [])
     target_book = load_workbook(temporary)
+    structure = _workbook_structure(target_book)
     target = target_book[target_book.sheetnames[0]]
     target_headers = header_map(target)
+    formulas = _sample_formulas(target)
     clear_data_rows(target)
     modules = [part.strip() for part in re_split_module(module_path)][:5]
     modules += [""] * (5 - len(modules))
@@ -299,6 +358,7 @@ def generate_import_workbook(run_dir: Path, template: Path, output: Path, module
             "备注": _text(case.get("notes")),
         }
         write_mapped_row(target, target_headers, count + 1, row)
+        _apply_sample_formulas(target, formulas, count + 1)
         for header in ("测试步骤描述", "测试步骤预期结果", "测试用例说明", "前置条件", "备注"):
             if header in target_headers:
                 target.cell(count + 1, target_headers[header]).alignment = Alignment(vertical="top", wrap_text=True)
@@ -307,7 +367,8 @@ def generate_import_workbook(run_dir: Path, template: Path, output: Path, module
         ])
     if count == 0:
         raise ValueError("no function cases were available for the import workbook")
-    remove_workbook_tables_and_refresh_filters(target_book)
+    resize_workbook_structures(target_book)
+    _assert_structure_preserved(structure, target_book, "import workbook")
     atomic_save_workbook(target_book, temporary)
     os.replace(temporary, output)
     return count
@@ -318,8 +379,17 @@ def re_split_module(module_path: str) -> list[str]:
     return [value for value in re.split(r"\s*(?:>|/|\\|→)\s*", module_path) if value]
 
 
-def _verify_generated_deliverables(run_dir: Path, formal_path: Path, import_path: Path, expected_count: int) -> None:
+def _verify_generated_deliverables(
+    run_dir: Path,
+    formal_path: Path,
+    import_path: Path,
+    expected_count: int,
+    formal_template_path: Path,
+    import_template_path: Path,
+) -> None:
     formal = load_workbook(formal_path, data_only=False)
+    formal_template = load_workbook(formal_template_path, data_only=False)
+    _assert_structure_preserved(_workbook_structure(formal_template), formal, "saved formal workbook")
     if formal.sheetnames != SHEETS:
         raise ValueError("generated formal workbook does not retain the exact 8-sheet contract")
     function_ws = formal[FUNCTION_SHEET]
@@ -331,6 +401,8 @@ def _verify_generated_deliverables(run_dir: Path, formal_path: Path, import_path
     if formal_rows != list(range(2, 2 + expected_count)):
         raise ValueError("generated formal workbook has a missing, blank, or extra function-case row")
     imported = load_workbook(import_path, data_only=False)
+    import_template = load_workbook(import_template_path, data_only=False)
+    _assert_structure_preserved(_workbook_structure(import_template), imported, "saved import workbook")
     import_ws = imported[imported.sheetnames[0]]
     import_headers = header_map(import_ws)
     import_rows = [
@@ -339,6 +411,23 @@ def _verify_generated_deliverables(run_dir: Path, formal_path: Path, import_path
     ]
     if import_rows != list(range(2, 2 + expected_count)):
         raise ValueError("generated import workbook has a missing, blank, or extra case row")
+    for name in SHEETS:
+        generated_rows = [
+            row for row in range(2, formal[name].max_row + 1)
+            if any(formal[name].cell(row, column).value not in (None, "") for column in range(1, formal[name].max_column + 1))
+        ]
+        formulas = _sample_formulas(formal_template[name])
+        for row in generated_rows:
+            for column in formulas:
+                value = formal[name].cell(row, column).value
+                if not isinstance(value, str) or not value.startswith("=") or "#REF!" in value:
+                    raise ValueError(f"generated formal workbook lost a template formula at {name}!{row},{column}")
+    import_formulas = _sample_formulas(import_template[import_template.sheetnames[0]])
+    for row in import_rows:
+        for column in import_formulas:
+            value = import_ws.cell(row, column).value
+            if not isinstance(value, str) or not value.startswith("=") or "#REF!" in value:
+                raise ValueError(f"generated import workbook lost a template formula at row {row}, column {column}")
     source_cases = load_cases(run_dir).get("cases", [])
     if len(source_cases) != expected_count:
         raise ValueError("generated workbook count differs from function-cases.json")
@@ -363,18 +452,22 @@ def complete_deliverables(run_dir: Path, project_root: Path) -> dict[str, Any]:
     formal_candidate = paths["delivery"] / ".正式测试设计.candidate.xlsx"
     import_candidate = paths["delivery"] / ".测试系统导入.candidate.xlsx"
     try:
+        formal_template = project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
+        import_template = project_root / "docs" / "test-design" / "测试用例模板.xlsx"
         counts = assemble_formal_workbook(
             run_dir,
-            project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx",
+            formal_template,
             formal_candidate,
         )
         import_count = generate_import_workbook(
             run_dir,
-            project_root / "docs" / "test-design" / "测试用例模板.xlsx",
+            import_template,
             import_candidate,
             str(scope.get("module_path", "")),
         )
-        _verify_generated_deliverables(run_dir, formal_candidate, import_candidate, import_count)
+        _verify_generated_deliverables(
+            run_dir, formal_candidate, import_candidate, import_count, formal_template, import_template,
+        )
         os.replace(formal_candidate, formal)
         os.replace(import_candidate, import_file)
     finally:

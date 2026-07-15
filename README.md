@@ -32,7 +32,7 @@
 调用 Skill并理解范围
   → 扫描页面、执行连续功能事务、操作后局部重扫
   → events.jsonl 编译为 facts.json
-  → 识别独立功能并在 case-plan.json 中左移展开 DFX
+  → 自动形成事实计划骨架，识别独立功能并在 case-plan.json 中左移展开 DFX
   → 按计划生成配对步骤 function-cases.json
   → 执行一次轻量跨产物 Review
   → 独立生成正式测试设计.xlsx和测试系统导入.xlsx
@@ -56,9 +56,10 @@
 
 ## Review 如何避免事后拒绝
 
-- 事务记录前先校验完整的 checks，避免半条事实。
+- 事务记录前先校验完整的 checks，并将一个完整事务写成一条事件；中断恢复只处理残缺尾行，不把文件追加误称为严格事务原子性。
 - 计划只能引用已存在的事实和检查点。
-- 用例只能使用计划中的 Case ID，并以 `action+expected` 配对保存。
+- 新事实编号由运行时生成；批次内使用局部引用，避免模型手写内部 ID。
+- 用例只能使用计划中的 Case ID，并以 `action+expected+source_check` 配对保存；内部来源不写入 Excel。
 - 计划和用例通过内部原子写入接口在生成当下完成结构约束，错误产物不会先落盘等待 Review 拒绝。
 - Review 只检查 facts→plan→cases 的跨产物语义一致性。
 - 状态只有 `ready`、`ready_with_notes`、`needs_local_fix`、`blocked_by_fact`。
@@ -96,6 +97,7 @@
 
 ```powershell
 scripts/run-test-design.ps1 status --run-dir <run-dir>
+scripts/run-test-design.ps1 plan-skeleton --run-dir <run-dir>
 scripts/run-test-design.ps1 review --run-dir <run-dir>
 scripts/run-test-design.ps1 deliver --run-dir <run-dir> --project-root .
 ```

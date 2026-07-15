@@ -1,97 +1,106 @@
 # 页面深探与测试用例生成工具包
 
-本项目帮助模型从真实页面行为出发，生成可执行、可追溯、可导入测试系统的测试用例。核心目标不是“多写用例”，而是先把页面功能和配置效果实探清楚，再将事实稳定地转换成测试计划和交付件。
+本项目让模型先像人工测试人员一样彻底操作页面，再把真实页面行为转换成可执行、可追溯、可直接导入测试系统的测试用例。重点是完整理解功能和配置效果，而不是机械增加用例数量。
 
-## 最终架构
+## 项目作用
 
-整个流程在一个会话和一个浏览器上下文中连续执行：
+- 从 DOM、可访问性树和可见状态动态发现页面实际功能。
+- 逐项操作有限下拉选项，验证输入、分页、弹窗及动态联动。
+- 对新增、编辑、删除和配置项完成提交、重开、实际生效与恢复闭环。
+- 从实探事实识别独立功能，在用例编写前按适用 DFX 策略扩展场景。
+- 生成同功能集中、步骤与预期逐项对应的功能测试用例。
+- 同时交付正式测试设计 Excel 和独立测试系统导入 Excel。
+
+## Skill、规则与运行方式
+
+用户直接调用 `.codebuddy/skills/test-design/SKILL.md` 并提供测试目标。Skill 自动绑定或恢复内部运行目录，然后直接开始页面扫描，不需要用户执行初始化命令。
+
+规则分层：
+
+- `.codebuddy/rules/test-design-rule.md`：不可违反的简明规则。
+- `docs/test-design/rules/README.md`：按当前阶段加载专题规则。
+- `docs/test-design/rules/page-discovery.md`：连续页面深探。
+- `docs/test-design/rules/dfx-test-strategy.md`：DFX 左移策略。
+- `docs/test-design/rules/case-design.md`：计划和用例正文。
+- `docs/test-design/rules/excel-deliverable.md`：双 Excel 交付。
+
+整个任务只在一个会话和一个浏览器上下文中运行，不创建 Agent，也不依赖 Hook。
+
+## 执行流程
 
 ```text
-页面扫描 + 事务操作
-        ↓
-events.jsonl（原始事实）
-        ↓ 自动编译
-facts.json（紧凑事实视图）
-        ↓ 独立功能 + DFX 左移
-case-plan.json（稳定用例意图）
-        ↓
-function-cases.json（可执行用例）
-        ↓ 双向审查
-review.json
-        ↓
-正式 8 Sheet Excel + 独立测试系统导入 Excel
+调用 Skill并理解范围
+  → 扫描页面、执行连续功能事务、操作后局部重扫
+  → events.jsonl 编译为 facts.json
+  → 识别独立功能并在 case-plan.json 中左移展开 DFX
+  → 按计划生成配对步骤 function-cases.json
+  → 执行一次轻量跨产物 Review
+  → 独立生成正式测试设计.xlsx和测试系统导入.xlsx
 ```
 
-没有逐点击任务队列、后台页面记录 Hook、多份发现 CSV、用例分片 manifest 或自动返工状态机。页面工具瞬时失败最多重试一次；页面真实返回直接记为事实；无法安全完成的项目统一进入最终缺口清单。
+扫描和事务不是两个割裂阶段。进入页面先扫描，发现元素后立即执行相关功能事务，页面变化后局部重扫；新元素动态加入当前或后续事务。最终全量扫描稳定且没有未处理元素时结束深探。
 
-## 页面深探如何运行
+一次分页事务可以连续验证页面实际存在的条数选项、翻页和边界状态，但最终 Case 数由不同测试意图和可观察结果决定，不按点击数固定展开。CRUD 和配置也按功能事务记录；配置采用单因素，不做组合爆炸。
 
-- 首次进入页面、弹出结构复杂对话框、切换到新页面、完成事务时做全量扫描。
-- 每次操作后只扫描受影响区域，并把新出现的控件加入当前事务或后续事务。
-- 控件类型不是固定白名单；DOM、可访问性树和可见页面状态共同提供发现线索。
-- 下拉框等有限集合必须逐项选择并观察真实变化，不能只展开。
-- CRUD 必须真实创建、查询、编辑、验证生效、删除/恢复。
-- 配置项只做单因素：默认值与每个可选配置分别提交，验证重开回显和实际效果；暂不做组合覆盖。
-- 只有页面外部且模型仍无法理解的业务语义才询问用户。
-
-一次分页事务可以连续完成“记录初始状态 → 选择各个实际存在的条数选项 → 观察列表和页数 → 操作页面实际存在的翻页控件 → 验证边界状态 → 恢复”。它是一条连续观察，不会机械展开为七个执行分支；最终形成几个用例由独立功能与 DFX 场景决定。
-
-## 阶段隔离
+## 阶段相对独立
 
 | 阶段 | 只读输入 | 唯一写入 |
 | --- | --- | --- |
-| discovery | 页面、需求、产品资料 | `events.jsonl`、`facts.json`、`evidence/` |
-| plan | `facts.json`、规则 | `case-plan.json` |
+| discovery | 页面、需求、产品资料 | `events.jsonl`、`facts.json` |
+| plan | facts、DFX规则 | `case-plan.json` |
 | cases | facts、plan | `function-cases.json` |
-| review/delivery | facts、plan、cases | `review.json`、`deliverables/` |
+| review | facts、plan、cases | `review.json` |
+| delivery | cases、两个模板 | 两个 Excel |
 
-阶段边界执行一次完整性检查。发现问题只修复受影响事实、计划项或用例，不从头重跑。
+独立性来自文件契约，不来自多 Agent。证据只在调试需要时可选生成，后续阶段完全不读取。
 
-## 目录结构
+## Review 如何避免事后拒绝
+
+- 事务记录前先校验完整的 checks，避免半条事实。
+- 计划只能引用已存在的事实和检查点。
+- 用例只能使用计划中的 Case ID，并以 `action+expected` 配对保存。
+- 计划和用例通过内部原子写入接口在生成当下完成结构约束，错误产物不会先落盘等待 Review 拒绝。
+- Review 只检查 facts→plan→cases 的跨产物语义一致性。
+- 状态只有 `ready`、`ready_with_notes`、`needs_local_fix`、`blocked_by_fact`。
+- 问题只修当前 Case、当前功能或一个缺失事务，不全量回退、不自动循环。
+
+## 用例规范
+
+- 第一操作步骤使用完整菜单路径，例如“进入告警管理-告警列表”。
+- 导航不逐级拆分，登录和权限可以写在前置条件中。
+- 标题使用“功能点-具体场景”。
+- 步骤与预期逐项配对，使用具体且脱敏的数据。
+- 同一功能的用例连续排列。
+- 公共导航可以重复，核心操作、数据和预期必须与场景对应。
+- 不得出现截图要求、UID、DOM、选择器、事实编号或工具操作。
+
+## 最小运行目录
 
 ```text
 <run-dir>/
-├─ scope.json
-├─ artifacts/discovery/
-│  ├─ events.jsonl
-│  ├─ facts.json
-│  └─ evidence/
+├─ events.jsonl
+├─ facts.json
 ├─ case-plan.json
 ├─ function-cases.json
 ├─ review.json
 └─ deliverables/
-   ├─ <模块>-测试设计.xlsx
-   ├─ <模块>-测试系统导入.xlsx
-   └─ delivery-receipt.json
+   ├─ 正式测试设计.xlsx
+   └─ 测试系统导入.xlsx
 ```
 
-## 快速开始
+产品事实默认不自动归档；只有用户明确要求时才把稳定、已确认且无敏感信息的事实增量写入共享资产。
+
+## 内部诊断命令
+
+正常运行由 Skill 自动完成。排查和恢复时可以使用：
 
 ```powershell
-scripts/run-test-design.ps1 init-run `
-  --run-dir docs/test-assets/batch-runs/run-001 `
-  --module-path "大数据平台>告警列表"
-
-scripts/run-test-design.ps1 record-observation `
-  --run-dir docs/test-assets/batch-runs/run-001 `
-  --file observation.json
-
-scripts/run-test-design.ps1 pipeline-status --run-dir docs/test-assets/batch-runs/run-001
-scripts/run-test-design.ps1 validate-stage --run-dir docs/test-assets/batch-runs/run-001 --stage discovery
-scripts/run-test-design.ps1 review-run --run-dir docs/test-assets/batch-runs/run-001
-scripts/run-test-design.ps1 complete-deliverables --run-dir docs/test-assets/batch-runs/run-001 --project-root .
+scripts/run-test-design.ps1 status --run-dir <run-dir>
+scripts/run-test-design.ps1 review --run-dir <run-dir>
+scripts/run-test-design.ps1 deliver --run-dir <run-dir> --project-root .
 ```
 
-`record-observation` 接受单个事件或事件数组。它在一个有意义的事务观察点调用，不应包裹每次点击。
-
-## Skill、规则与命令
-
-- 执行 Skill：`.codebuddy/skills/test-design/SKILL.md`
-- 硬规则：`.codebuddy/rules/test-design-rule.md`
-- 专题规则索引：`docs/test-design/rules/README.md`
-- 统一入口：`scripts/run-test-design.ps1`
-
-快速和完整自检：
+项目自检：
 
 ```powershell
 scripts/validate-test-design.ps1 -Mode Fast

@@ -8,6 +8,7 @@
 | DFX 左移规划 | `docs/test-design/rules/dfx-test-strategy.md` |
 | 用例正文质量 | `docs/test-design/rules/case-design.md` |
 | Excel 与导入交付 | `docs/test-design/rules/excel-deliverable.md` |
-| 机器校验 | `scripts/test_design/session_runtime.py`、`scripts/validate-test-design-deliverable.py` |
+| 事实契约与轻量 Review | `docs/test-design/rules/artifact-contract.md`、`scripts/test_design/session_runtime.py` |
+| Excel 技术校验 | `scripts/test_design/formal_assembler.py`、`scripts/validate-test-design-deliverable.py` |
 
 入口文件只做路由，详细规则不重复复制。

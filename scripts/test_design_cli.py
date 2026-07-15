@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+"""Low-level helpers used internally by the test-design Skill."""
 from __future__ import annotations
 
 import argparse
@@ -6,17 +7,16 @@ import json
 import sys
 from pathlib import Path
 
-from test_design.formal_assembler import assemble_formal_workbook, complete_deliverables, generate_import_workbook
+from test_design.formal_assembler import complete_deliverables
 from test_design.session_runtime import (
     append_events,
     artifact_paths,
     compile_facts,
-    init_run,
+    ensure_run,
     pipeline_status,
     review_run,
-    validate_cases,
-    validate_discovery,
-    validate_plan,
+    save_cases,
+    save_plan,
 )
 
 
@@ -28,89 +28,80 @@ def _payload(path: Path | None) -> object:
     return json.load(sys.stdin)
 
 
-def _print(value: object, as_json: bool = True) -> None:
-    if as_json:
-        print(json.dumps(value, ensure_ascii=False, indent=2))
-    else:
-        print(value)
+def _print(value: object) -> None:
+    print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Single-session test-design workflow")
+    parser = argparse.ArgumentParser(description="Internal helpers for one-session test design")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    init = sub.add_parser("init-run", help="Initialize the compact single-session run directory")
-    init.add_argument("--run-dir", required=True, type=Path)
-    init.add_argument("--module-path", required=True)
-    init.add_argument("--product-name", default="")
-    init.add_argument("--source", default="")
-
-    record = sub.add_parser("record-observation", help="Append one transaction observation or a JSON array, then rebuild facts")
+    record = sub.add_parser("record", help="Atomically record complete facts or transactions")
     record.add_argument("--run-dir", required=True, type=Path)
     record.add_argument("--file", type=Path)
+    record.add_argument("--module-path", default="", help="Required only on the first record")
+    record.add_argument("--product-name", default="")
+    record.add_argument("--source", default="")
+    record.add_argument("--menu-path", default="")
 
-    compile_command = sub.add_parser("compile-facts", help="Rebuild facts.json from append-only events.jsonl")
+    compile_command = sub.add_parser("compile", help="Rebuild the compact facts view once")
     compile_command.add_argument("--run-dir", required=True, type=Path)
 
-    validate = sub.add_parser("validate-stage", help="Run one lightweight stage-boundary validation")
-    validate.add_argument("--run-dir", required=True, type=Path)
-    validate.add_argument("--stage", required=True, choices=["discovery", "plan", "cases", "review"])
+    write_plan = sub.add_parser("write-plan", help="Write a plan with generation-time constraints")
+    write_plan.add_argument("--run-dir", required=True, type=Path)
+    write_plan.add_argument("--file", type=Path)
 
-    status = sub.add_parser("pipeline-status", help="Derive the next action from stage artifacts")
+    write_cases = sub.add_parser("write-cases", help="Write paired cases with generation-time constraints")
+    write_cases.add_argument("--run-dir", required=True, type=Path)
+    write_cases.add_argument("--file", type=Path)
+
+    status = sub.add_parser("status", help="Describe resumable progress without gating execution")
     status.add_argument("--run-dir", required=True, type=Path)
 
-    review = sub.add_parser("review-run", help="Run bidirectional fact-plan-case review once")
+    review = sub.add_parser("review", help="Run the single cross-artifact audit")
     review.add_argument("--run-dir", required=True, type=Path)
 
-    assemble = sub.add_parser("assemble-formal-workbook", help="Assemble the exact 8-sheet formal workbook")
-    assemble.add_argument("--run-dir", required=True, type=Path)
-    assemble.add_argument("--template", required=True, type=Path)
-    assemble.add_argument("--output", required=True, type=Path)
-
-    generate = sub.add_parser("generate-import", help="Generate the independent test-system import workbook")
-    generate.add_argument("--formal-workbook", required=True, type=Path)
-    generate.add_argument("--template", required=True, type=Path)
-    generate.add_argument("--output", required=True, type=Path)
-    generate.add_argument("--module-path", required=True)
-
-    complete = sub.add_parser("complete-deliverables", help="Review and generate formal plus import workbooks")
-    complete.add_argument("--run-dir", required=True, type=Path)
-    complete.add_argument("--project-root", type=Path, default=Path("."))
+    deliver = sub.add_parser("deliver", help="Generate both independent Excel deliverables")
+    deliver.add_argument("--run-dir", required=True, type=Path)
+    deliver.add_argument("--project-root", type=Path, default=Path("."))
 
     args = parser.parse_args()
-    if args.command == "init-run":
-        _print(init_run(args.run_dir, args.module_path, args.product_name, args.source))
-    elif args.command == "record-observation":
+    if args.command == "record":
+        paths = artifact_paths(args.run_dir)
+        if not paths["facts"].exists():
+            if not args.module_path:
+                raise ValueError("the first record requires --module-path for transparent scope binding")
+            ensure_run(
+                args.run_dir,
+                args.module_path,
+                args.product_name,
+                args.source,
+                menu_path=args.menu_path or args.module_path,
+            )
         payload = _payload(args.file)
         events = payload if isinstance(payload, list) else [payload]
         if not all(isinstance(item, dict) for item in events):
-            raise ValueError("observation payload must be an object or an array of objects")
+            raise ValueError("record payload must be an object or an array of objects")
         append_events(args.run_dir, events)
         facts = compile_facts(args.run_dir)
-        _print({"appended": len(events), "fact_count": facts["fact_count"]})
-    elif args.command == "compile-facts":
+        _print({"recorded": len(events), "fact_count": facts["fact_count"]})
+    elif args.command == "compile":
         _print(compile_facts(args.run_dir))
-    elif args.command == "validate-stage":
-        validators = {
-            "discovery": validate_discovery,
-            "plan": validate_plan,
-            "cases": validate_cases,
-            "review": lambda run_dir: review_run(run_dir)["errors"],
-        }
-        errors = validators[args.stage](args.run_dir)
-        _print({"stage": args.stage, "status": "passed" if not errors else "failed", "errors": errors})
-        return 1 if errors else 0
-    elif args.command == "pipeline-status":
+    elif args.command == "write-plan":
+        payload = _payload(args.file)
+        if not isinstance(payload, dict):
+            raise ValueError("plan payload must be an object")
+        _print(save_plan(args.run_dir, payload))
+    elif args.command == "write-cases":
+        payload = _payload(args.file)
+        if not isinstance(payload, dict):
+            raise ValueError("cases payload must be an object")
+        _print(save_cases(args.run_dir, payload))
+    elif args.command == "status":
         _print(pipeline_status(args.run_dir))
-    elif args.command == "review-run":
-        result = review_run(args.run_dir)
-        _print(result)
-        return 1 if result["status"] != "passed" else 0
-    elif args.command == "assemble-formal-workbook":
-        _print(assemble_formal_workbook(args.run_dir, args.template, args.output))
-    elif args.command == "generate-import":
-        _print({"import_cases": generate_import_workbook(args.formal_workbook, args.template, args.output, args.module_path)})
-    elif args.command == "complete-deliverables":
+    elif args.command == "review":
+        _print(review_run(args.run_dir))
+    elif args.command == "deliver":
         _print(complete_deliverables(args.run_dir, args.project_root.resolve()))
     return 0
 

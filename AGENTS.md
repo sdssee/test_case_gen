@@ -1,43 +1,29 @@
 # Codex Project Instructions
 
-本仓库用于“页面深探 → 测试规划 → 测试用例 → Excel 交付”。整个任务在一个会话、一个浏览器上下文中顺序执行。
+本仓库用于“页面深探 → 事实编译 → DFX 计划 → 测试用例 → 双 Excel 交付”。整个测试设计在一个会话和一个浏览器上下文中完成。
 
-## 必读入口
+## 读取路由
 
-1. `.codebuddy/skills/test-design/SKILL.md`
-2. `.codebuddy/rules/test-design-rule.md`
-3. 按阶段读取 `docs/test-design/rules/README.md` 指向的专题规则。
+1. 读取 `.codebuddy/skills/test-design/SKILL.md` 和 `.codebuddy/rules/test-design-rule.md`。
+2. 按 `docs/test-design/rules/README.md` 读取当前阶段专题规则。
+3. 产品历史事实按需读取 `docs/test-assets/catalog/`；本轮事实以 run-dir 的 `facts.json` 为准。
 
-## 不可违反的约束
+## 架构边界
 
-- 默认全量深探。扫描从 DOM、可访问性树和实际页面状态开始，但采用开放发现；新出现的控件立即进入当前事务或后续事务。
-- 扫描只读，操作顺序执行。一次事务内完成“扫描、操作、局部重扫、观察差异、恢复”。工具瞬时错误最多重试一次；真实页面结果只记录一次；最终只输出一份未决缺口。
-- 有限下拉选项逐项真实选择。CRUD 和配置项必须验证提交、持久化回显、实际生效、恢复/清理；配置仅做单因素，不做组合。
-- 既有数据只读；变更只作用于本次创建且带 `AI_TEST`、`CODEX_TEST` 或用户明确提供的测试数据。
-- 页面能验证的问题必须自行操作，仅把页面外部且仍不理解的业务语义交给用户确认。
-- DFX 在用例计划阶段展开。每个独立功能先有基线用例，再按适用策略扩展；一个用例归属一个功能，辅助使用其他控件不能替代其独立用例。
-- 每条用例引用 `fact_id`；标题为“功能点-当前用例标题”；步骤和预期一一对应、可执行、可判定且互不重复，不得出现截图要求、内部标识或占位文本。
-- 正式测试设计保持 8 个标准 Sheet；测试系统导入文件必须独立生成。
-- 保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/` 中用户资产。
+- 直接调用 Skill，不向用户暴露初始化阶段。
+- 禁止多 Agent、页面 Hook、逐元素义务队列、观察 CSV、用例分片和自动返工循环。
+- 证据仅为可选诊断，不参与完成判断、计划、用例、Review 和 Excel。
+- Review 是一次性语义审计；只做明确的局部修正，不作为逐阶段拒绝器。
+- 正式工作簿与测试系统导入文件必须从同一 `function-cases.json` 独立生成。
 
-## 阶段与写入权
+## 内部辅助命令
 
-1. discovery：只写 `artifacts/discovery/events.jsonl`、`facts.json`、`evidence/`。
-2. plan：只读 facts，写 `case-plan.json`。
-3. cases：只读 facts 和 plan，写 `function-cases.json`。
-4. review/delivery：只读上游产物，写 `review.json` 和 `deliverables/`。
-
-阶段边界只校验一次；发现问题仅修复受影响产物，不启动自动返工循环。
-
-## 命令
+用户正常流程不需要手工运行命令。排查或恢复时可以使用：
 
 ```powershell
-scripts/run-test-design.ps1 init-run --run-dir <run-dir> --module-path "<模块路径>"
-scripts/run-test-design.ps1 record-observation --run-dir <run-dir> --file <event-or-events.json>
-scripts/run-test-design.ps1 pipeline-status --run-dir <run-dir>
-scripts/run-test-design.ps1 validate-stage --run-dir <run-dir> --stage discovery|plan|cases|review
-scripts/run-test-design.ps1 review-run --run-dir <run-dir>
-scripts/run-test-design.ps1 complete-deliverables --run-dir <run-dir> --project-root .
+scripts/run-test-design.ps1 status --run-dir <run-dir>
+scripts/run-test-design.ps1 review --run-dir <run-dir>
+scripts/run-test-design.ps1 deliver --run-dir <run-dir> --project-root .
 scripts/validate-test-design.ps1 -Mode Fast
 scripts/validate-test-design.ps1 -Mode Full
 ```

@@ -2,17 +2,18 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment
 
 from .excel_utils import clear_data_rows, header_map, remove_workbook_tables_and_refresh_filters, write_mapped_row
 from .io_utils import atomic_save_workbook, temporary_sibling
-from .session_runtime import artifact_paths, load_cases, load_facts, load_plan, review_run
+from .session_runtime import artifact_digest, artifact_paths, load_cases, load_facts, load_plan
 
 
 SHEETS = [
@@ -37,14 +38,34 @@ def _numbered(values: Any) -> str:
     return "\n".join(f"{index}. {str(value).strip()}" for index, value in enumerate(values, 1))
 
 
+def _paired_columns(steps: Any) -> tuple[str, str]:
+    if not isinstance(steps, list):
+        return "", ""
+    actions = [str(step.get("action", "")).strip() for step in steps if isinstance(step, dict)]
+    expected = [str(step.get("expected", "")).strip() for step in steps if isinstance(step, dict)]
+    return _numbered(actions), _numbered(expected)
+
+
+def _visual_line_count(value: Any, characters_per_line: int = 36) -> int:
+    text = str(value or "")
+    if not text:
+        return 1
+    return sum(max(1, math.ceil(len(line) / characters_per_line)) for line in text.splitlines())
+
+
+def _row_height(values: Iterable[Any]) -> float:
+    lines = max((_visual_line_count(value) for value in values), default=1)
+    return float(max(36, min(180, 8 + lines * 16)))
+
+
 def _function_names(facts: dict[str, Any], plan: dict[str, Any]) -> dict[str, str]:
     result = {
-        str(row.get("function_id") or row.get("fact_id")): str(row.get("name", ""))
+        str(row.get("fact_id")): str(row.get("name", ""))
         for row in facts.get("functions", [])
     }
     for row in plan.get("functions", []):
-        if row.get("function_id") and row.get("name"):
-            result[str(row["function_id"])] = str(row["name"])
+        if row.get("function_ref") and row.get("name"):
+            result[str(row["function_ref"])] = str(row["name"])
     return result
 
 
@@ -54,8 +75,14 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
     case_document = load_cases(run_dir)
     scope = facts.get("scope", {})
     functions = _function_names(facts, plan)
-    pending = facts.get("pending", [])
-    risks = facts.get("risks", []) + plan.get("risks", [])
+    fact_names = {
+        str(row.get("fact_id")): str(row.get("name") or row.get("transaction_type") or "页面实探事实")
+        for collection in ("pages", "functions", "elements", "transactions")
+        for row in facts.get(collection, [])
+    }
+    open_items = facts.get("open_items", [])
+    pending = [row for row in open_items if row.get("category") in {"external_question", "blocked_condition"}]
+    risks = [row for row in open_items if row.get("category") == "observed_risk"] + plan.get("risks", [])
     rows: dict[str, list[dict[str, str]]] = {name: [] for name in SHEETS}
     rows["测试设计总览"].append({
         "项目/模块": _text(scope.get("module_path")),
@@ -69,12 +96,12 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         "测试环境": _text(scope.get("environment")),
         "主要风险": "；".join(_text(row.get("description")) for row in risks if row.get("description")),
         "准入条件": "页面实探事实已固化，测试数据满足安全约束",
-        "准出条件": "事实、计划、用例双向追溯通过且交付文件校验通过",
+        "准出条件": "结构化用例完成一次跨产物审计，两个交付文件技术校验通过",
         "待确认问题": "；".join(_text(row.get("description") or row.get("reason")) for row in pending),
     })
-    for index, requirement in enumerate(facts.get("requirements", []), 1):
+    for index, requirement in enumerate(scope.get("requirements", []), 1):
         rows["需求用户故事拆解"].append({
-            "Story ID/需求 ID": _text(requirement.get("requirement_id") or requirement.get("fact_id") or f"REQ-{index:03d}"),
+            "Story ID/需求 ID": _text(requirement.get("requirement_id") or f"REQ-{index:03d}"),
             "用户故事/需求描述": _text(requirement.get("description")),
             "角色": _text(requirement.get("role")),
             "业务价值": _text(requirement.get("business_value")),
@@ -94,7 +121,9 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
                 "测试维度": _text(case.get("strategy")),
                 "DFX维度": _text(case.get("dfx_dimension")),
                 "DFX场景": _text(case.get("dfx_scenario")),
-                "测试对象/页面元素": _text(case.get("fact_ids")),
+                "测试对象/页面元素": "；".join(dict.fromkeys(
+                    fact_names.get(str(ref), "") for ref in case.get("fact_refs", []) if fact_names.get(str(ref), "")
+                )),
                 "输入数据/状态条件": _text(case.get("test_data")),
                 "观察点": _text(case.get("observation")),
                 "风险等级": _text(case.get("risk_level") or "中"),
@@ -103,7 +132,8 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
                 "备注": _text(case.get("notes")),
             })
     for case in case_document.get("cases", []):
-        function_id = str(case.get("function_id", ""))
+        function_id = str(case.get("function_ref", ""))
+        action_text, expected_text = _paired_columns(case.get("steps"))
         rows[FUNCTION_SHEET].append({
             "用例 ID": _text(case.get("case_id")),
             "Story ID/需求 ID": _text(case.get("requirement_id")),
@@ -116,8 +146,8 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
             "DFX场景": _text(case.get("dfx_scenario")),
             "前置条件": _numbered(case.get("preconditions")),
             "测试数据": _text(case.get("test_data")),
-            "操作步骤": _numbered(case.get("steps")),
-            "预期结果": _numbered(case.get("expected_results")),
+            "操作步骤": action_text,
+            "预期结果": expected_text,
             "实际结果": "",
             "执行状态": "未执行",
             "是否适合自动化": "是" if case.get("automation") is True else ("否" if case.get("automation") is False else "待评估"),
@@ -135,7 +165,7 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         rows["性能测试设计"].append({header: _text(item.get(key)) for header, key in mapping.items()})
     for index, risk in enumerate(risks + pending, 1):
         rows["风险与待确认问题"].append({
-            "编号": _text(risk.get("risk_id") or risk.get("fact_id") or f"RISK-{index:03d}"),
+            "编号": _text(risk.get("risk_id") or f"RISK-{index:03d}"),
             "类型": _text(risk.get("type") or ("待确认" if risk in pending else "风险")),
             "关联DFX维度": _text(risk.get("dfx_dimension")),
             "关联DFX场景": _text(risk.get("dfx_scenario")),
@@ -158,30 +188,41 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
             })
     case_by_fact: dict[str, list[str]] = {}
     for case in case_document.get("cases", []):
-        for fact_id in case.get("fact_ids", []):
+        for fact_id in case.get("fact_refs", []):
             case_by_fact.setdefault(str(fact_id), []).append(str(case.get("case_id")))
     for element in facts.get("elements", []):
-        element_id = str(element.get("element_id") or element.get("fact_id"))
+        element_id = str(element.get("fact_id"))
+        element_label = "-".join(filter(None, [str(element.get("page_name", "")).strip(), str(element.get("name", "")).strip()]))
+        covered_case_ids = list(dict.fromkeys(case_by_fact.get(element_id, [])))
         rows["页面元素覆盖清单"].append({
-            "元素 ID": element_id, "Story ID/需求 ID": _text(element.get("requirement_id")),
+            "元素 ID": element_label or _text(element.get("name")), "Story ID/需求 ID": _text(element.get("requirement_id")),
             "页面/入口": _text(element.get("page_name") or element.get("page_id")),
             "页面 URL/菜单路径": _text(element.get("menu_path")),
             "元素名称/文案": _text(element.get("name")), "元素类型": _text(element.get("type")),
             "交互方式": _text(element.get("interaction")), "适用DFX维度": _text(element.get("dfx_dimensions")),
             "适用DFX场景": _text(element.get("dfx_scenarios")), "前置状态/权限": _text(element.get("precondition")),
             "预期行为": _text(element.get("expected_behavior")), "业务依据/规则来源": _text(element.get("rule_source")),
-            "覆盖用例 ID": "；".join(case_by_fact.get(str(element.get("fact_id")), []) + case_by_fact.get(element_id, [])),
-            "覆盖状态": "已覆盖" if case_by_fact.get(str(element.get("fact_id"))) or case_by_fact.get(element_id) else "未覆盖",
-            "发现方式": _text(element.get("discovery_method") or "DOM/可访问性树/页面状态"),
-            "素材来源": _text(element.get("evidence")), "待确认问题/备注": _text(element.get("notes")),
+            "覆盖用例 ID": "；".join(covered_case_ids),
+            "覆盖状态": "已覆盖" if covered_case_ids else "未覆盖",
+            "发现方式": "页面实探",
+            "素材来源": "", "待确认问题/备注": _text(element.get("notes")),
         })
     return rows
 
 
 def assemble_formal_workbook(run_dir: Path, template: Path, output: Path) -> dict[str, int]:
-    review = review_run(run_dir)
-    if review["status"] != "passed":
-        raise ValueError("review failed; formal delivery is not allowed: " + " | ".join(review["errors"][:10]))
+    review_path = artifact_paths(run_dir)["review"]
+    if not review_path.is_file():
+        raise ValueError("review.json does not exist; run the single review first")
+    review = json.loads(review_path.read_text(encoding="utf-8"))
+    if review.get("status") not in {"ready", "ready_with_notes"}:
+        raise ValueError(f"delivery requires a local repair recorded by review: {review.get('status')}")
+    current_sources = {
+        name: artifact_digest(artifact_paths(run_dir)[name])
+        for name in ("facts", "plan", "cases")
+    }
+    if review.get("sources") != current_sources:
+        raise ValueError("review.json is stale; run the single review once for the current artifacts")
     if not template.is_file():
         raise ValueError(f"formal workbook template not found: {template}")
     rows_by_sheet = build_sheet_rows(run_dir)
@@ -209,7 +250,8 @@ def assemble_formal_workbook(run_dir: Path, template: Path, output: Path) -> dic
                 if header in headers:
                     cell = worksheet.cell(row_index, headers[header])
                     cell.alignment = Alignment(vertical="top", wrap_text=True)
-            worksheet.row_dimensions[row_index].height = max(worksheet.row_dimensions[row_index].height or 18, 36)
+            multiline_values = [row.get(header, "") for header in MULTILINE_HEADERS if header in headers]
+            worksheet.row_dimensions[row_index].height = _row_height(multiline_values)
         counts[sheet_name] = len(rows_by_sheet[sheet_name])
     remove_workbook_tables_and_refresh_filters(workbook)
     atomic_save_workbook(workbook, temporary)
@@ -217,15 +259,14 @@ def assemble_formal_workbook(run_dir: Path, template: Path, output: Path) -> dic
     return counts
 
 
-def generate_import_workbook(formal_workbook: Path, template: Path, output: Path, module_path: str) -> int:
-    if not formal_workbook.is_file() or not template.is_file():
-        raise ValueError("formal workbook and import template must exist")
+def generate_import_workbook(run_dir: Path, template: Path, output: Path, module_path: str) -> int:
+    """Generate the import workbook directly from function-cases.json."""
+    if not template.is_file():
+        raise ValueError("import template must exist")
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = temporary_sibling(output)
     shutil.copy2(template, temporary)
-    formal = load_workbook(formal_workbook, data_only=False)
-    source = formal[FUNCTION_SHEET]
-    source_headers = header_map(source)
+    cases = load_cases(run_dir).get("cases", [])
     target_book = load_workbook(temporary)
     target = target_book[target_book.sheetnames[0]]
     target_headers = header_map(target)
@@ -233,34 +274,37 @@ def generate_import_workbook(formal_workbook: Path, template: Path, output: Path
     modules = [part.strip() for part in re_split_module(module_path)][:5]
     modules += [""] * (5 - len(modules))
     count = 0
-    for source_row in range(2, source.max_row + 1):
-        case_id = source.cell(source_row, source_headers["用例 ID"]).value
-        title = source.cell(source_row, source_headers["用例标题"]).value
+    for case in cases:
+        case_id = str(case.get("case_id", "")).strip()
+        title = str(case.get("title", "")).strip()
         if not str(case_id or "").strip() or not str(title or "").strip():
-            continue
+            raise ValueError("function-cases.json contains an empty case ID or title")
         count += 1
+        actions, expected = _paired_columns(case.get("steps"))
         row = {
             "一级模块名称": modules[0], "二级模块名称": modules[1], "三级模块名称": modules[2],
             "四级模块名称": modules[3], "五级模块名称": modules[4], "测试用例序号": count,
             "测试用例名称": title,
-            "测试步骤描述": source.cell(source_row, source_headers["操作步骤"]).value,
-            "测试步骤预期结果": source.cell(source_row, source_headers["预期结果"]).value,
-            "测试类型": source.cell(source_row, source_headers["测试类型"]).value,
-            "测试用例级别": source.cell(source_row, source_headers["优先级"]).value,
+            "测试步骤描述": actions,
+            "测试步骤预期结果": expected,
+            "测试类型": case.get("test_type") or "功能测试",
+            "测试用例级别": case.get("priority") or "P1",
             "执行方式": "手工",
-            "测试用例说明": source.cell(source_row, source_headers["功能点"]).value,
-            "前置条件": source.cell(source_row, source_headers["前置条件"]).value,
+            "测试用例说明": title.split("-", 1)[0],
+            "前置条件": _numbered(case.get("preconditions")),
             "标签": "；".join(filter(None, [
-                str(source.cell(source_row, source_headers["DFX维度"]).value or ""),
-                str(source.cell(source_row, source_headers["DFX场景"]).value or ""),
+                str(case.get("dfx_dimension") or ""),
+                str(case.get("dfx_scenario") or ""),
             ])),
-            "备注": source.cell(source_row, source_headers["备注"]).value,
+            "备注": _text(case.get("notes")),
         }
         write_mapped_row(target, target_headers, count + 1, row)
         for header in ("测试步骤描述", "测试步骤预期结果", "测试用例说明", "前置条件", "备注"):
             if header in target_headers:
                 target.cell(count + 1, target_headers[header]).alignment = Alignment(vertical="top", wrap_text=True)
-        target.row_dimensions[count + 1].height = 60
+        target.row_dimensions[count + 1].height = _row_height([
+            row.get("测试步骤描述"), row.get("测试步骤预期结果"), row.get("前置条件"), row.get("测试用例说明"),
+        ])
     if count == 0:
         raise ValueError("no function cases were available for the import workbook")
     remove_workbook_tables_and_refresh_filters(target_book)
@@ -274,7 +318,7 @@ def re_split_module(module_path: str) -> list[str]:
     return [value for value in re.split(r"\s*(?:>|/|\\|→)\s*", module_path) if value]
 
 
-def _verify_generated_deliverables(formal_path: Path, import_path: Path, expected_count: int) -> None:
+def _verify_generated_deliverables(run_dir: Path, formal_path: Path, import_path: Path, expected_count: int) -> None:
     formal = load_workbook(formal_path, data_only=False)
     if formal.sheetnames != SHEETS:
         raise ValueError("generated formal workbook does not retain the exact 8-sheet contract")
@@ -295,6 +339,9 @@ def _verify_generated_deliverables(formal_path: Path, import_path: Path, expecte
     ]
     if import_rows != list(range(2, 2 + expected_count)):
         raise ValueError("generated import workbook has a missing, blank, or extra case row")
+    source_cases = load_cases(run_dir).get("cases", [])
+    if len(source_cases) != expected_count:
+        raise ValueError("generated workbook count differs from function-cases.json")
     mappings = {"用例标题": "测试用例名称", "操作步骤": "测试步骤描述", "预期结果": "测试步骤预期结果"}
     for formal_row, import_row in zip(formal_rows, import_rows):
         for formal_header, import_header in mappings.items():
@@ -302,34 +349,40 @@ def _verify_generated_deliverables(formal_path: Path, import_path: Path, expecte
             import_value = str(import_ws.cell(import_row, import_headers[import_header]).value or "").strip()
             if formal_value != import_value:
                 raise ValueError(f"generated import {import_header} does not match formal case row {formal_row}")
+    for index, case in enumerate(source_cases, 2):
+        if str(function_ws.cell(index, function_headers["用例标题"]).value or "").strip() != str(case.get("title", "")).strip():
+            raise ValueError(f"formal workbook row {index} differs from function-cases.json")
 
 
 def complete_deliverables(run_dir: Path, project_root: Path) -> dict[str, Any]:
     paths = artifact_paths(run_dir)
-    scope = json.loads(paths["scope"].read_text(encoding="utf-8"))
-    safe_name = "-".join(part for part in re_split_module(str(scope.get("module_path", "模块"))) if part)
-    safe_name = "".join(char if char not in '<>:"/\\|?*' else "_" for char in safe_name) or "测试设计"
-    formal = paths["delivery"] / f"{safe_name}-测试设计.xlsx"
-    import_file = paths["delivery"] / f"{safe_name}-测试系统导入.xlsx"
-    counts = assemble_formal_workbook(
-        run_dir,
-        project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx",
-        formal,
-    )
-    import_count = generate_import_workbook(
-        formal,
-        project_root / "docs" / "test-design" / "测试用例模板.xlsx",
-        import_file,
-        str(scope.get("module_path", "")),
-    )
-    _verify_generated_deliverables(formal, import_file, import_count)
-    receipt = {
-        "schema_version": "1.0", "delivered_at": __import__("datetime").datetime.now().astimezone().isoformat(timespec="seconds"),
-        "formal_workbook": formal.name, "import_workbook": import_file.name,
-        "sheet_rows": counts, "import_cases": import_count,
-    }
+    scope = load_facts(run_dir).get("scope", {})
     paths["delivery"].mkdir(parents=True, exist_ok=True)
-    (paths["delivery"] / "delivery-receipt.json").write_text(
-        json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    return receipt
+    formal = paths["delivery"] / "正式测试设计.xlsx"
+    import_file = paths["delivery"] / "测试系统导入.xlsx"
+    formal_candidate = paths["delivery"] / ".正式测试设计.candidate.xlsx"
+    import_candidate = paths["delivery"] / ".测试系统导入.candidate.xlsx"
+    try:
+        counts = assemble_formal_workbook(
+            run_dir,
+            project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx",
+            formal_candidate,
+        )
+        import_count = generate_import_workbook(
+            run_dir,
+            project_root / "docs" / "test-design" / "测试用例模板.xlsx",
+            import_candidate,
+            str(scope.get("module_path", "")),
+        )
+        _verify_generated_deliverables(run_dir, formal_candidate, import_candidate, import_count)
+        os.replace(formal_candidate, formal)
+        os.replace(import_candidate, import_file)
+    finally:
+        formal_candidate.unlink(missing_ok=True)
+        import_candidate.unlink(missing_ok=True)
+    return {
+        "formal_workbook": formal.name,
+        "import_workbook": import_file.name,
+        "sheet_rows": counts,
+        "import_cases": import_count,
+    }

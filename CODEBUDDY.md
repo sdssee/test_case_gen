@@ -1,11 +1,9 @@
 # CodeBuddy 测试设计入口
 
-本项目使用单会话连续执行。先读取 `.codebuddy/skills/test-design/SKILL.md` 与 `.codebuddy/rules/test-design-rule.md`，再根据 `docs/test-design/rules/README.md` 加载当前阶段规则。
-
-运行链路只有五个核心产物：
+直接调用 `.codebuddy/skills/test-design/SKILL.md`。任务在一个连续会话中执行，核心产物为：
 
 ```text
-events.jsonl → facts.json → case-plan.json → function-cases.json → review.json / deliverables
+events.jsonl → facts.json → case-plan.json → function-cases.json → review.json → 两个 Excel
 ```
 
-不得重新引入逐点击任务队列、页面操作 Hook、多份发现 CSV、用例分片 manifest 或自动返工循环。阶段命令统一通过 `scripts/run-test-design.ps1` 执行。
+不得引入多 Agent、页面操作 Hook、义务队列、观察 CSV、用例分片或自动返工循环。详细规则按 `docs/test-design/rules/README.md` 路由读取。

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import py_compile
+import json
 import sys
 from pathlib import Path
 
@@ -11,6 +12,7 @@ REQUIRED = [
     ".codebuddy/skills/test-design/SKILL.md", ".codebuddy/rules/test-design-rule.md",
     "docs/test-design/rules/page-discovery.md", "docs/test-design/rules/case-design.md",
     "docs/test-design/rules/artifact-contract.md",
+    "docs/test-design/codebuddy-test-design-template.xlsx", "docs/test-design/测试用例模板.xlsx",
 ]
 REMOVED_NAMES = {
     "page-discovery.csv", "page-element-inventory.csv", "selection-option-observations.csv",
@@ -34,6 +36,18 @@ def main() -> int:
     remaining = [path for path in forbidden_runtime if path.exists()]
     if remaining:
         raise ValueError(f"legacy obligation/Hook runtime still exists: {remaining}")
+    cli_source = (root / "scripts/test_design_cli.py").read_text(encoding="utf-8")
+    forbidden_commands = ("init-run", "agent-run", "validate-stage", "record-observation", "complete-deliverables")
+    leaked_commands = [command for command in forbidden_commands if command in cli_source]
+    if leaked_commands:
+        raise ValueError(f"legacy user-facing commands still exist: {leaked_commands}")
+    agents = (root / "AGENTS.md").read_text(encoding="utf-8")
+    if "TD-GATE" in agents or "TEST-DESIGN-GENERATED" in agents:
+        raise ValueError("AGENTS.md still contains generated legacy gate rules")
+    schema = json.loads((root / "docs/test-design/schemas/product-facts.schema.json").read_text(encoding="utf-8"))
+    item_required = schema["properties"]["facts"]["additionalProperties"]["items"]["required"]
+    if "evidence" in item_required:
+        raise ValueError("product fact archive still requires evidence")
     for path in (root / "scripts").rglob("*.py"):
         py_compile.compile(str(path), doraise=True)
     print("OK: compact single-session architecture is structurally valid.")

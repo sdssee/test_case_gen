@@ -15,8 +15,17 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from test_design.formal_assembler import SHEETS, complete_deliverables
 from test_design.session_runtime import (
-    append_events, artifact_paths, compile_facts, init_run, pipeline_status, review_run,
-    validate_cases, validate_discovery, validate_plan,
+    append_events,
+    artifact_paths,
+    compile_facts,
+    ensure_run,
+    pipeline_status,
+    review_run,
+    save_cases,
+    save_plan,
+    validate_cases,
+    validate_discovery,
+    validate_plan,
 )
 
 
@@ -24,23 +33,32 @@ class SingleSessionRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.run_dir = Path(self.temporary.name) / "run-001"
-        init_run(self.run_dir, "大数据平台>告警列表", "大数据平台", "需求说明")
-        evidence = artifact_paths(self.run_dir)["evidence"] / "pagination.txt"
-        evidence.write_text("10/20/30 条及上一页、下一页状态变化已观察", encoding="utf-8")
+        ensure_run(self.run_dir, "告警管理>告警列表", "大数据平台", "需求说明")
         append_events(self.run_dir, [
-            {"kind": "page", "fact_id": "FACT-PAGE", "data": {"page_id": "PAGE-1", "name": "告警列表"}},
-            {"kind": "function", "fact_id": "FACT-FUNCTION", "data": {"function_id": "F-PAGE", "name": "分页"}},
-            {"kind": "element", "fact_id": "FACT-ELEMENT", "data": {
-                "element_id": "EL-PAGE-SIZE", "function_id": "F-PAGE", "page_id": "PAGE-1",
-                "name": "每页条数", "type": "下拉框", "interaction": "选择", "interactive": True,
-                "option_set": "finite", "options": [10, 20, 30],
+            {"kind": "page", "fact_id": "PAGE-LIST", "data": {
+                "name": "告警列表", "final_scan_status": "stable", "unhandled_element_refs": []
             }},
-            {"kind": "observation", "fact_id": "FACT-OBS", "element_id": "EL-PAGE-SIZE", "data": {
-                "function_id": "F-PAGE", "action": "依次选择10、20、30条并操作上一页和下一页",
-                "option_values": [10, 20, 30], "before": "记录初始总数和当前页",
-                "result": "列表条数和总页数分别变化，翻页后页码与按钮状态正确",
-                "recovery_result": "恢复为初始每页条数和第一页",
-            }, "evidence": [{"path": "artifacts/discovery/evidence/pagination.txt", "location": "全文"}]},
+            {"kind": "function", "fact_id": "FN-PAGE", "data": {"name": "分页"}},
+            {"kind": "element", "fact_id": "EL-PAGE-SIZE", "data": {
+                "function_ref": "FN-PAGE", "page_ref": "PAGE-LIST", "name": "每页条数",
+                "type": "下拉框", "interactive": True, "option_set": "finite", "options": [10, 20, 30]
+            }},
+            {"kind": "element", "fact_id": "EL-PAGER", "data": {
+                "function_ref": "FN-PAGE", "page_ref": "PAGE-LIST", "name": "翻页控件", "interactive": True
+            }},
+            {"kind": "transaction", "fact_id": "TX-PAGE", "data": {
+                "function_ref": "FN-PAGE", "element_refs": ["EL-PAGE-SIZE", "EL-PAGER"],
+                "transaction_type": "pagination", "recovery_result": "恢复第一页和初始条数",
+                "checks": [
+                    {"element_ref": "EL-PAGE-SIZE", "action": "选择10条/页", "option_value": 10, "result": "列表与页数按10条重算"},
+                    {"element_ref": "EL-PAGE-SIZE", "action": "选择20条/页", "option_value": 20, "result": "列表与页数按20条重算"},
+                    {"element_ref": "EL-PAGE-SIZE", "action": "选择30条/页", "option_value": 30, "result": "列表与页数按30条重算"},
+                    {"element_ref": "EL-PAGER", "action": "进入下一页", "result": "页码增加并显示下一页数据"},
+                    {"element_ref": "EL-PAGER", "action": "返回上一页", "result": "页码减少并恢复上一页数据"},
+                    {"element_ref": "EL-PAGER", "action": "观察第一页边界", "result": "上一页按钮禁用"},
+                    {"element_ref": "EL-PAGER", "action": "进入末页并观察边界", "result": "下一页按钮禁用"},
+                ],
+            }},
         ])
         compile_facts(self.run_dir)
 
@@ -48,98 +66,154 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def _write_plan_and_cases(self) -> None:
+        refs = ["FN-PAGE", "EL-PAGE-SIZE", "EL-PAGER", "TX-PAGE"]
         plan = {
-            "schema_version": "1.0", "source": "artifacts/discovery/facts.json", "risks": [],
-            "functions": [{"function_id": "F-PAGE", "name": "分页", "cases": [
+            "schema_version": "2.0", "source": "facts.json", "risks": [], "non_case_checks": [],
+            "functions": [{"function_ref": "FN-PAGE", "name": "分页", "cases": [
                 {"case_id": "TC-PAGE-001", "title": "每页条数切换", "strategy": "baseline",
-                 "dfx_dimension": "DFT功能", "dfx_scenario": "正向流程",
-                 "fact_ids": ["FACT-FUNCTION", "FACT-ELEMENT", "FACT-OBS"]},
-                {"case_id": "TC-PAGE-002", "title": "下一页与上一页切换", "strategy": "DFX",
-                 "dfx_dimension": "DFR可靠", "dfx_scenario": "状态一致性",
-                 "fact_ids": ["FACT-FUNCTION", "FACT-ELEMENT", "FACT-OBS"]},
+                 "dfx_dimension": "DFT功能", "dfx_scenario": "正向流程", "fact_refs": refs,
+                 "covered_checks": {"TX-PAGE": [1, 2, 3]}},
+                {"case_id": "TC-PAGE-002", "title": "上一页与下一页切换", "strategy": "DFX",
+                 "dfx_dimension": "DFR可靠", "dfx_scenario": "状态一致性", "fact_refs": refs,
+                 "covered_checks": {"TX-PAGE": [4, 5]}},
+                {"case_id": "TC-PAGE-003", "title": "首页与末页边界状态", "strategy": "DFX",
+                 "dfx_dimension": "DFT功能", "dfx_scenario": "边界值", "fact_refs": refs,
+                 "covered_checks": {"TX-PAGE": [6, 7]}},
             ]}],
         }
-        artifact_paths(self.run_dir)["plan"].write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
-        cases = {"schema_version": "1.0", "source_plan": "case-plan.json", "cases": [
-            {"case_id": "TC-PAGE-001", "function_id": "F-PAGE", "title": "分页-每页条数切换",
+        save_plan(self.run_dir, plan)
+        navigation = {"action": "进入告警管理-告警列表", "expected": "显示告警查询区、告警列表和分页区域"}
+        cases = {"schema_version": "2.0", "source_plan": "case-plan.json", "cases": [
+            {"case_id": "TC-PAGE-001", "function_ref": "FN-PAGE", "title": "分页-每页条数切换",
              "priority": "P1", "test_type": "功能测试", "dfx_dimension": "DFT功能", "dfx_scenario": "正向流程",
-             "preconditions": ["进入告警列表并记录总记录数和初始总页数"], "test_data": "页面存在超过30条告警测试数据",
-             "steps": ["打开每页条数下拉框并选择10条", "依次选择20条和30条"],
-             "expected_results": ["列表最多展示10条且总页数按10条重新计算", "列表上限和总页数分别按20条、30条重新计算"],
-             "fact_ids": ["FACT-FUNCTION", "FACT-ELEMENT", "FACT-OBS"], "automation": True},
-            {"case_id": "TC-PAGE-002", "function_id": "F-PAGE", "title": "分页-下一页与上一页切换",
+             "preconditions": ["告警列表存在超过30条可查看数据"], "test_data": "每页条数：10、20、30",
+             "steps": [navigation,
+                       {"action": "依次选择10条/页、20条/页和30条/页", "expected": "每次选择后列表上限和总页数分别按对应条数重新计算"}],
+             "fact_refs": refs, "automation": True},
+            {"case_id": "TC-PAGE-002", "function_ref": "FN-PAGE", "title": "分页-上一页与下一页切换",
              "priority": "P1", "test_type": "功能测试", "dfx_dimension": "DFR可靠", "dfx_scenario": "状态一致性",
-             "preconditions": ["告警列表至少有两页数据且当前位于第一页"], "test_data": "多页告警测试数据",
-             "steps": ["点击下一页并记录当前页码和首条告警", "点击上一页返回"],
-             "expected_results": ["当前页码增加且列表切换到下一页数据", "返回第一页且列表恢复第一页数据"],
-             "fact_ids": ["FACT-FUNCTION", "FACT-ELEMENT", "FACT-OBS"], "automation": True},
+             "preconditions": ["告警列表至少存在两页可查看数据"], "test_data": "第一页与第二页告警记录",
+             "steps": [navigation,
+                       {"action": "单击下一页后再单击上一页", "expected": "页码和列表先切换至下一页，再恢复第一页数据"}],
+             "fact_refs": refs, "automation": True},
+            {"case_id": "TC-PAGE-003", "function_ref": "FN-PAGE", "title": "分页-首页与末页边界状态",
+             "priority": "P1", "test_type": "功能测试", "dfx_dimension": "DFT功能", "dfx_scenario": "边界值",
+             "preconditions": ["告警列表存在多页可查看数据"], "test_data": "第一页和末页",
+             "steps": [navigation,
+                       {"action": "分别停留在第一页和末页观察翻页按钮", "expected": "第一页的上一页按钮禁用，末页的下一页按钮禁用"}],
+             "fact_refs": refs, "automation": True},
         ]}
-        artifact_paths(self.run_dir)["cases"].write_text(json.dumps(cases, ensure_ascii=False), encoding="utf-8")
+        save_cases(self.run_dir, cases)
 
-    def test_continuous_transaction_covers_finite_options_in_one_observation(self) -> None:
+    def test_one_pagination_transaction_dynamically_forms_three_cases_not_seven(self) -> None:
         self.assertEqual([], validate_discovery(self.run_dir))
         facts = compile_facts(self.run_dir)
-        self.assertEqual(1, len(facts["observations"]))
-        self.assertEqual([10, 20, 30], facts["observations"][0]["option_values"])
+        self.assertEqual(1, len(facts["transactions"]))
+        self.assertEqual(7, len(facts["transactions"][0]["checks"]))
+        self._write_plan_and_cases()
+        self.assertEqual(3, sum(len(item["cases"]) for item in json.loads(artifact_paths(self.run_dir)["plan"].read_text(encoding="utf-8"))["functions"]))
 
-    def test_stage_boundaries_and_bidirectional_review(self) -> None:
+    def test_review_is_ready_and_has_no_evidence_dependency(self) -> None:
         self._write_plan_and_cases()
         self.assertEqual([], validate_plan(self.run_dir))
         self.assertEqual([], validate_cases(self.run_dir))
         facts_before = artifact_paths(self.run_dir)["facts"].read_bytes()
-        self.assertEqual("passed", review_run(self.run_dir)["status"])
+        self.assertEqual("ready", review_run(self.run_dir)["status"])
         self.assertEqual(facts_before, artifact_paths(self.run_dir)["facts"].read_bytes())
-        self.assertEqual("delivery", pipeline_status(self.run_dir)["stage"])
+        self.assertFalse(artifact_paths(self.run_dir)["diagnostics"].exists())
+        self.assertEqual("ready", pipeline_status(self.run_dir)["state"])
 
-    def test_configuration_requires_default_and_each_single_factor_closure(self) -> None:
+    def test_scope_binding_resumes_same_target_and_rejects_a_different_target(self) -> None:
+        resumed = ensure_run(self.run_dir, "告警管理>告警列表")
+        self.assertEqual("告警管理>告警列表", resumed["module_path"])
+        with self.assertRaisesRegex(ValueError, "choose a new run directory"):
+            ensure_run(self.run_dir, "告警管理>告警详情")
+
+    def test_open_items_use_review_notes_or_real_fact_blocking_without_retry_loop(self) -> None:
+        self._write_plan_and_cases()
+        append_events(self.run_dir, [{"kind": "open_item", "fact_id": "OPEN-RISK", "data": {
+            "category": "observed_risk", "description": "末页返回响应较慢", "material": False
+        }}])
+        compile_facts(self.run_dir)
+        review = review_run(self.run_dir)
+        self.assertEqual("ready_with_notes", review["status"])
+        append_events(self.run_dir, [{"kind": "open_item", "fact_id": "OPEN-QUESTION", "data": {
+            "category": "external_question", "description": "告警确认后的外部处置语义待确认", "material": True
+        }}])
+        compile_facts(self.run_dir)
+        self.assertEqual("blocked_by_fact", review_run(self.run_dir)["status"])
+        append_events(self.run_dir, [{"kind": "open_item", "fact_id": "OPEN-QUESTION", "status": "resolved", "data": {
+            "category": "external_question", "description": "用户已确认外部处置语义", "material": True
+        }}])
+        compile_facts(self.run_dir)
+        self.assertEqual("ready_with_notes", review_run(self.run_dir)["status"])
+
+    def test_delivery_detects_a_stale_review_without_returning_to_discovery(self) -> None:
+        self._write_plan_and_cases()
+        self.assertEqual("ready", review_run(self.run_dir)["status"])
+        append_events(self.run_dir, [{"kind": "open_item", "fact_id": "OPEN-NOTE", "data": {
+            "category": "observed_risk", "description": "非阻塞提示", "material": False
+        }}])
+        compile_facts(self.run_dir)
+        with self.assertRaisesRegex(ValueError, "stale"):
+            complete_deliverables(self.run_dir, ROOT)
+
+    def test_configuration_covers_default_and_each_single_factor_value(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             run_dir = Path(value) / "config-run"
-            init_run(run_dir, "平台>新增告警规则")
-            evidence_dir = artifact_paths(run_dir)["evidence"]
-            events = [
-                {"kind": "page", "fact_id": "P", "data": {"page_id": "P1", "name": "新增告警规则"}},
-                {"kind": "function", "fact_id": "F", "data": {"function_id": "F1", "name": "通知方式配置"}},
-                {"kind": "test_object", "fact_id": "OBJ", "data": {"test_object_id": "AI_TEST_RULE_001", "owner": "current-run"}},
-                {"kind": "element", "fact_id": "E", "data": {
-                    "element_id": "E1", "function_id": "F1", "name": "通知方式", "interactive": True,
-                    "configuration": True, "option_set": "finite", "options": ["不配置", "邮件", "短信"],
-                    "default_value": "不配置",
-                }},
-            ]
-            for index, option in enumerate(["不配置", "邮件", "短信"], 1):
-                evidence = evidence_dir / f"config-{index}.txt"
-                evidence.write_text(f"{option} 保存、重开和效果均已验证", encoding="utf-8")
-                events.append({
-                    "kind": "observation", "fact_id": f"O{index}", "element_id": "E1",
-                    "data": {"function_id": "F1", "closure": "create" if index == 1 else "configuration", "variant": "default" if index == 1 else "configured",
-                             "option_value": option, "action": f"设置{option}", "commit_result": "保存成功",
-                             "persistence_result": "重开后回显一致", "effect_result": f"实际按{option}生效",
-                             "recovery_result": "恢复基线", "outcome": "success", "test_object_id": "AI_TEST_RULE_001"},
-                    "evidence": [{"path": f"artifacts/discovery/evidence/config-{index}.txt"}],
+            ensure_run(run_dir, "告警管理>新增告警规则")
+            checks = []
+            for option in ["不配置", "邮件", "短信"]:
+                checks.append({
+                    "element_ref": "EL-CONFIG", "action": f"设置通知方式为{option}", "option_value": option,
+                    "result": f"页面接受{option}", "commit_result": "保存成功", "persistence_result": "重开后回显一致",
+                    "effect_result": f"规则按{option}生效", "recovery_result": "恢复基线",
                 })
-            append_events(run_dir, events)
+            append_events(run_dir, [
+                {"kind": "page", "fact_id": "PAGE", "data": {"name": "新增告警规则", "final_scan_status": "stable", "unhandled_element_refs": []}},
+                {"kind": "function", "fact_id": "FN-CONFIG", "data": {"name": "通知方式配置"}},
+                {"kind": "test_object", "fact_id": "OBJ", "data": {"name": "AI_TEST_RULE_001", "owner": "current_run", "state": "cleaned"}},
+                {"kind": "element", "fact_id": "EL-CONFIG", "data": {
+                    "function_ref": "FN-CONFIG", "name": "通知方式", "interactive": True,
+                    "configuration": True, "option_set": "finite", "options": ["不配置", "邮件", "短信"], "default_value": "不配置"
+                }},
+                {"kind": "transaction", "fact_id": "TX-CONFIG", "data": {
+                    "function_ref": "FN-CONFIG", "element_refs": ["EL-CONFIG"], "transaction_type": "configuration",
+                    "test_object_ref": "OBJ", "outcome": "success", "combination": False, "checks": checks
+                }},
+            ])
             compile_facts(run_dir)
             self.assertEqual([], validate_discovery(run_dir))
 
-    def test_delivery_has_eight_sheets_import_file_and_no_blank_case_rows(self) -> None:
+    def test_delivery_has_two_independent_workbooks_and_no_blank_case_rows(self) -> None:
         self._write_plan_and_cases()
-        review_run(self.run_dir)
+        self.assertEqual("ready", review_run(self.run_dir)["status"])
         receipt = complete_deliverables(self.run_dir, ROOT)
         delivery = artifact_paths(self.run_dir)["delivery"]
         formal = delivery / receipt["formal_workbook"]
         import_file = delivery / receipt["import_workbook"]
-        self.assertTrue(formal.is_file())
-        self.assertTrue(import_file.is_file())
+        self.assertEqual("正式测试设计.xlsx", formal.name)
+        self.assertEqual("测试系统导入.xlsx", import_file.name)
+        self.assertEqual({"正式测试设计.xlsx", "测试系统导入.xlsx"}, {path.name for path in delivery.iterdir()})
         workbook = load_workbook(formal, data_only=False)
         self.assertEqual(SHEETS, workbook.sheetnames)
         ws = workbook["功能测试用例"]
         self.assertEqual("TC-PAGE-001", ws.cell(2, 1).value)
-        self.assertEqual("TC-PAGE-002", ws.cell(3, 1).value)
-        self.assertIsNone(ws.cell(4, 1).value)
-        self.assertEqual(1, workbook["性能测试设计"].max_row)
+        self.assertEqual("TC-PAGE-003", ws.cell(4, 1).value)
+        self.assertIsNone(ws.cell(5, 1).value)
+        self.assertGreaterEqual(ws.row_dimensions[2].height, 40)
+        matrix = workbook["测试场景矩阵"]
+        matrix_text = "\n".join(str(matrix.cell(row, column).value or "") for row in range(2, matrix.max_row + 1) for column in range(1, matrix.max_column + 1))
+        self.assertNotIn("TX-PAGE", matrix_text)
+        self.assertNotIn("EL-PAGE", matrix_text)
+        coverage = workbook["页面元素覆盖清单"]
+        coverage_text = "\n".join(str(coverage.cell(row, column).value or "") for row in range(2, coverage.max_row + 1) for column in range(1, coverage.max_column + 1))
+        self.assertNotIn("DOM", coverage_text)
+        self.assertNotIn("EL-PAGE", coverage_text)
         import_book = load_workbook(import_file, data_only=False)
         import_ws = import_book[import_book.sheetnames[0]]
-        self.assertEqual(3, import_ws.max_row)
+        self.assertEqual(4, import_ws.max_row)
+        self.assertGreaterEqual(import_ws.row_dimensions[2].height, 40)
         validated = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "validate-test-design-deliverable.py"),
              "--workbook", str(formal), "--import-workbook", str(import_file)],

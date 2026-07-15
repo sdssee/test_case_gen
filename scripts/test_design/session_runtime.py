@@ -1,44 +1,40 @@
 # -*- coding: utf-8 -*-
-"""Single-session test-design runtime.
+"""Compact single-session runtime for fact-driven test design.
 
-The runtime deliberately owns only stage artifacts. Browser/computer-use remains in
-the same model session; one meaningful observation is appended after an interaction
-transaction instead of creating a task/gate for every click.
+The runtime persists phase artifacts but does not orchestrate browser actions, create
+per-element obligations, or retry phases.  A model explores the page continuously;
+this module records complete transactions, compiles facts, and performs one final
+cross-artifact audit.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
-from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 
-SCHEMA_VERSION = "1.0"
-EVENT_KINDS = {
-    "scope", "requirement", "page", "function", "element", "observation",
-    "test_object", "risk", "pending", "absence",
-}
+SCHEMA_VERSION = "2.0"
+EVENT_KINDS = {"scope", "page", "function", "element", "transaction", "test_object", "open_item"}
 FACT_COLLECTIONS = {
-    "requirement": "requirements",
     "page": "pages",
     "function": "functions",
     "element": "elements",
-    "observation": "observations",
+    "transaction": "transactions",
     "test_object": "test_objects",
-    "risk": "risks",
-    "pending": "pending",
-    "absence": "absences",
+    "open_item": "open_items",
 }
-INTERNAL_STEP_MARKERS = re.compile(
+NON_ACTIONABLE_STATUSES = {"absent", "disabled", "not_applicable", "superseded"}
+INTERNAL_PROSE = re.compile(
     r"(?:^|[^a-z])(?:uid|uuid|fact[_ -]?id|element[_ -]?id|interaction[_ -]?id|"
     r"dom|accessibility tree|aria|selector|xpath|css selector)(?:$|[^a-z])",
     re.IGNORECASE,
 )
 SCREENSHOT_MARKERS = ("截图", "截屏", "screenshot", "screen shot")
-PLACEHOLDER_MARKERS = ("TODO", "TBD", "待补充", "示例", "占位")
+PLACEHOLDER_MARKERS = ("TODO", "TBD", "待补充", "请补充", "示例数据", "占位", "输入测试数据", "填写测试数据")
 
 
 def _now() -> str:
@@ -57,45 +53,24 @@ def _write_json(path: Path, value: Any) -> None:
     temporary.replace(path)
 
 
+def artifact_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def artifact_paths(run_dir: Path) -> dict[str, Path]:
     run_dir = run_dir.resolve()
     return {
-        "scope": run_dir / "scope.json",
-        "events": run_dir / "artifacts" / "discovery" / "events.jsonl",
-        "facts": run_dir / "artifacts" / "discovery" / "facts.json",
-        "evidence": run_dir / "artifacts" / "discovery" / "evidence",
+        "events": run_dir / "events.jsonl",
+        "facts": run_dir / "facts.json",
         "plan": run_dir / "case-plan.json",
         "cases": run_dir / "function-cases.json",
         "review": run_dir / "review.json",
         "delivery": run_dir / "deliverables",
+        "diagnostics": run_dir / "diagnostics",
     }
 
 
-def init_run(run_dir: Path, module_path: str, product_name: str = "", source: str = "") -> dict[str, Any]:
-    paths = artifact_paths(run_dir)
-    if paths["scope"].exists() or paths["events"].exists():
-        raise ValueError(f"run directory is already initialized: {run_dir}")
-    scope = {
-        "schema_version": SCHEMA_VERSION,
-        "run_id": run_dir.name,
-        "product_name": product_name.strip(),
-        "module_path": module_path.strip(),
-        "source": source.strip(),
-        "created_at": _now(),
-    }
-    if not scope["module_path"]:
-        raise ValueError("module_path must not be empty")
-    paths["evidence"].mkdir(parents=True, exist_ok=True)
-    paths["events"].touch()
-    _write_json(paths["scope"], scope)
-    compile_facts(run_dir)
-    return scope
-
-
-def append_event(run_dir: Path, event: dict[str, Any]) -> dict[str, Any]:
-    paths = artifact_paths(run_dir)
-    if not paths["scope"].exists():
-        raise ValueError("run is not initialized")
+def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
     item = dict(event)
     kind = str(item.get("kind", "")).strip()
     fact_id = str(item.get("fact_id", "")).strip()
@@ -103,19 +78,84 @@ def append_event(run_dir: Path, event: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"unsupported event kind: {kind!r}")
     if not fact_id:
         raise ValueError("event.fact_id must not be empty")
+    data = item.get("data", {})
+    if not isinstance(data, dict):
+        raise ValueError("event.data must be an object")
+    if kind == "transaction":
+        checks = data.get("checks")
+        if not isinstance(checks, list) or not checks:
+            raise ValueError("transaction.data.checks must be a non-empty array")
+        for index, check in enumerate(checks, 1):
+            if not isinstance(check, dict):
+                raise ValueError(f"transaction check {index} must be an object")
+            if not str(check.get("action", "")).strip() or not str(check.get("result", "")).strip():
+                raise ValueError(f"transaction check {index} requires action and result")
+    item["kind"] = kind
+    item["fact_id"] = fact_id
+    item["data"] = data
     item.setdefault("event_id", f"EVT-{uuid.uuid4().hex[:12].upper()}")
     item.setdefault("observed_at", _now())
-    item.setdefault("status", "observed")
-    item.setdefault("data", {})
-    if not isinstance(item["data"], dict):
-        raise ValueError("event.data must be an object")
-    with paths["events"].open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
+    item.setdefault("status", "active")
     return item
 
 
+def ensure_run(
+    run_dir: Path,
+    module_path: str,
+    product_name: str = "",
+    source: str = "",
+    **scope_fields: Any,
+) -> dict[str, Any]:
+    """Transparently create or resume the run bound to ``module_path``.
+
+    This is an internal Skill bootstrap, not a user-visible workflow phase.
+    """
+    module_path = module_path.strip()
+    if not module_path:
+        raise ValueError("module_path must not be empty")
+    paths = artifact_paths(run_dir)
+    if paths["facts"].exists():
+        facts = load_facts(run_dir)
+        existing = str(facts.get("scope", {}).get("module_path", "")).strip()
+        if existing != module_path:
+            raise ValueError(f"run is bound to {existing!r}, not {module_path!r}; choose a new run directory")
+        return facts["scope"]
+    paths["events"].parent.mkdir(parents=True, exist_ok=True)
+    if paths["events"].exists() and paths["events"].stat().st_size:
+        facts = compile_facts(run_dir)
+        existing = str(facts.get("scope", {}).get("module_path", "")).strip()
+        if existing != module_path:
+            raise ValueError(f"run is bound to {existing!r}, not {module_path!r}; choose a new run directory")
+        return facts["scope"]
+    scope = {
+        "run_id": run_dir.name,
+        "module_path": module_path,
+        "menu_path": str(scope_fields.pop("menu_path", "") or module_path),
+        "product_name": product_name.strip(),
+        "source": source.strip(),
+        "created_at": _now(),
+        **scope_fields,
+    }
+    append_events(run_dir, [{"kind": "scope", "fact_id": "SCOPE", "data": scope}])
+    compile_facts(run_dir)
+    return scope
+
+
+def append_event(run_dir: Path, event: dict[str, Any]) -> dict[str, Any]:
+    return append_events(run_dir, [event])[0]
+
+
 def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [append_event(run_dir, event) for event in events]
+    """Validate the complete batch before appending any line."""
+    paths = artifact_paths(run_dir)
+    items = [_prepare_event(event) for event in events]
+    if not items:
+        return []
+    paths["events"].parent.mkdir(parents=True, exist_ok=True)
+    payload = "".join(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in items)
+    with paths["events"].open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(payload)
+    return items
 
 
 def load_events(run_dir: Path) -> list[dict[str, Any]]:
@@ -136,172 +176,59 @@ def load_events(run_dir: Path) -> list[dict[str, Any]]:
     return result
 
 
-def _resolved_evidence(run_dir: Path, value: str) -> Path | None:
-    candidate = Path(value)
-    if not candidate.is_absolute():
-        candidate = (run_dir / candidate).resolve()
-    else:
-        candidate = candidate.resolve()
-    evidence_root = artifact_paths(run_dir)["evidence"].resolve()
-    try:
-        candidate.relative_to(evidence_root)
-    except ValueError:
-        return None
-    return candidate if candidate.is_file() and candidate.stat().st_size > 0 else None
-
-
 def compile_facts(run_dir: Path) -> dict[str, Any]:
-    paths = artifact_paths(run_dir)
-    scope = _read_json(paths["scope"])
     events = load_events(run_dir)
+    if not events:
+        raise ValueError("events.jsonl has no scope event")
     latest: dict[str, dict[str, Any]] = {}
     for event in events:
-        fact_id = str(event.get("fact_id", "")).strip()
-        kind = str(event.get("kind", "")).strip()
-        if not fact_id or kind not in EVENT_KINDS:
-            raise ValueError("every event requires a supported kind and non-empty fact_id")
-        latest[fact_id] = event
-
+        prepared = _prepare_event(event)
+        latest[prepared["fact_id"]] = prepared
+    scope_events = [item for item in latest.values() if item["kind"] == "scope"]
+    if not scope_events:
+        raise ValueError("events.jsonl has no scope event")
     facts: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "scope": scope,
-        "source": "artifacts/discovery/events.jsonl",
+        "scope": dict(scope_events[-1]["data"]),
+        "source": "events.jsonl",
         "compiled_at": _now(),
         "event_count": len(events),
-        "last_event_id": str(events[-1].get("event_id", "")) if events else "",
+        "last_event_id": str(events[-1].get("event_id", "")),
         "fact_count": len(latest),
-        "requirements": [], "pages": [], "functions": [], "elements": [],
-        "observations": [], "test_objects": [], "risks": [], "pending": [], "absences": [],
+        "pages": [],
+        "functions": [],
+        "elements": [],
+        "transactions": [],
+        "test_objects": [],
+        "open_items": [],
     }
-    scope_events = [event for event in latest.values() if event.get("kind") == "scope"]
-    if scope_events:
-        facts["scope"] = {**scope, **scope_events[-1].get("data", {})}
     for fact_id, event in latest.items():
-        kind = str(event["kind"])
+        kind = event["kind"]
         if kind == "scope" or event.get("status") == "superseded":
             continue
         record = {
             "fact_id": fact_id,
-            "status": event.get("status", "observed"),
+            "status": event.get("status", "active"),
             "observed_at": event.get("observed_at", ""),
-            **event.get("data", {}),
+            **event["data"],
         }
-        for relation in ("page_id", "function_id", "element_id"):
-            if event.get(relation) and relation not in record:
-                record[relation] = event[relation]
-        if event.get("evidence"):
-            record["evidence"] = event["evidence"]
         facts[FACT_COLLECTIONS[kind]].append(record)
     for key in FACT_COLLECTIONS.values():
         facts[key].sort(key=lambda row: str(row.get("fact_id", "")))
-    _write_json(paths["facts"], facts)
+    _write_json(artifact_paths(run_dir)["facts"], facts)
     return facts
 
 
 def load_facts(run_dir: Path) -> dict[str, Any]:
     path = artifact_paths(run_dir)["facts"]
     if not path.exists():
-        raise ValueError("facts.json does not exist; run compile-facts")
+        raise ValueError("facts.json does not exist")
     facts = _read_json(path)
-    if not isinstance(facts, dict):
-        raise ValueError("facts.json must be an object")
     events = load_events(run_dir)
     last_event_id = str(events[-1].get("event_id", "")) if events else ""
     if facts.get("event_count") != len(events) or facts.get("last_event_id", "") != last_event_id:
-        raise ValueError("facts.json is stale; run compile-facts before leaving discovery")
+        raise ValueError("facts.json is stale; compile the newly recorded events once")
     return facts
-
-
-def _all_fact_ids(facts: dict[str, Any]) -> set[str]:
-    ids: set[str] = set()
-    for collection in FACT_COLLECTIONS.values():
-        ids.update(str(row.get("fact_id", "")) for row in facts.get(collection, []))
-    return ids
-
-
-def validate_discovery(run_dir: Path) -> list[str]:
-    try:
-        facts = load_facts(run_dir)
-    except ValueError as exc:
-        return [str(exc)]
-    errors: list[str] = []
-    for key in ("pages", "functions", "elements", "observations"):
-        if not facts.get(key):
-            errors.append(f"discovery has no {key}")
-    observations_by_element: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    observed_option_values: dict[str, set[str]] = defaultdict(set)
-    for observation in facts.get("observations", []):
-        element_id = str(observation.get("element_id", ""))
-        if element_id:
-            observations_by_element[element_id].append(observation)
-        if observation.get("option_value") is not None:
-            observed_option_values[element_id].add(str(observation["option_value"]))
-        for option_value in observation.get("option_values", []):
-            observed_option_values[element_id].add(str(option_value))
-        evidence_items = observation.get("evidence", [])
-        if not evidence_items:
-            errors.append(f"observation {observation.get('fact_id')} has no evidence")
-        for evidence in evidence_items:
-            value = evidence.get("path", "") if isinstance(evidence, dict) else str(evidence)
-            if not value or not _resolved_evidence(run_dir, value):
-                errors.append(f"observation {observation.get('fact_id')} has missing/empty evidence: {value!r}")
-
-    function_ids = {str(row.get("function_id") or row.get("fact_id")) for row in facts.get("functions", [])}
-    test_object_ids = {
-        str(row.get("test_object_id") or row.get("fact_id")) for row in facts.get("test_objects", [])
-    }
-    for element in facts.get("elements", []):
-        element_id = str(element.get("element_id") or element.get("fact_id"))
-        function_id = str(element.get("function_id", ""))
-        if function_id and function_id not in function_ids:
-            errors.append(f"element {element_id} references unknown function {function_id}")
-        if element.get("interactive", True) and element.get("status") not in {"absent", "disabled", "not_applicable"}:
-            if not observations_by_element.get(element_id):
-                errors.append(f"interactive element {element_id} has no executed observation")
-        options = element.get("options") or []
-        if options and element.get("option_set") == "finite":
-            missing = {str(value) for value in options} - observed_option_values[element_id]
-            if missing:
-                errors.append(f"finite options not actually selected for {element_id}: {sorted(missing)}")
-        if element.get("configuration") is True:
-            element_observations = observations_by_element.get(element_id, [])
-            configuration_observations = [row for row in element_observations if row.get("closure") == "configuration"]
-            default_value = element.get("default_value")
-            has_default = any(
-                (row.get("variant") == "default" and row.get("closure") in {"create", "edit", "configuration"})
-                or (default_value is not None and str(row.get("option_value")) == str(default_value))
-                for row in element_observations
-            )
-            if not has_default:
-                errors.append(f"configuration element {element_id} lacks a default/unconfigured baseline closure")
-            for option in options:
-                if default_value is not None and str(option) == str(default_value):
-                    continue
-                if not any(str(row.get("option_value")) == str(option) for row in configuration_observations):
-                    errors.append(f"configuration option {option!r} for {element_id} lacks its own single-factor closure")
-
-    for observation in facts.get("observations", []):
-        closure = observation.get("closure")
-        if closure in {"create", "edit", "configuration"}:
-            required = ["action", "commit_result", "persistence_result", "effect_result", "recovery_result"]
-            missing = [key for key in required if not str(observation.get(key, "")).strip()]
-            if missing:
-                errors.append(f"{closure} observation {observation.get('fact_id')} lacks closure fields: {missing}")
-            if closure == "configuration" and observation.get("combination"):
-                errors.append(f"configuration observation {observation.get('fact_id')} must be single-factor")
-            if observation.get("outcome") != "success":
-                errors.append(f"{closure} observation {observation.get('fact_id')} must record outcome=success")
-            test_object_id = str(observation.get("test_object_id", ""))
-            if not test_object_id or test_object_id not in test_object_ids:
-                errors.append(f"{closure} observation {observation.get('fact_id')} must bind a known test_object_id")
-        if closure == "delete":
-            required = ["action", "commit_result", "effect_result", "test_object_id"]
-            missing = [key for key in required if not str(observation.get(key, "")).strip()]
-            if missing:
-                errors.append(f"delete observation {observation.get('fact_id')} lacks closure fields: {missing}")
-            if str(observation.get("test_object_id", "")) not in test_object_ids:
-                errors.append(f"delete observation {observation.get('fact_id')} must bind a known test_object_id")
-    return errors
 
 
 def load_plan(run_dir: Path) -> dict[str, Any]:
@@ -314,61 +241,6 @@ def load_plan(run_dir: Path) -> dict[str, Any]:
     return value
 
 
-def validate_plan(run_dir: Path) -> list[str]:
-    try:
-        facts = load_facts(run_dir)
-    except ValueError as exc:
-        return [str(exc)]
-    try:
-        plan = load_plan(run_dir)
-    except ValueError as exc:
-        return [str(exc)]
-    errors: list[str] = []
-    if plan.get("source") != "artifacts/discovery/facts.json":
-        errors.append("case-plan.json source must be artifacts/discovery/facts.json")
-    fact_ids = _all_fact_ids(facts)
-    discovered_functions = {
-        str(row.get("function_id") or row.get("fact_id")): row for row in facts.get("functions", [])
-    }
-    planned_functions: set[str] = set()
-    case_ids: set[str] = set()
-    titles: set[tuple[str, str]] = set()
-    for function in plan.get("functions", []):
-        function_id = str(function.get("function_id", "")).strip()
-        if not function_id or function_id not in discovered_functions:
-            errors.append(f"plan references unknown/empty function {function_id!r}")
-        if function_id in planned_functions:
-            errors.append(f"function {function_id} appears more than once in plan")
-        planned_functions.add(function_id)
-        cases = function.get("cases") or []
-        if not cases:
-            errors.append(f"function {function_id} has no planned cases")
-            continue
-        if not any(str(case.get("strategy", "")).lower() == "baseline" for case in cases):
-            errors.append(f"function {function_id} lacks an independent baseline case")
-        for case in cases:
-            case_id = str(case.get("case_id", "")).strip()
-            if not case_id or case_id in case_ids:
-                errors.append(f"case_id is empty or duplicated: {case_id!r}")
-            case_ids.add(case_id)
-            refs = {str(value) for value in case.get("fact_ids", [])}
-            if not refs or not refs <= fact_ids:
-                errors.append(f"planned case {case_id} has missing/unknown fact_ids")
-            if not str(case.get("title", "")).strip():
-                errors.append(f"planned case {case_id} has an empty title")
-            title_key = (function_id, str(case.get("title", "")).strip())
-            if title_key in titles:
-                errors.append(f"function {function_id} has duplicate planned case title: {title_key[1]!r}")
-            titles.add(title_key)
-            if str(case.get("strategy", "")).lower() != "baseline":
-                if not str(case.get("dfx_dimension", "")).strip() or not str(case.get("dfx_scenario", "")).strip():
-                    errors.append(f"DFX case {case_id} lacks dimension or scenario")
-    missing_functions = set(discovered_functions) - planned_functions
-    if missing_functions:
-        errors.append(f"discovered functions missing from plan: {sorted(missing_functions)}")
-    return errors
-
-
 def load_cases(run_dir: Path) -> dict[str, Any]:
     path = artifact_paths(run_dir)["cases"]
     if not path.exists():
@@ -379,157 +251,397 @@ def load_cases(run_dir: Path) -> dict[str, Any]:
     return value
 
 
-def _numbered_lines(values: Any) -> list[str]:
-    if isinstance(values, list):
-        return [str(value).strip() for value in values]
-    return [line.strip() for line in str(values or "").splitlines() if line.strip()]
+def _all_fact_ids(facts: dict[str, Any]) -> set[str]:
+    return {
+        str(row.get("fact_id", ""))
+        for collection in FACT_COLLECTIONS.values()
+        for row in facts.get(collection, [])
+        if row.get("fact_id")
+    }
 
 
-def _normalize_case_prose(values: list[str]) -> tuple[str, ...]:
-    result: list[str] = []
-    for value in values:
-        normalized = re.sub(
-            r"(?i)(?:AI_TEST|CODEX_TEST)(?:[-_][A-Za-z0-9]+)+",
-            "<TEST_OBJECT>",
-            value,
-        )
-        result.append(re.sub(r"\s+", " ", normalized).strip())
-    return tuple(result)
+def _transaction_check_refs(transaction: dict[str, Any]) -> set[str]:
+    refs = {str(value) for value in transaction.get("element_refs", [])}
+    refs.update(str(check.get("element_ref")) for check in transaction.get("checks", []) if check.get("element_ref"))
+    return refs
 
 
-def validate_cases(run_dir: Path) -> list[str]:
+def inspect_discovery(run_dir: Path) -> list[dict[str, str]]:
     try:
         facts = load_facts(run_dir)
     except ValueError as exc:
-        return [str(exc)]
+        return [_issue("missing_fact", "blocker", "facts.json", str(exc), "resume the current discovery session")]
+    issues: list[dict[str, str]] = []
+    for key in ("pages", "functions", "elements", "transactions"):
+        if not facts.get(key):
+            issues.append(_issue("missing_fact", "blocker", "facts.json", f"no {key} were recorded", "record the missing page fact once"))
+    function_refs = {str(row.get("fact_id")) for row in facts.get("functions", [])}
+    element_refs = {str(row.get("fact_id")) for row in facts.get("elements", [])}
+    test_object_refs = {str(row.get("fact_id")) for row in facts.get("test_objects", [])}
+    transaction_by_element: dict[str, list[dict[str, Any]]] = {ref: [] for ref in element_refs}
+    for transaction in facts.get("transactions", []):
+        for ref in _transaction_check_refs(transaction):
+            transaction_by_element.setdefault(ref, []).append(transaction)
+    for page in facts.get("pages", []):
+        if page.get("final_scan_status") != "stable":
+            issues.append(_issue("missing_fact", "blocker", "facts.json", f"page {page['fact_id']} has no stable final scan", "perform one final full scan"))
+        if page.get("unhandled_element_refs"):
+            issues.append(_issue("missing_fact", "blocker", "facts.json", f"page {page['fact_id']} still has unhandled elements", "explore only the listed elements"))
+    for element in facts.get("elements", []):
+        ref = str(element.get("fact_id"))
+        function_ref = str(element.get("function_ref", ""))
+        if function_ref and function_ref not in function_refs:
+            issues.append(_issue("broken_reference", "blocker", "facts.json", f"element {ref} references unknown function {function_ref}", "correct this element relation"))
+        if element.get("interactive", True) and element.get("status") not in NON_ACTIONABLE_STATUSES and not transaction_by_element.get(ref):
+            issues.append(_issue("missing_fact", "blocker", "facts.json", f"interactive element {ref} was not actually operated", "execute one related function transaction"))
+        options = [str(value) for value in element.get("options", [])]
+        if element.get("option_set") == "finite" and options:
+            selected = {
+                str(check.get("option_value"))
+                for transaction in transaction_by_element.get(ref, [])
+                for check in transaction.get("checks", [])
+                if str(check.get("element_ref", ref)) == ref and check.get("option_value") is not None
+            }
+            missing = set(options) - selected
+            if missing:
+                issues.append(_issue("missing_fact", "blocker", "facts.json", f"finite options not selected for {ref}: {sorted(missing)}", "select only the missing options in the current session"))
+        if element.get("configuration") is True:
+            checks = [
+                check
+                for transaction in transaction_by_element.get(ref, [])
+                for check in transaction.get("checks", [])
+                if str(check.get("element_ref", ref)) == ref
+            ]
+            default = element.get("default_value")
+            values = {str(check.get("option_value")): check for check in checks if check.get("option_value") is not None}
+            for option in options:
+                check = values.get(option)
+                required = ("commit_result", "persistence_result", "effect_result", "recovery_result")
+                if not check or any(not str(check.get(field, "")).strip() for field in required):
+                    issues.append(_issue("missing_fact", "blocker", "facts.json", f"configuration value {option!r} for {ref} lacks a save/reopen/effect/recovery closure", "execute this single configuration value once"))
+            if default is not None and str(default) not in values:
+                issues.append(_issue("missing_fact", "blocker", "facts.json", f"configuration element {ref} lacks its default baseline", "verify the default/unconfigured value"))
+    for transaction in facts.get("transactions", []):
+        kind = transaction.get("transaction_type")
+        if kind in {"create", "edit", "configuration", "delete"}:
+            if transaction.get("outcome") != "success":
+                issues.append(_issue("missing_fact", "blocker", "facts.json", f"{kind} transaction {transaction['fact_id']} did not complete successfully", "resume only this business transaction"))
+            if transaction.get("test_object_ref") not in test_object_refs:
+                issues.append(_issue("broken_reference", "blocker", "facts.json", f"{kind} transaction {transaction['fact_id']} has no current-run test object", "bind the current-run test object"))
+        if kind in {"create", "edit", "delete"}:
+            required = ["commit_result", "effect_result"]
+            if kind in {"create", "edit"}:
+                required.append("persistence_result")
+            if kind == "edit":
+                required.append("recovery_result")
+            for field in required:
+                if not str(transaction.get(field, "")).strip() and not any(str(check.get(field, "")).strip() for check in transaction.get("checks", [])):
+                    issues.append(_issue("missing_fact", "blocker", "facts.json", f"{kind} transaction {transaction['fact_id']} lacks {field}", "complete only this business closure"))
+        if kind == "configuration" and transaction.get("combination"):
+            issues.append(_issue("invalid_scope", "repairable", "facts.json", f"configuration transaction {transaction['fact_id']} uses a combination", "retain single-factor checks only"))
+    for test_object in facts.get("test_objects", []):
+        if test_object.get("owner") == "current_run" and test_object.get("state") not in {"cleaned", "deleted", "retained_for_followup"}:
+            issues.append(_issue("unsafe_lifecycle", "blocker", "facts.json", f"current-run test object {test_object['fact_id']} has no safe final state", "clean it up or explicitly retain it for follow-up"))
+    return issues
+
+
+def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
     try:
-        plan = load_plan(run_dir)
-        document = load_cases(run_dir)
+        facts, plan = load_facts(run_dir), load_plan(run_dir)
     except ValueError as exc:
-        return [str(exc)]
-    errors = validate_plan(run_dir)
-    if document.get("source_plan") != "case-plan.json":
-        errors.append("function-cases.json source_plan must be case-plan.json")
+        return [_issue("missing_artifact", "blocker", "case-plan.json", str(exc), "create the missing artifact from facts")]
+    issues: list[dict[str, str]] = []
+    if plan.get("source") != "facts.json":
+        issues.append(_issue("invalid_source", "repairable", "case-plan.json", "plan source must be facts.json", "repair the source declaration"))
     fact_ids = _all_fact_ids(facts)
-    planned: dict[str, tuple[str, dict[str, Any]]] = {}
-    function_names: dict[str, str] = {}
+    functions = {str(row["fact_id"]): row for row in facts.get("functions", [])}
+    transactions = {str(row["fact_id"]): row for row in facts.get("transactions", [])}
+    elements = {str(row["fact_id"]): row for row in facts.get("elements", [])}
+    planned_functions: set[str] = set()
+    covered_elements_by_function: dict[str, set[str]] = {}
+    case_ids: set[str] = set()
+    titles: set[tuple[str, str]] = set()
+    assigned_checks: set[tuple[str, int]] = set()
     for function in plan.get("functions", []):
-        fid = str(function.get("function_id", ""))
-        function_names[fid] = str(function.get("name", "")).strip()
+        function_ref = str(function.get("function_ref", ""))
+        if function_ref not in functions:
+            issues.append(_issue("broken_reference", "repairable", "case-plan.json", f"unknown function {function_ref!r}", "repair this function mapping", function_ref=function_ref))
+        if function_ref in planned_functions:
+            issues.append(_issue("duplicate_mapping", "repairable", "case-plan.json", f"function {function_ref} appears more than once", "merge this function block", function_ref=function_ref))
+        planned_functions.add(function_ref)
+        cases = function.get("cases", [])
+        function_elements = covered_elements_by_function.setdefault(function_ref, set())
+        if not cases or not any(str(case.get("strategy", "")).lower() == "baseline" for case in cases):
+            issues.append(_issue("missing_baseline", "repairable", "case-plan.json", f"function {function_ref} lacks a baseline intent", "add its observed baseline intent", function_ref=function_ref))
+        for case in cases:
+            case_id = str(case.get("case_id", "")).strip()
+            if not case_id or case_id in case_ids:
+                issues.append(_issue("invalid_case_id", "repairable", "case-plan.json", f"empty or duplicate case ID {case_id!r}", "assign one stable case ID", function_ref=function_ref, case_id=case_id))
+            case_ids.add(case_id)
+            refs = {str(value) for value in case.get("fact_refs", [])}
+            function_elements.update(refs & set(elements))
+            if not refs or not refs <= fact_ids:
+                issues.append(_issue("broken_reference", "repairable", "case-plan.json", f"case {case_id} has missing or unknown facts", "repair only this case mapping", function_ref=function_ref, case_id=case_id))
+            if not str(case.get("title", "")).strip():
+                issues.append(_issue("empty_title", "repairable", "case-plan.json", f"case {case_id} has no intent title", "write the concrete intent", function_ref=function_ref, case_id=case_id))
+            title_key = (function_ref, str(case.get("title", "")).strip())
+            if title_key in titles:
+                issues.append(_issue("duplicate_title", "repairable", "case-plan.json", f"function {function_ref} repeats planned title {title_key[1]!r}", "merge or differentiate the actual intent", function_ref=function_ref, case_id=case_id))
+            titles.add(title_key)
+            if str(case.get("strategy", "")).lower() != "baseline" and (
+                not str(case.get("dfx_dimension", "")).strip() or not str(case.get("dfx_scenario", "")).strip()
+            ):
+                issues.append(_issue("missing_dfx", "repairable", "case-plan.json", f"DFX case {case_id} lacks dimension or scenario", "complete DFX while planning", function_ref=function_ref, case_id=case_id))
+            for transaction_ref, indexes in case.get("covered_checks", {}).items():
+                transaction = transactions.get(str(transaction_ref))
+                if not transaction:
+                    issues.append(_issue("broken_reference", "repairable", "case-plan.json", f"case {case_id} covers unknown transaction {transaction_ref}", "repair only this check mapping", function_ref=function_ref, case_id=case_id))
+                    continue
+                if str(transaction.get("function_ref", "")) != function_ref:
+                    issues.append(_issue("wrong_function", "repairable", "case-plan.json", f"case {case_id} covers a transaction owned by another function", "assign it to its owning function", function_ref=function_ref, case_id=case_id))
+                for index in indexes:
+                    numeric = int(index)
+                    if numeric < 1 or numeric > len(transaction.get("checks", [])):
+                        issues.append(_issue("broken_reference", "repairable", "case-plan.json", f"case {case_id} covers invalid check {transaction_ref}#{numeric}", "repair only this check index", function_ref=function_ref, case_id=case_id))
+                        continue
+                    assigned_checks.add((str(transaction_ref), numeric))
+                    check = transaction["checks"][numeric - 1]
+                    if check.get("element_ref"):
+                        function_elements.add(str(check["element_ref"]))
+    missing_functions = set(functions) - planned_functions
+    if missing_functions:
+        issues.append(_issue("missing_function", "repairable", "case-plan.json", f"functions missing from plan: {sorted(missing_functions)}", "plan only the missing function blocks"))
+    for element_ref, element in elements.items():
+        function_ref = str(element.get("function_ref", ""))
+        if element.get("status") not in NON_ACTIONABLE_STATUSES and element_ref not in covered_elements_by_function.get(function_ref, set()):
+            issues.append(_issue("missing_element_coverage", "repairable", "case-plan.json", f"element {element_ref} is not covered by a case owned by function {function_ref}", "assign it within its owning function", function_ref=function_ref))
+    non_case = {
+        (str(item.get("transaction_ref")), int(index))
+        for item in plan.get("non_case_checks", [])
+        for index in item.get("check_indexes", [])
+        if item.get("disposition") in {"performance", "risk", "not_applicable"}
+    }
+    all_checks = {
+        (str(transaction["fact_id"]), index)
+        for transaction in facts.get("transactions", [])
+        for index, _ in enumerate(transaction.get("checks", []), 1)
+    }
+    unassigned = all_checks - assigned_checks - non_case
+    if unassigned:
+        issues.append(_issue("unassigned_check", "repairable", "case-plan.json", f"transaction checks have no planned disposition: {sorted(unassigned)}", "assign only these checks to a case or explicit non-case disposition"))
+    return issues
+
+
+def _normalize_menu_path(value: str) -> str:
+    return re.sub(r"\s*(?:>|/|\\|→)\s*", "-", value.strip())
+
+
+def _normalize_core_prose(steps: list[dict[str, Any]]) -> tuple[tuple[str, str], ...]:
+    normalized: list[tuple[str, str]] = []
+    core_steps = steps[1:] if steps and "进入" in str(steps[0].get("action", "")) else steps
+    for step in core_steps:  # common menu navigation is intentionally ignored
+        pair: list[str] = []
+        for key in ("action", "expected"):
+            text = re.sub(r"(?i)(?:AI_TEST|CODEX_TEST)(?:[-_][A-Za-z0-9]+)+", "<TEST_OBJECT>", str(step.get(key, "")))
+            pair.append(re.sub(r"\s+", " ", text).strip())
+        normalized.append((pair[0], pair[1]))
+    return tuple(normalized)
+
+
+def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
+    try:
+        facts, plan, document = load_facts(run_dir), load_plan(run_dir), load_cases(run_dir)
+    except ValueError as exc:
+        return [_issue("missing_artifact", "blocker", "function-cases.json", str(exc), "create the missing artifact from the plan")]
+    issues: list[dict[str, str]] = []
+    if document.get("source_plan") != "case-plan.json":
+        issues.append(_issue("invalid_source", "repairable", "function-cases.json", "case source_plan must be case-plan.json", "repair the source declaration"))
+    fact_ids = _all_fact_ids(facts)
+    planned: dict[str, tuple[str, dict[str, Any], str]] = {}
+    for function in plan.get("functions", []):
+        function_ref = str(function.get("function_ref", ""))
+        function_name = str(function.get("name", ""))
         for case in function.get("cases", []):
-            planned[str(case.get("case_id", ""))] = (fid, case)
+            planned[str(case.get("case_id", ""))] = (function_ref, case, function_name)
     actual_ids: set[str] = set()
-    function_closed: set[str] = set()
+    closed_functions: set[str] = set()
     previous_function = ""
-    normalized_signatures: dict[tuple[tuple[str, ...], tuple[str, ...]], str] = {}
+    signatures: dict[tuple[str, tuple[tuple[str, str], ...]], str] = {}
+    menu_path = _normalize_menu_path(str(facts.get("scope", {}).get("menu_path") or facts.get("scope", {}).get("module_path", "")))
     for case in document.get("cases", []):
         case_id = str(case.get("case_id", "")).strip()
-        function_id = str(case.get("function_id", "")).strip()
+        function_ref = str(case.get("function_ref", "")).strip()
         title = str(case.get("title", "")).strip()
+        context = {"function_ref": function_ref, "case_id": case_id}
         if case_id not in planned:
-            errors.append(f"case {case_id!r} is not present in case-plan.json")
-        elif planned[case_id][0] != function_id:
-            errors.append(f"case {case_id} belongs to a different function than planned")
+            issues.append(_issue("plan_mismatch", "repairable", "function-cases.json", f"case {case_id!r} is not planned", "remove or plan this case before writing", **context))
+            planned_case, function_name = {}, ""
+        else:
+            planned_function, planned_case, function_name = planned[case_id]
+            if planned_function != function_ref:
+                issues.append(_issue("plan_mismatch", "repairable", "function-cases.json", f"case {case_id} belongs to the wrong function", "regenerate only this function block", **context))
         if case_id in actual_ids:
-            errors.append(f"duplicate case_id: {case_id}")
+            issues.append(_issue("duplicate_case", "repairable", "function-cases.json", f"duplicate case {case_id}", "retain the planned case once", **context))
         actual_ids.add(case_id)
-        if previous_function and function_id != previous_function:
-            function_closed.add(previous_function)
-        if function_id in function_closed:
-            errors.append(f"function cases are not contiguous: {function_id}")
-        previous_function = function_id
-        prefix = function_names.get(function_id, "")
-        if not title or (prefix and not title.startswith(prefix + "-")):
-            errors.append(f"case {case_id} title must be '功能点-当前用例标题'")
-        steps = _numbered_lines(case.get("steps"))
-        expected = _numbered_lines(case.get("expected_results"))
-        if not isinstance(case.get("steps"), list) or not isinstance(case.get("expected_results"), list):
-            errors.append(f"case {case_id} steps and expected_results must be JSON arrays")
-        if not steps or not expected or len(steps) != len(expected):
-            errors.append(f"case {case_id} steps and expected_results must be non-empty and one-to-one")
-        prose = "\n".join(steps + expected + [title])
-        if INTERNAL_STEP_MARKERS.search(prose):
-            errors.append(f"case {case_id} exposes implementation identifiers in executable prose")
+        if previous_function and function_ref != previous_function:
+            closed_functions.add(previous_function)
+        if function_ref in closed_functions:
+            issues.append(_issue("function_order", "repairable", "function-cases.json", f"function {function_ref} is split into multiple blocks", "move its cases into one contiguous block", **context))
+        previous_function = function_ref
+        if not title or (function_name and not title.startswith(function_name + "-")):
+            issues.append(_issue("invalid_title", "repairable", "function-cases.json", f"case {case_id} title must be '功能点-具体场景'", "repair this title", **context))
+        for field in ("priority", "test_type", "test_data"):
+            if not str(case.get(field, "")).strip():
+                issues.append(_issue("empty_field", "repairable", "function-cases.json", f"case {case_id} has empty {field}", "complete this field with concrete content", **context))
+        preconditions = case.get("preconditions")
+        if not isinstance(preconditions, list) or not preconditions or any(not str(value).strip() for value in preconditions):
+            issues.append(_issue("empty_field", "repairable", "function-cases.json", f"case {case_id} has no explicit preconditions", "write concrete conditions or '无特殊前置条件'", **context))
+        planned_title = str(planned_case.get("title", "")).strip()
+        if function_name and planned_title and title != f"{function_name}-{planned_title}":
+            issues.append(_issue("plan_mismatch", "repairable", "function-cases.json", f"case {case_id} title differs from its planned intent", "restore this planned title", **context))
+        steps = case.get("steps")
+        if not isinstance(steps, list) or not steps:
+            issues.append(_issue("invalid_steps", "repairable", "function-cases.json", f"case {case_id} has no paired steps", "write paired action and expected entries", **context))
+            steps = []
+        for index, step in enumerate(steps, 1):
+            if not isinstance(step, dict) or not str(step.get("action", "")).strip() or not str(step.get("expected", "")).strip():
+                issues.append(_issue("invalid_steps", "repairable", "function-cases.json", f"case {case_id} step {index} lacks action or expected", "repair only this paired step", **context))
+        if steps:
+            first_action = str(steps[0].get("action", ""))
+            if "进入" not in first_action or (menu_path and menu_path not in _normalize_menu_path(first_action)):
+                issues.append(_issue("missing_navigation", "repairable", "function-cases.json", f"case {case_id} must start from complete menu path {menu_path!r}", "repair its first navigation step", **context))
+        prose = "\n".join(
+            [title, str(case.get("test_data", ""))]
+            + [str(value) for value in case.get("preconditions", [])]
+            + [str(step.get(key, "")) for step in steps for key in ("action", "expected")]
+        )
+        if INTERNAL_PROSE.search(prose):
+            issues.append(_issue("internal_prose", "repairable", "function-cases.json", f"case {case_id} exposes an internal identifier or page-tool term", "rewrite only this executable prose", **context))
         if any(marker.lower() in prose.lower() for marker in SCREENSHOT_MARKERS):
-            errors.append(f"case {case_id} must assert page behavior instead of asking for screenshots")
+            issues.append(_issue("screenshot_step", "repairable", "function-cases.json", f"case {case_id} asks the tester to take a screenshot", "replace it with an observable assertion", **context))
         if any(marker.lower() in prose.lower() for marker in PLACEHOLDER_MARKERS):
-            errors.append(f"case {case_id} contains placeholder text")
-        refs = {str(value) for value in case.get("fact_ids", [])}
-        if not refs or not refs <= fact_ids:
-            errors.append(f"case {case_id} has missing/unknown fact_ids")
-        signature = (_normalize_case_prose(steps), _normalize_case_prose(expected))
-        if signature in normalized_signatures:
-            errors.append(f"case {case_id} duplicates steps and expected results of {normalized_signatures[signature]}")
-        normalized_signatures[signature] = case_id
+            issues.append(_issue("placeholder", "repairable", "function-cases.json", f"case {case_id} contains placeholder prose", "supply concrete masked data", **context))
+        refs = {str(value) for value in case.get("fact_refs", [])}
+        planned_refs = {str(value) for value in planned_case.get("fact_refs", [])}
+        if not refs or not refs <= fact_ids or not planned_refs <= refs:
+            issues.append(_issue("ungrounded_case", "blocker", "function-cases.json", f"case {case_id} is not grounded in all planned facts", "restore only the missing fact mapping; do not invent an expected result", **context))
+        signature = _normalize_core_prose(steps)
+        signature_key = (function_ref, signature)
+        if signature and signature_key in signatures:
+            issues.append(_issue("duplicate_core", "repairable", "function-cases.json", f"case {case_id} duplicates the core actions and results of {signatures[signature_key]}", "rewrite or merge this planned scenario", **context))
+        if signature:
+            signatures[signature_key] = case_id
+        for field in ("dfx_dimension", "dfx_scenario"):
+            if str(case.get(field, "")).strip() != str(planned_case.get(field, "")).strip():
+                issues.append(_issue("plan_mismatch", "repairable", "function-cases.json", f"case {case_id} {field} differs from plan", "restore this planned value", **context))
     missing = set(planned) - actual_ids
     if missing:
-        errors.append(f"planned cases were not written: {sorted(missing)}")
-    return errors
+        issues.append(_issue("missing_case", "repairable", "function-cases.json", f"planned cases were not written: {sorted(missing)}", "generate only the missing cases"))
+    return issues
+
+
+def _issue(code: str, severity: str, artifact: str, message: str, repair: str, **context: str) -> dict[str, str]:
+    return {"code": code, "severity": severity, "artifact": artifact, "message": message, "local_repair": repair, **context}
+
+
+def validate_discovery(run_dir: Path) -> list[str]:
+    return [item["message"] for item in inspect_discovery(run_dir)]
+
+
+def validate_plan(run_dir: Path) -> list[str]:
+    return [item["message"] for item in inspect_plan(run_dir)]
+
+
+def validate_cases(run_dir: Path) -> list[str]:
+    return [item["message"] for item in inspect_cases(run_dir)]
+
+
+def _save_with_construction_check(path: Path, value: dict[str, Any], inspector: Any, run_dir: Path) -> dict[str, Any]:
+    """Persist one artifact only when its generation-time constraints hold."""
+    old = path.read_bytes() if path.exists() else None
+    _write_json(path, value)
+    issues = inspector(run_dir)
+    if issues:
+        if old is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(old)
+        messages = " | ".join(item["message"] for item in issues[:10])
+        raise ValueError(f"construction needs a local correction: {messages}")
+    return value
+
+
+def save_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    return _save_with_construction_check(artifact_paths(run_dir)["plan"], plan, inspect_plan, run_dir)
+
+
+def save_cases(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]:
+    return _save_with_construction_check(artifact_paths(run_dir)["cases"], cases, inspect_cases, run_dir)
 
 
 def review_run(run_dir: Path) -> dict[str, Any]:
+    """Run one read-only semantic audit and write its compact result."""
     facts = load_facts(run_dir)
-    discovery_errors = validate_discovery(run_dir)
-    plan_errors = validate_plan(run_dir)
-    case_errors = validate_cases(run_dir)
-    plan = load_plan(run_dir) if artifact_paths(run_dir)["plan"].exists() else {"functions": []}
-    cases = load_cases(run_dir) if artifact_paths(run_dir)["cases"].exists() else {"cases": []}
-    planned_fact_ids = {
-        str(value)
-        for function in plan.get("functions", [])
-        for case in function.get("cases", [])
-        for value in case.get("fact_ids", [])
-    }
-    case_fact_ids = {str(value) for case in cases.get("cases", []) for value in case.get("fact_ids", [])}
-    executable_fact_ids = {
-        str(row.get("fact_id")) for key in ("functions", "elements", "observations") for row in facts.get(key, [])
-        if row.get("status") not in {"absent", "disabled", "not_applicable"}
-    }
-    trace_errors: list[str] = []
-    missing_in_plan = executable_fact_ids - planned_fact_ids
-    if missing_in_plan:
-        trace_errors.append(f"facts not covered by plan: {sorted(missing_in_plan)}")
-    missing_in_cases = planned_fact_ids - case_fact_ids
-    if missing_in_cases:
-        trace_errors.append(f"planned facts not covered by cases: {sorted(missing_in_cases)}")
-    errors = list(dict.fromkeys(discovery_errors + plan_errors + case_errors + trace_errors))
+    plan = load_plan(run_dir)
+    cases = load_cases(run_dir)
+    issues = inspect_discovery(run_dir) + inspect_plan(run_dir) + inspect_cases(run_dir)
+    unresolved = [
+        item for item in facts.get("open_items", [])
+        if item.get("status") not in {"resolved", "accepted", "closed"}
+    ]
+    for item in unresolved:
+        category = item.get("category")
+        material = item.get("material", True)
+        if category in {"external_question", "blocked_condition"} and material:
+            issues.append(_issue("open_material_fact", "blocker", "facts.json", str(item.get("description") or item.get("fact_id")), "resolve externally once or record the real blocked condition"))
+        else:
+            issues.append(_issue("open_note", "warning", "facts.json", str(item.get("description") or item.get("fact_id")), "retain as a delivery note"))
+    issues = list({json.dumps(item, ensure_ascii=False, sort_keys=True): item for item in issues}.values())
+    if any(item["severity"] == "blocker" for item in issues):
+        status = "blocked_by_fact"
+    elif any(item["severity"] == "repairable" for item in issues):
+        status = "needs_local_fix"
+    elif issues:
+        status = "ready_with_notes"
+    else:
+        status = "ready"
     review = {
         "schema_version": SCHEMA_VERSION,
         "reviewed_at": _now(),
-        "status": "passed" if not errors else "failed",
+        "status": status,
         "counts": {
-            "facts": facts.get("fact_count", 0),
-            "planned_cases": sum(len(f.get("cases", [])) for f in plan.get("functions", [])),
+            "functions": len(facts.get("functions", [])),
+            "transactions": len(facts.get("transactions", [])),
+            "planned_cases": sum(len(function.get("cases", [])) for function in plan.get("functions", [])),
             "written_cases": len(cases.get("cases", [])),
-            "pending_gaps": len(facts.get("pending", [])),
+            "open_items": len(unresolved),
         },
-        "errors": errors,
-        "gap_list": facts.get("pending", []) + facts.get("risks", []),
+        "sources": {
+            name: artifact_digest(artifact_paths(run_dir)[name])
+            for name in ("facts", "plan", "cases")
+        },
+        "issues": issues,
     }
     _write_json(artifact_paths(run_dir)["review"], review)
     return review
 
 
 def pipeline_status(run_dir: Path) -> dict[str, Any]:
+    """Describe resumable progress without acting as a phase gate."""
     paths = artifact_paths(run_dir)
-    if not paths["scope"].exists():
-        return {"stage": "init", "state": "required", "next_action": "init-run"}
-    discovery_errors = validate_discovery(run_dir)
-    if discovery_errors:
-        return {"stage": "discovery", "state": "in_progress", "errors": discovery_errors, "next_action": "continue page exploration"}
+    if not paths["facts"].exists():
+        return {"stage": "scope_binding", "state": "transparent", "next_action": "invoke the Skill with a target menu path"}
+    facts = load_facts(run_dir)
     if not paths["plan"].exists():
-        return {"stage": "plan", "state": "required", "next_action": "write case-plan.json from facts.json"}
-    plan_errors = validate_plan(run_dir)
-    if plan_errors:
-        return {"stage": "plan", "state": "needs_local_repair", "errors": plan_errors, "next_action": "repair case-plan.json"}
+        return {"stage": "discovery", "state": "continue", "counts": {key: len(facts.get(key, [])) for key in FACT_COLLECTIONS.values()}, "next_action": "continue scanning and function transactions, then compile the plan"}
     if not paths["cases"].exists():
-        return {"stage": "cases", "state": "required", "next_action": "write function-cases.json from facts.json and case-plan.json"}
-    case_errors = validate_cases(run_dir)
-    if case_errors:
-        return {"stage": "cases", "state": "needs_local_repair", "errors": case_errors, "next_action": "repair affected cases only"}
+        return {"stage": "planning", "state": "continue", "next_action": "write paired executable cases in plan order"}
     if not paths["review"].exists():
-        return {"stage": "review", "state": "required", "next_action": "review-run"}
+        return {"stage": "case_writing", "state": "continue", "next_action": "run the single cross-artifact review"}
     review = _read_json(paths["review"])
-    if review.get("status") != "passed":
-        return {"stage": "review", "state": "needs_local_repair", "errors": review.get("errors", []), "next_action": "repair affected upstream artifact and review once"}
-    return {"stage": "delivery", "state": "ready", "next_action": "complete-deliverables"}
+    return {"stage": "review", "state": review.get("status"), "issues": review.get("issues", []), "next_action": "deliver" if review.get("status") in {"ready", "ready_with_notes"} else "apply only the listed local repair"}
+
+
+# Kept as a Python compatibility alias for integrations; it is intentionally absent
+# from the user-facing CLI and documentation.
+init_run = ensure_run

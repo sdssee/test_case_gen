@@ -17,12 +17,12 @@
         "type": "array",
         "items": {
           "type": "object",
-          "required": ["id", "data", "evidence"],
+          "required": ["id", "data"],
           "additionalProperties": false,
           "properties": {
             "id": {"type": "string", "pattern": "^FACT-[0-9a-f]{20}$"},
             "data": {"type": "object", "additionalProperties": {"type": "string"}},
-            "evidence": {"type": "object", "additionalProperties": {"type": "string"}}
+            "source_note": {"type": "string"}
           }
         }
       }

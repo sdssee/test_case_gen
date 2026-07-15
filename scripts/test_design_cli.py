@@ -12,6 +12,7 @@ from test_design.session_runtime import (
     append_events,
     artifact_paths,
     build_plan_skeleton,
+    checkpoint_facts,
     compile_facts,
     ensure_run,
     pipeline_status,
@@ -37,7 +38,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Internal helpers for one-session test design")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    record = sub.add_parser("record", help="Atomically record complete facts or transactions")
+    record = sub.add_parser("record", help="Record validated facts or one complete transaction")
     record.add_argument("--run-dir", required=True, type=Path)
     record.add_argument("--file", type=Path)
     record.add_argument("--module-path", default="", help="Required only on the first record")
@@ -46,6 +47,9 @@ def main() -> int:
 
     compile_command = sub.add_parser("compile", help="Rebuild the compact facts view once")
     compile_command.add_argument("--run-dir", required=True, type=Path)
+
+    checkpoint = sub.add_parser("checkpoint", help="Compile facts and summarize discovery readiness once")
+    checkpoint.add_argument("--run-dir", required=True, type=Path)
 
     skeleton = sub.add_parser("plan-skeleton", help="Build the factual plan skeleton without another artifact")
     skeleton.add_argument("--run-dir", required=True, type=Path)
@@ -84,11 +88,19 @@ def main() -> int:
         events = payload if isinstance(payload, list) else [payload]
         if not all(isinstance(item, dict) for item in events):
             raise ValueError("record payload must be an object or an array of objects")
-        append_events(args.run_dir, events)
-        facts = compile_facts(args.run_dir)
-        _print({"recorded": len(events), "fact_count": facts["fact_count"]})
+        recorded = append_events(args.run_dir, events)
+        should_checkpoint = any(
+            item.get("kind") == "page" and item.get("data", {}).get("final_scan_status") == "stable"
+            for item in recorded
+        )
+        result = {"recorded": len(recorded), "facts": [item["fact_id"] for item in recorded], "checkpointed": should_checkpoint}
+        if should_checkpoint:
+            result["checkpoint"] = checkpoint_facts(args.run_dir)
+        _print(result)
     elif args.command == "compile":
         _print(compile_facts(args.run_dir))
+    elif args.command == "checkpoint":
+        _print(checkpoint_facts(args.run_dir))
     elif args.command == "plan-skeleton":
         _print(build_plan_skeleton(args.run_dir))
     elif args.command == "write-plan":

@@ -31,7 +31,7 @@
 ```text
 调用 Skill并理解范围
   → 扫描页面、执行连续功能事务、操作后局部重扫
-  → events.jsonl 编译为 facts.json
+  → 页面checkpoint集中刷新 facts.json
   → 自动形成事实计划骨架，识别独立功能并在 case-plan.json 中左移展开 DFX
   → 按计划生成配对步骤 function-cases.json
   → 执行一次轻量跨产物 Review
@@ -58,12 +58,13 @@
 
 ## Review 如何避免事后拒绝
 
-- 事务记录前先校验完整的 checks，并将一个完整事务写成一条事件；中断恢复只处理残缺尾行，不把文件追加误称为严格事务原子性。
-- 计划只能引用已存在的事实和检查点。
+- 事务在记录现场完成闭环校验；页面checkpoint时才刷新facts，恢复时自动重建落后的facts。
+- 计划只维护唯一 `check_assignments`；fact_refs、元素覆盖和DFX关联由系统派生。
 - 新事实编号由运行时生成；批次内使用局部引用，避免模型手写内部 ID。
-- 用例只能使用计划中的 Case ID，并以 `action+expected+source_check` 配对保存；内部来源不写入 Excel。
+- 模型只写 `action+expected`，系统自动注入内部source_check；结构化结果锚点允许等价、具体的预期表述。
 - 计划和用例通过内部原子写入接口在生成当下完成结构约束，错误产物不会先落盘等待 Review 拒绝。
 - Review 只检查 facts→plan→cases 的跨产物语义一致性。
+- Review和状态使用业务语义指纹，时间戳、重新编译和JSON格式变化不会触发重复Review。
 - 状态只有 `ready`、`ready_with_notes`、`needs_local_fix`、`blocked_by_fact`。
 - 问题只修当前 Case、当前功能或一个缺失事务，不全量回退、不自动循环。
 
@@ -99,6 +100,7 @@
 
 ```powershell
 scripts/run-test-design.ps1 status --run-dir <run-dir>
+scripts/run-test-design.ps1 checkpoint --run-dir <run-dir>
 scripts/run-test-design.ps1 plan-skeleton --run-dir <run-dir>
 scripts/run-test-design.ps1 review --run-dir <run-dir>
 scripts/run-test-design.ps1 deliver --run-dir <run-dir> --project-root .

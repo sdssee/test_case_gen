@@ -15,9 +15,9 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 1. 在同一浏览器上下文扫描 DOM、可访问性树和可见状态，动态识别页面实际能力。
 2. 扫描与功能事务交替：操作后局部重扫，结构明显变化或结束时全量重扫；新元素加入当前或后续事务。
 3. 有限选项逐项实际选择；CRUD 与配置项按手工操作完成提交、重开、实际生效、恢复或清理。配置只做单因素，不做组合。
-4. 一个功能事务完成并校验后，作为一条事件记录多个 `checks`；新事实 ID 由运行时分配，同批关系使用局部引用。从 `events.jsonl` 编译七类紧凑事实到 `facts.json`；该追加不宣称文件系统事务原子性，恢复时只丢弃被中断的最后一个残缺事件。证据仅作可选诊断，不参与完成判断和后续生成。
-5. 从事实自动生成计划骨架，列出独立功能、页面、元素、事务检查点和事实驱动的 DFX 提示。模型补充基线、适用 DFX、提示处置与检查点分配后，通过内部 `write-plan` 原子写入 `case-plan.json`。DFX 在本次计划生成中处理，不留到 Review；一个事务可形成一个或多个 Case，不按点击数机械拆分。
-6. 严格按计划顺序生成用例，通过内部 `write-cases` 原子写入 `function-cases.json`。页面事实的实际菜单路径生成第一步，例如“进入告警管理-告警列表”；其余每个步骤使用 `action+expected+source_check`，一个检查结果对应一个可判定步骤。内部来源不进入交付正文。生成时发现结构问题只修当前内容，不留到 Review 才拒绝。
+4. 一个功能事务先在现场校验完整性，再作为一条事件记录多个 `checks`；CRUD和配置闭环不完整时不写入。新事实 ID 由运行时分配，同批关系使用局部引用。完成一个页面或恢复检查点时才编译 `facts.json` 并形成一次分组完成摘要；恢复发现facts落后时自动重建，不要求手工补编译。
+5. 从事实自动生成计划骨架，按元素级、事务级和功能级给出事实驱动的 DFX 提示。模型只补充Case意图，并在唯一 `check_assignments` 中把每个检查点分配给Case或performance、risk、not_applicable；其他引用和覆盖关系由系统派生。DFX在本次计划生成中考虑，不留到Review。
+6. 严格按计划顺序生成用例，通过内部 `write-cases` 原子写入 `function-cases.json`。页面事实生成完整导航；模型只写action+expected，系统按分配顺序注入内部 `source_check` 并派生 `fact_refs`。预期使用结构化结果锚点校验，不要求复制事实原句。
 7. 运行一次跨产物 Review。只允许修正受影响 Case、功能映射或一个确实缺失的页面事务；禁止全流程回退和自动循环。
 8. 从同一 `function-cases.json` 独立生成正式测试设计 Excel 和测试系统导入 Excel。
 
@@ -33,7 +33,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 
 ## 阶段写入边界
 
-- discovery：只写 `events.jsonl` 与 `facts.json`。
+- discovery：只写 `events.jsonl`，页面checkpoint时刷新 `facts.json`。
 - plan：只读 facts，只写 `case-plan.json`。
 - cases：只读 facts 与 plan，只写 `function-cases.json`。
 - review：只读上游，只写 `review.json`。

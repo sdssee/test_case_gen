@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -18,8 +19,11 @@ from test_design.session_runtime import (
     append_events,
     artifact_paths,
     build_plan_skeleton,
+    checkpoint_facts,
     compile_facts,
     ensure_run,
+    load_facts,
+    load_cases,
     pipeline_status,
     review_run,
     save_cases,
@@ -50,17 +54,18 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                 "function_ref": "FN-VIEW", "element_refs": ["EL-VIEW-MODE"],
                 "transaction_type": "selection", "recovery_result": "恢复标准视图",
                 "checks": [
-                    {"element_ref": "EL-VIEW-MODE", "action": "选择精简视图", "option_value": "精简", "result": "列表仅显示核心告警字段"},
-                    {"element_ref": "EL-VIEW-MODE", "action": "选择标准视图", "option_value": "标准", "result": "列表显示默认告警字段"},
-                    {"element_ref": "EL-VIEW-MODE", "action": "选择详细视图", "option_value": "详细", "result": "列表显示全部可见告警字段"},
-                    {"element_ref": "EL-VIEW-MODE", "action": "选择仅未确认", "option_value": "仅未确认", "result": "列表只显示未确认告警"},
-                    {"element_ref": "EL-VIEW-MODE", "action": "选择仅已确认", "option_value": "仅已确认", "result": "列表只显示已确认告警"},
-                    {"element_ref": "EL-VIEW-MODE", "action": "选择仅严重", "option_value": "仅严重", "result": "列表只显示严重告警"},
-                    {"element_ref": "EL-VIEW-MODE", "action": "选择全部", "option_value": "全部", "result": "列表恢复显示全部告警"},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择精简视图", "option_value": "精简", "result": "列表仅显示核心告警字段",
+                     "result_anchor": {"assertion": "field_visible", "target": "列表", "field": "核心告警字段"}},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择标准视图", "option_value": "标准", "result": "列表显示默认告警字段", "result_anchor": {"assertion": "contains", "value": "默认告警字段"}},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择详细视图", "option_value": "详细", "result": "列表显示全部可见告警字段", "result_anchor": {"assertion": "contains", "value": "全部可见告警字段"}},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择仅未确认", "option_value": "仅未确认", "result": "列表只显示未确认告警", "result_anchor": {"assertion": "contains", "value": "未确认告警"}},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择仅已确认", "option_value": "仅已确认", "result": "列表只显示已确认告警", "result_anchor": {"assertion": "contains", "value": "已确认告警"}},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择仅严重", "option_value": "仅严重", "result": "列表只显示严重告警", "result_anchor": {"assertion": "contains", "value": "严重告警"}},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择全部", "option_value": "全部", "result": "列表恢复显示全部告警", "result_anchor": {"assertion": "contains", "value": "全部告警"}},
                 ],
             }},
         ])
-        compile_facts(self.run_dir)
+        checkpoint_facts(self.run_dir)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -68,24 +73,23 @@ class SingleSessionRuntimeTests(unittest.TestCase):
     def _write_plan_and_cases(self) -> None:
         refs = ["FN-VIEW", "EL-VIEW-MODE", "TX-VIEW"]
         plan = {
-            "schema_version": "2.0", "source": "facts.json", "risks": [], "non_case_checks": [],
-            "functions": [{"function_ref": "FN-VIEW", "name": "告警视图模式", "dfx_decisions": [
-                {"element_ref": "EL-VIEW-MODE", "code": "finite_options", "disposition": "covered_by_baseline",
-                 "case_ids": ["TC-VIEW-001", "TC-VIEW-002", "TC-VIEW-003"], "reason": "实际发现的有限选项在三个测试意图中逐项验证"}
-            ], "cases": [
+            "schema_version": "2.0", "risks": [],
+            "functions": [{"function_ref": "FN-VIEW", "name": "告警视图模式", "cases": [
                 {"case_id": "TC-VIEW-001", "title": "显示密度逐项切换", "strategy": "baseline",
                  "page_ref": "PAGE-LIST",
-                 "dfx_dimension": "DFT功能", "dfx_scenario": "正向流程", "fact_refs": refs,
-                 "covered_checks": {"TX-VIEW": [1, 2, 3]}},
+                 "dfx_dimension": "DFT功能", "dfx_scenario": "正向流程"},
                 {"case_id": "TC-VIEW-002", "title": "确认状态逐项筛选", "strategy": "DFX",
                  "page_ref": "PAGE-LIST",
-                 "dfx_dimension": "DFR可靠", "dfx_scenario": "状态一致性", "fact_refs": refs,
-                 "covered_checks": {"TX-VIEW": [4, 5]}},
+                 "dfx_dimension": "DFR可靠", "dfx_scenario": "状态一致性"},
                 {"case_id": "TC-VIEW-003", "title": "严重与全部范围切换", "strategy": "DFX",
                  "page_ref": "PAGE-LIST",
-                 "dfx_dimension": "DFT功能", "dfx_scenario": "边界值", "fact_refs": refs,
-                 "covered_checks": {"TX-VIEW": [6, 7]}},
+                 "dfx_dimension": "DFT功能", "dfx_scenario": "边界值"},
             ]}],
+            "check_assignments": [
+                *[{"transaction_ref": "TX-VIEW", "check_index": index, "disposition": "case", "case_id": "TC-VIEW-001"} for index in (1, 2, 3)],
+                *[{"transaction_ref": "TX-VIEW", "check_index": index, "disposition": "case", "case_id": "TC-VIEW-002"} for index in (4, 5)],
+                *[{"transaction_ref": "TX-VIEW", "check_index": index, "disposition": "case", "case_id": "TC-VIEW-003"} for index in (6, 7)],
+            ],
         }
         save_plan(self.run_dir, plan)
         navigation = {"action": "进入告警管理-告警列表", "expected": "显示告警列表和查询区"}
@@ -94,36 +98,39 @@ class SingleSessionRuntimeTests(unittest.TestCase):
              "priority": "P1", "test_type": "功能测试", "dfx_dimension": "DFT功能", "dfx_scenario": "正向流程",
              "preconditions": ["告警列表存在包含完整字段的可查看数据"], "test_data": "视图模式：精简、标准、详细",
              "steps": [navigation,
-                       {"action": "选择精简视图", "expected": "列表仅显示核心告警字段", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 1}},
-                       {"action": "选择标准视图", "expected": "列表显示默认告警字段", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 2}},
-                       {"action": "选择详细视图", "expected": "列表显示全部可见告警字段", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 3}}],
+                       {"action": "选择精简视图", "expected": "列表切换为精简布局，核心告警字段保持可见"},
+                       {"action": "选择标准视图", "expected": "列表显示默认告警字段"},
+                       {"action": "选择详细视图", "expected": "列表显示全部可见告警字段"}],
              "fact_refs": refs, "automation": True},
             {"case_id": "TC-VIEW-002", "function_ref": "FN-VIEW", "title": "告警视图模式-确认状态逐项筛选",
              "priority": "P1", "test_type": "功能测试", "dfx_dimension": "DFR可靠", "dfx_scenario": "状态一致性",
              "preconditions": ["告警列表同时存在已确认和未确认数据"], "test_data": "确认状态：仅未确认、仅已确认",
              "steps": [navigation,
-                       {"action": "选择仅未确认", "expected": "列表只显示未确认告警", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 4}},
-                       {"action": "选择仅已确认", "expected": "列表只显示已确认告警", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 5}}],
+                       {"action": "选择仅未确认", "expected": "列表只显示未确认告警"},
+                       {"action": "选择仅已确认", "expected": "列表只显示已确认告警"}],
              "fact_refs": refs, "automation": True},
             {"case_id": "TC-VIEW-003", "function_ref": "FN-VIEW", "title": "告警视图模式-严重与全部范围切换",
              "priority": "P1", "test_type": "功能测试", "dfx_dimension": "DFT功能", "dfx_scenario": "边界值",
              "preconditions": ["告警列表同时存在严重和其他级别数据"], "test_data": "告警范围：仅严重、全部",
              "steps": [navigation,
-                       {"action": "选择仅严重", "expected": "列表只显示严重告警", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 6}},
-                       {"action": "选择全部", "expected": "列表恢复显示全部告警", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 7}}],
+                       {"action": "选择仅严重", "expected": "列表只显示严重告警"},
+                       {"action": "选择全部", "expected": "列表恢复显示全部告警"}],
              "fact_refs": refs, "automation": True},
         ]}
         save_cases(self.run_dir, cases)
 
     def test_one_transaction_can_assign_seven_checks_to_three_test_intents(self) -> None:
         self.assertEqual([], validate_discovery(self.run_dir))
-        facts = compile_facts(self.run_dir)
+        facts = load_facts(self.run_dir)
         self.assertEqual(1, len(facts["transactions"]))
         self.assertEqual(7, len(facts["transactions"][0]["checks"]))
         skeleton = build_plan_skeleton(self.run_dir)
         self.assertEqual(7, len(skeleton["functions"][0]["checks"]))
         self._write_plan_and_cases()
         self.assertEqual(3, sum(len(item["cases"]) for item in json.loads(artifact_paths(self.run_dir)["plan"].read_text(encoding="utf-8"))["functions"]))
+        written = load_cases(self.run_dir)
+        self.assertEqual({"transaction_ref": "TX-VIEW", "check_index": 1}, written["cases"][0]["steps"][1]["source_check"])
+        self.assertIn("EL-VIEW-MODE", written["cases"][0]["fact_refs"])
 
     def test_review_is_ready_and_has_no_evidence_dependency(self) -> None:
         self._write_plan_and_cases()
@@ -142,6 +149,73 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "choose a new run directory"):
             ensure_run(self.run_dir, "告警管理>告警详情")
 
+    def test_resume_automatically_rebuilds_a_stale_facts_view(self) -> None:
+        append_events(self.run_dir, [{"kind": "open_item", "data": {
+            "category": "observed_risk", "description": "非阻塞提示", "material": False,
+            "affected_function_refs": ["FN-VIEW"],
+        }}])
+        resumed = ensure_run(self.run_dir, "告警管理>告警列表")
+        self.assertEqual("告警管理>告警列表", resumed["module_path"])
+        self.assertEqual(1, len(load_facts(self.run_dir)["open_items"]))
+
+    def test_recording_defers_fact_rebuild_until_checkpoint(self) -> None:
+        facts_path = artifact_paths(self.run_dir)["facts"]
+        before = json.loads(facts_path.read_text(encoding="utf-8"))["event_count"]
+        append_events(self.run_dir, [{"kind": "open_item", "data": {
+            "category": "observed_risk", "description": "页面响应偶发波动", "material": False,
+            "affected_function_refs": ["FN-VIEW"],
+        }}])
+        self.assertEqual(before, json.loads(facts_path.read_text(encoding="utf-8"))["event_count"])
+        checkpoint_facts(self.run_dir)
+        self.assertEqual(before + 1, json.loads(facts_path.read_text(encoding="utf-8"))["event_count"])
+
+    def test_recompile_without_business_changes_keeps_review_valid(self) -> None:
+        self._write_plan_and_cases()
+        self.assertEqual("ready", review_run(self.run_dir)["status"])
+        time.sleep(1.1)
+        compile_facts(self.run_dir)
+        paths = artifact_paths(self.run_dir)
+        plan = json.loads(paths["plan"].read_text(encoding="utf-8"))
+        plan["generated_at"] = "2099-01-01T00:00:00Z"
+        paths["plan"].write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+        cases = json.loads(paths["cases"].read_text(encoding="utf-8"))
+        cases["updated_at"] = "2099-01-02T00:00:00Z"
+        paths["cases"].write_text(json.dumps(cases, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual("ready", pipeline_status(self.run_dir)["state"])
+        receipt = complete_deliverables(self.run_dir, ROOT)
+        self.assertEqual(3, receipt["import_cases"])
+
+    def test_crud_lifecycle_dfx_hint_is_transaction_scoped_once(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "lifecycle"
+            ensure_run(run_dir, "告警管理>告警规则")
+            append_events(run_dir, [
+                {"kind": "page", "fact_id": "PAGE", "data": {"name": "告警规则", "menu_path": ["告警管理", "告警规则"], "final_scan_status": "stable", "unhandled_element_refs": []}},
+                {"kind": "function", "fact_id": "FN", "data": {"name": "新建规则"}},
+                {"kind": "test_object", "fact_id": "OBJ", "data": {"name": "AI_TEST_RULE_001", "owner": "current_run", "state": "cleaned"}},
+                {"kind": "element", "fact_id": "EL-NAME", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "规则名称", "interactive": True}},
+                {"kind": "element", "fact_id": "EL-SAVE", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "保存", "interactive": True}},
+                {"kind": "transaction", "fact_id": "TX-CREATE", "data": {
+                    "function_ref": "FN", "element_refs": ["EL-NAME", "EL-SAVE"], "transaction_type": "create",
+                    "test_object_ref": "OBJ", "outcome": "success", "commit_result": "保存成功",
+                    "persistence_result": "重新打开后规则名称一致", "effect_result": "规则出现在列表中",
+                    "checks": [
+                        {"element_ref": "EL-NAME", "action": "输入AI_TEST_RULE_001", "result": "名称字段显示AI_TEST_RULE_001", "result_anchor": {"assertion": "field_equals", "field": "规则名称", "value": "AI_TEST_RULE_001"}},
+                        {"element_ref": "EL-SAVE", "action": "单击保存", "result": "页面提示保存成功", "result_anchor": {"assertion": "contains", "value": "保存成功"}},
+                    ],
+                }},
+            ])
+            checkpoint = checkpoint_facts(run_dir)
+            self.assertTrue(checkpoint["ready"])
+            hints = build_plan_skeleton(run_dir)["functions"][0]["dfx_hints"]
+            lifecycle = [item for item in hints if item["code"] == "lifecycle"]
+            self.assertEqual(1, len(lifecycle))
+            self.assertEqual("transaction", lifecycle[0]["scope"])
+            self.assertEqual([
+                {"transaction_ref": "TX-CREATE", "check_index": 1},
+                {"transaction_ref": "TX-CREATE", "check_index": 2},
+            ], lifecycle[0]["related_checks"])
+
     def test_runtime_allocates_ids_and_resolves_batch_local_references(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             run_dir = Path(value) / "runtime-ids"
@@ -157,7 +231,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                 }},
                 {"kind": "transaction", "data": {
                     "function_ref": "@function", "element_refs": ["@element"], "checks": [
-                        {"element_ref": "@element", "action": "单击刷新", "result": "列表数据重新加载"}
+                        {"element_ref": "@element", "action": "单击刷新", "result": "列表数据重新加载", "result_anchor": {"assertion": "contains", "value": "列表数据"}}
                     ],
                 }},
             ])
@@ -216,7 +290,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
             for option in ["不配置", "邮件", "短信"]:
                 checks.append({
                     "element_ref": "EL-CONFIG", "action": f"设置通知方式为{option}", "option_value": option,
-                    "result": f"页面接受{option}", "commit_result": "保存成功", "persistence_result": "重开后回显一致",
+                    "result": f"页面接受{option}", "result_anchor": {"assertion": "contains", "value": option}, "commit_result": "保存成功", "persistence_result": "重开后回显一致",
                     "effect_result": f"规则按{option}生效", "recovery_result": "恢复基线",
                 })
             append_events(run_dir, [

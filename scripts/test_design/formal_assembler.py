@@ -14,7 +14,7 @@ from openpyxl.styles import Alignment
 
 from .excel_utils import clear_data_rows, header_map, resize_workbook_structures, write_mapped_row
 from .io_utils import atomic_save_workbook, temporary_sibling
-from .session_runtime import artifact_digest, artifact_paths, load_cases, load_facts, load_plan
+from .session_runtime import artifact_paths, load_cases, load_facts, load_plan, semantic_source_digests
 
 
 SHEETS = [
@@ -270,10 +270,7 @@ def assemble_formal_workbook(run_dir: Path, template: Path, output: Path) -> dic
     review = json.loads(review_path.read_text(encoding="utf-8"))
     if review.get("status") not in {"ready", "ready_with_notes"}:
         raise ValueError(f"delivery requires a local repair recorded by review: {review.get('status')}")
-    current_sources = {
-        name: artifact_digest(artifact_paths(run_dir)[name])
-        for name in ("facts", "plan", "cases")
-    }
+    current_sources = semantic_source_digests(run_dir)
     if review.get("sources") != current_sources:
         raise ValueError("review.json is stale; run the single review once for the current artifacts")
     if not template.is_file():

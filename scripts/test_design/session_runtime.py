@@ -62,17 +62,52 @@ def _write_json(path: Path, value: Any) -> None:
     temporary.replace(path)
 
 
-def artifact_digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def _content_digest(value: Any) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 
 
+def _semantic_value(value: Any) -> Any:
+    """Remove volatile clock metadata while retaining all business content."""
+    if isinstance(value, dict):
+        return {
+            key: _semantic_value(item)
+            for key, item in value.items()
+            if not (
+                str(key).lower() in {"timestamp", "generated_at", "created_at", "updated_at", "checked_at", "reviewed_at"}
+                or str(key).lower().endswith("_timestamp")
+            )
+        }
+    if isinstance(value, list):
+        return [_semantic_value(item) for item in value]
+    return value
+
+
+def _semantic_content_digest(value: Any) -> str:
+    return _content_digest(_semantic_value(value))
+
+
 def _planning_fact_digest(facts: dict[str, Any]) -> str:
     return _content_digest({key: facts.get(key) for key in ("scope", "pages", "functions", "elements", "transactions", "test_objects")})
+
+
+def _review_fact_digest(facts: dict[str, Any]) -> str:
+    return _content_digest({
+        key: facts.get(key)
+        for key in ("scope", "pages", "functions", "elements", "transactions", "test_objects", "open_items")
+    })
+
+
+def semantic_source_digests(run_dir: Path) -> dict[str, str]:
+    """Stable business digests; timestamps and JSON formatting never invalidate review."""
+    facts = load_facts(run_dir)
+    plan = load_plan(run_dir)
+    cases = load_cases(run_dir)
+    return {
+        "facts": _review_fact_digest(facts),
+        "plan": _semantic_content_digest(plan),
+        "cases": _semantic_content_digest(cases),
+    }
 
 
 def artifact_paths(run_dir: Path) -> dict[str, Path]:
@@ -111,6 +146,37 @@ def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(f"transaction check {index} must be an object")
             if not str(check.get("action", "")).strip() or not str(check.get("result", "")).strip():
                 raise ValueError(f"transaction check {index} requires action and result")
+            anchor = check.get("result_anchor")
+            if not isinstance(anchor, dict) or not str(anchor.get("assertion", "")).strip():
+                raise ValueError(f"transaction check {index} result_anchor requires an assertion")
+            if not any(value not in (None, "", []) for key, value in anchor.items() if key not in {"assertion", "operator"}):
+                raise ValueError(f"transaction check {index} result_anchor requires an observable target, field, value or tokens")
+        transaction_type = str(data.get("transaction_type", ""))
+        if transaction_type in {"create", "edit", "delete", "configuration"}:
+            if data.get("outcome") != "success" or not str(data.get("test_object_ref", "")).strip():
+                raise ValueError(f"{transaction_type} transaction requires success outcome and test_object_ref")
+        if transaction_type in {"create", "edit", "delete"}:
+            required = ["commit_result", "effect_result"]
+            if transaction_type in {"create", "edit"}:
+                required.append("persistence_result")
+            if transaction_type == "edit":
+                required.append("recovery_result")
+            missing = [
+                field for field in required
+                if not str(data.get(field, "")).strip()
+                and not any(str(check.get(field, "")).strip() for check in checks)
+            ]
+            if missing:
+                raise ValueError(f"{transaction_type} transaction lacks closure fields: {missing}")
+        if transaction_type == "configuration":
+            if data.get("combination") is True:
+                raise ValueError("configuration transaction must use single-factor checks")
+            incomplete = [
+                index for index, check in enumerate(checks, 1)
+                if any(not str(check.get(field, "")).strip() for field in ("commit_result", "persistence_result", "effect_result", "recovery_result"))
+            ]
+            if incomplete:
+                raise ValueError(f"configuration checks lack save/reopen/effect/recovery closure: {incomplete}")
     if kind == "open_item":
         category = str(data.get("category", "")).strip()
         if category not in OPEN_ITEM_CATEGORIES:
@@ -288,7 +354,7 @@ def compile_facts(run_dir: Path) -> dict[str, Any]:
     return facts
 
 
-def load_facts(run_dir: Path) -> dict[str, Any]:
+def load_facts(run_dir: Path, *, auto_rebuild: bool = True) -> dict[str, Any]:
     path = artifact_paths(run_dir)["facts"]
     if not path.exists():
         raise ValueError("facts.json does not exist")
@@ -296,7 +362,9 @@ def load_facts(run_dir: Path) -> dict[str, Any]:
     events = load_events(run_dir)
     last_event_id = str(events[-1].get("event_id", "")) if events else ""
     if facts.get("event_count") != len(events) or facts.get("last_event_id", "") != last_event_id:
-        raise ValueError("facts.json is stale; compile the newly recorded events once")
+        if auto_rebuild:
+            return compile_facts(run_dir)
+        raise ValueError("facts.json is stale")
     return facts
 
 
@@ -335,11 +403,12 @@ def _transaction_check_refs(transaction: dict[str, Any]) -> set[str]:
     return refs
 
 
-def inspect_discovery(run_dir: Path) -> list[dict[str, str]]:
-    try:
-        facts = load_facts(run_dir)
-    except ValueError as exc:
-        return [_issue("missing_fact", "blocker", "facts.json", str(exc), "resume the current discovery session")]
+def inspect_discovery(run_dir: Path, facts: dict[str, Any] | None = None) -> list[dict[str, str]]:
+    if facts is None:
+        try:
+            facts = load_facts(run_dir)
+        except ValueError as exc:
+            return [_issue("missing_fact", "blocker", "facts.json", str(exc), "resume the current discovery session")]
     issues: list[dict[str, str]] = []
     for key in ("pages", "functions", "elements", "transactions"):
         if not facts.get(key):
@@ -394,41 +463,13 @@ def inspect_discovery(run_dir: Path) -> list[dict[str, str]]:
             ]
             default = element.get("default_value")
             values = {str(check.get("option_value")): check for check in checks if check.get("option_value") is not None}
-            for option in options:
-                check = values.get(option)
-                required = ("commit_result", "persistence_result", "effect_result", "recovery_result")
-                if not check or any(not str(check.get(field, "")).strip() for field in required):
-                    issues.append(_issue("missing_fact", "blocker", "facts.json", f"configuration value {option!r} for {ref} lacks a save/reopen/effect/recovery closure", "execute this single configuration value once"))
             if default is not None and str(default) not in values:
                 issues.append(_issue("missing_fact", "blocker", "facts.json", f"configuration element {ref} lacks its default baseline", "verify the default/unconfigured value"))
-        if element.get("editable") is True and element.get("configuration") is not True:
-            checks = [
-                check
-                for transaction in transaction_by_element.get(ref, [])
-                for check in transaction.get("checks", [])
-                if str(check.get("element_ref", ref)) == ref
-            ]
-            required = ("commit_result", "persistence_result", "effect_result")
-            if not checks or not any(all(str(check.get(field, "")).strip() for field in required) for check in checks):
-                issues.append(_issue("missing_fact", "blocker", "facts.json", f"editable element {ref} lacks a save/reopen/effect closure", "change this field, save, reopen and observe its effect once"))
     for transaction in facts.get("transactions", []):
         kind = transaction.get("transaction_type")
         if kind in {"create", "edit", "configuration", "delete"}:
-            if transaction.get("outcome") != "success":
-                issues.append(_issue("missing_fact", "blocker", "facts.json", f"{kind} transaction {transaction['fact_id']} did not complete successfully", "resume only this business transaction"))
             if transaction.get("test_object_ref") not in test_object_refs:
                 issues.append(_issue("broken_reference", "blocker", "facts.json", f"{kind} transaction {transaction['fact_id']} has no current-run test object", "bind the current-run test object"))
-        if kind in {"create", "edit", "delete"}:
-            required = ["commit_result", "effect_result"]
-            if kind in {"create", "edit"}:
-                required.append("persistence_result")
-            if kind == "edit":
-                required.append("recovery_result")
-            for field in required:
-                if not str(transaction.get(field, "")).strip() and not any(str(check.get(field, "")).strip() for check in transaction.get("checks", [])):
-                    issues.append(_issue("missing_fact", "blocker", "facts.json", f"{kind} transaction {transaction['fact_id']} lacks {field}", "complete only this business closure"))
-        if kind == "configuration" and transaction.get("combination"):
-            issues.append(_issue("invalid_scope", "repairable", "facts.json", f"configuration transaction {transaction['fact_id']} uses a combination", "retain single-factor checks only"))
     for item in facts.get("open_items", []):
         if item.get("page_verifiable") is True:
             issues.append(_issue("invalid_open_item", "blocker", "facts.json", f"open item {item['fact_id']} can be verified on the page", "operate the page and update this item instead of asking the user"))
@@ -443,32 +484,72 @@ def inspect_discovery(run_dir: Path) -> list[dict[str, str]]:
     return issues
 
 
-def _dfx_hints(element: dict[str, Any], transactions: list[dict[str, Any]]) -> list[dict[str, str]]:
-    hints: list[dict[str, str]] = []
+def _group_issues(issues: list[dict[str, str]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for issue in issues:
+        key = (str(issue.get("severity", "")), str(issue.get("local_repair", "")))
+        group = groups.setdefault(key, {
+            "severity": key[0], "repair": key[1], "count": 0, "messages": [],
+        })
+        group["count"] += 1
+        group["messages"].append(str(issue.get("message", "")))
+    return list(groups.values())
+
+
+def checkpoint_facts(run_dir: Path) -> dict[str, Any]:
+    """Compile once at a page/session checkpoint and persist one grouped readiness summary."""
+    facts = compile_facts(run_dir)
+    issues = inspect_discovery(run_dir, facts)
+    checkpoint = {
+        "checked_at": _now(),
+        "fact_digest": _planning_fact_digest(facts),
+        "ready": not issues,
+        "issue_groups": _group_issues(issues),
+    }
+    facts["checkpoint"] = checkpoint
+    _write_json(artifact_paths(run_dir)["facts"], facts)
+    return checkpoint
+
+
+def _current_checkpoint(facts: dict[str, Any]) -> dict[str, Any]:
+    checkpoint = facts.get("checkpoint") if isinstance(facts.get("checkpoint"), dict) else {}
+    if checkpoint.get("fact_digest") != _planning_fact_digest(facts):
+        return {"ready": False, "issue_groups": [], "reason": "checkpoint is missing or stale"}
+    return checkpoint
+
+
+def _dfx_hints(element: dict[str, Any]) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
     constraints = element.get("constraints") if isinstance(element.get("constraints"), dict) else {}
     candidates = (
         (element.get("required") is True or constraints.get("required") is True, "empty", "必填项为空"),
         (any(element.get(key) is not None for key in ("min_value", "max_value", "min_length", "max_length")) or any(constraints.get(key) is not None for key in ("min", "max", "min_value", "max_value", "min_length", "max_length")), "boundary", "已观察到的输入边界"),
         (element.get("unique") is True or constraints.get("unique") is True, "duplicate", "唯一性冲突"),
-        (bool(element.get("role_constraint") or constraints.get("role")), "permission", "角色权限差异"),
-        (bool(element.get("state_constraint") or constraints.get("state")), "state", "业务状态差异"),
         (element.get("option_set") == "finite", "finite_options", "有限选项逐项结果"),
     )
     for applies, code, reason in candidates:
         if applies:
-            hints.append({"code": code, "element_ref": str(element.get("fact_id", "")), "reason": reason})
-    transaction_types = {str(item.get("transaction_type", "")) for item in transactions}
-    if transaction_types & {"create", "edit", "configuration", "delete"}:
-        hints.append({"code": "lifecycle", "element_ref": str(element.get("fact_id", "")), "reason": "持久化、实际生效与恢复/清理"})
+            hints.append({"code": code, "scope": "element", "scope_ref": str(element.get("fact_id", "")), "reason": reason})
     return hints
+
+
+def _function_dfx_hints(elements: list[dict[str, Any]], transactions: list[dict[str, Any]], function_ref: str) -> list[dict[str, Any]]:
+    hints = [hint for element in elements for hint in _dfx_hints(element)]
+    if any(element.get("role_constraint") or (element.get("constraints", {}).get("role") if isinstance(element.get("constraints"), dict) else None) for element in elements):
+        hints.append({"code": "permission", "scope": "function", "scope_ref": function_ref, "reason": "角色权限差异"})
+    if any(element.get("state_constraint") or (element.get("constraints", {}).get("state") if isinstance(element.get("constraints"), dict) else None) for element in elements):
+        hints.append({"code": "state", "scope": "function", "scope_ref": function_ref, "reason": "业务状态差异"})
+    for transaction in transactions:
+        if str(transaction.get("transaction_type", "")) in {"create", "edit", "configuration", "delete"}:
+            hints.append({
+                "code": "lifecycle", "scope": "transaction", "scope_ref": str(transaction.get("fact_id", "")),
+                "reason": "持久化、实际生效与恢复/清理",
+            })
+    return list({json.dumps(item, ensure_ascii=False, sort_keys=True): item for item in hints}.values())
 
 
 def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
     """Build the factual planning input without creating another persisted artifact."""
-    discovery_issues = inspect_discovery(run_dir)
-    if discovery_issues:
-        messages = " | ".join(item["message"] for item in discovery_issues[:10])
-        raise ValueError(f"discovery needs a local completion before planning: {messages}")
     facts = load_facts(run_dir)
     pages = {str(row["fact_id"]): row for row in facts.get("pages", [])}
     elements = facts.get("elements", [])
@@ -490,11 +571,21 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
             for transaction in owned_transactions
             for index, check in enumerate(transaction.get("checks", []), 1)
         ]
-        hints: list[dict[str, str]] = []
-        for element in owned_elements:
-            related = [item for item in owned_transactions if str(element["fact_id"]) in _transaction_check_refs(item)]
-            hints.extend(_dfx_hints(element, related))
-        unique_hints = list({json.dumps(item, ensure_ascii=False, sort_keys=True): item for item in hints}.values())
+        unique_hints = _function_dfx_hints(owned_elements, owned_transactions, function_ref)
+        for hint in unique_hints:
+            related_checks: list[dict[str, Any]] = []
+            for transaction in owned_transactions:
+                transaction_ref = str(transaction.get("fact_id", ""))
+                if hint.get("scope") == "transaction" and hint.get("scope_ref") != transaction_ref:
+                    continue
+                for index, check in enumerate(transaction.get("checks", []), 1):
+                    if hint.get("scope") == "element" and str(check.get("element_ref", "")) != str(hint.get("scope_ref", "")):
+                        continue
+                    tags = {str(tag) for tag in check.get("dfx_tags", [])}
+                    if tags and str(hint.get("code", "")) not in tags:
+                        continue
+                    related_checks.append({"transaction_ref": transaction_ref, "check_index": index})
+            hint["related_checks"] = related_checks
         functions.append({
             "function_ref": function_ref,
             "name": str(function.get("name", "")),
@@ -504,7 +595,12 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
             "checks": checks,
             "dfx_hints": unique_hints,
         })
-    return {"schema_version": SCHEMA_VERSION, "source": "facts.json", "functions": functions}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "source": "facts.json",
+        "checkpoint": _current_checkpoint(facts),
+        "functions": functions,
+    }
 
 
 def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
@@ -520,13 +616,10 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
     fact_ids = _all_fact_ids(facts)
     functions = {str(row["fact_id"]): row for row in facts.get("functions", [])}
     transactions = {str(row["fact_id"]): row for row in facts.get("transactions", [])}
-    elements = {str(row["fact_id"]): row for row in facts.get("elements", [])}
     pages = {str(row["fact_id"]): row for row in facts.get("pages", [])}
     planned_functions: set[str] = set()
-    covered_elements_by_function: dict[str, set[str]] = {}
     case_ids: set[str] = set()
     titles: set[tuple[str, str]] = set()
-    assigned_checks: set[tuple[str, int]] = set()
     for function in plan.get("functions", []):
         function_ref = str(function.get("function_ref", ""))
         if function_ref not in functions:
@@ -535,7 +628,6 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
             issues.append(_issue("duplicate_mapping", "repairable", "case-plan.json", f"function {function_ref} appears more than once", "merge this function block", function_ref=function_ref))
         planned_functions.add(function_ref)
         cases = function.get("cases", [])
-        function_elements = covered_elements_by_function.setdefault(function_ref, set())
         if not cases or not any(str(case.get("strategy", "")).lower() == "baseline" for case in cases):
             issues.append(_issue("missing_baseline", "repairable", "case-plan.json", f"function {function_ref} lacks a baseline intent", "add its observed baseline intent", function_ref=function_ref))
         for case in cases:
@@ -547,7 +639,6 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
             if page_ref not in pages:
                 issues.append(_issue("broken_reference", "repairable", "case-plan.json", f"case {case_id} has no valid page_ref", "select the observed page for this intent", function_ref=function_ref, case_id=case_id))
             refs = {str(value) for value in case.get("fact_refs", [])}
-            function_elements.update(refs & set(elements))
             if not refs or not refs <= fact_ids:
                 issues.append(_issue("broken_reference", "repairable", "case-plan.json", f"case {case_id} has missing or unknown facts", "repair only this case mapping", function_ref=function_ref, case_id=case_id))
             if not str(case.get("title", "")).strip():
@@ -560,74 +651,51 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
                 not str(case.get("dfx_dimension", "")).strip() or not str(case.get("dfx_scenario", "")).strip()
             ):
                 issues.append(_issue("missing_dfx", "repairable", "case-plan.json", f"DFX case {case_id} lacks dimension or scenario", "complete DFX while planning", function_ref=function_ref, case_id=case_id))
-            for transaction_ref, indexes in case.get("covered_checks", {}).items():
-                transaction = transactions.get(str(transaction_ref))
-                if not transaction:
-                    issues.append(_issue("broken_reference", "repairable", "case-plan.json", f"case {case_id} covers unknown transaction {transaction_ref}", "repair only this check mapping", function_ref=function_ref, case_id=case_id))
-                    continue
-                if str(transaction.get("function_ref", "")) != function_ref:
-                    issues.append(_issue("wrong_function", "repairable", "case-plan.json", f"case {case_id} covers a transaction owned by another function", "assign it to its owning function", function_ref=function_ref, case_id=case_id))
-                for index in indexes:
-                    try:
-                        numeric = int(index)
-                    except (TypeError, ValueError):
-                        issues.append(_issue("broken_reference", "repairable", "case-plan.json", f"case {case_id} has a non-numeric check index", "repair only this check index", function_ref=function_ref, case_id=case_id))
-                        continue
-                    if numeric < 1 or numeric > len(transaction.get("checks", [])):
-                        issues.append(_issue("broken_reference", "repairable", "case-plan.json", f"case {case_id} covers invalid check {transaction_ref}#{numeric}", "repair only this check index", function_ref=function_ref, case_id=case_id))
-                        continue
-                    assigned_checks.add((str(transaction_ref), numeric))
-                    check = transaction["checks"][numeric - 1]
-                    if check.get("element_ref"):
-                        function_elements.add(str(check["element_ref"]))
-        owned_elements = [row for row in facts.get("elements", []) if str(row.get("function_ref", "")) == function_ref]
-        owned_transactions = [row for row in facts.get("transactions", []) if str(row.get("function_ref", "")) == function_ref]
-        expected_hints = {
-            (str(hint.get("element_ref", "")), str(hint.get("code", "")))
-            for element in owned_elements
-            for hint in _dfx_hints(element, [item for item in owned_transactions if str(element["fact_id"]) in _transaction_check_refs(item)])
-        }
-        decisions = function.get("dfx_decisions", [])
-        decided_hints: set[tuple[str, str]] = set()
-        for decision in decisions:
-            key = (str(decision.get("element_ref", "")), str(decision.get("code", "")))
-            decided_hints.add(key)
-            disposition = str(decision.get("disposition", ""))
-            if key not in expected_hints or disposition not in {"case", "covered_by_baseline", "performance", "risk", "not_applicable"} or not str(decision.get("reason", "")).strip():
-                issues.append(_issue("invalid_dfx_decision", "repairable", "case-plan.json", f"function {function_ref} has an invalid DFX decision {key}", "repair only this fact-driven DFX decision", function_ref=function_ref))
-            if disposition in {"case", "covered_by_baseline"}:
-                linked = {str(value) for value in decision.get("case_ids", [])}
-                owned_case_ids = {str(case.get("case_id", "")) for case in cases}
-                if not linked or not linked <= owned_case_ids:
-                    issues.append(_issue("invalid_dfx_decision", "repairable", "case-plan.json", f"DFX decision {key} has no valid owning case", "bind it to the current function cases", function_ref=function_ref))
-        missing_hints = expected_hints - decided_hints
-        if missing_hints:
-            issues.append(_issue("missing_dfx_decision", "repairable", "case-plan.json", f"function {function_ref} has unhandled fact-driven DFX hints: {sorted(missing_hints)}", "decide these hints while planning", function_ref=function_ref))
     missing_functions = set(functions) - planned_functions
     if missing_functions:
         issues.append(_issue("missing_function", "repairable", "case-plan.json", f"functions missing from plan: {sorted(missing_functions)}", "plan only the missing function blocks"))
-    for element_ref, element in elements.items():
-        function_ref = str(element.get("function_ref", ""))
-        if element.get("status") not in NON_ACTIONABLE_STATUSES and element_ref not in covered_elements_by_function.get(function_ref, set()):
-            issues.append(_issue("missing_element_coverage", "repairable", "case-plan.json", f"element {element_ref} is not covered by a case owned by function {function_ref}", "assign it within its owning function", function_ref=function_ref))
-    for item in plan.get("non_case_checks", []):
-        if item.get("disposition") not in {"performance", "risk", "not_applicable"} or not str(item.get("reason", "")).strip():
-            issues.append(_issue("invalid_disposition", "repairable", "case-plan.json", "each non-case check requires a supported disposition and reason", "complete only this check disposition"))
-    non_case: set[tuple[str, int]] = set()
-    for item in plan.get("non_case_checks", []):
-        if item.get("disposition") not in {"performance", "risk", "not_applicable"}:
+    case_owners = {
+        str(case.get("case_id", "")): str(function.get("function_ref", ""))
+        for function in plan.get("functions", [])
+        for case in function.get("cases", [])
+    }
+    seen_assignments: set[tuple[str, int]] = set()
+    assigned_case_ids: set[str] = set()
+    for assignment in plan.get("check_assignments", []):
+        try:
+            key = (str(assignment.get("transaction_ref", "")), int(assignment.get("check_index", 0)))
+        except (TypeError, ValueError):
+            issues.append(_issue("invalid_assignment", "repairable", "case-plan.json", "a check assignment has a non-numeric index", "repair this assignment once"))
             continue
-        for index in item.get("check_indexes", []):
-            try:
-                non_case.add((str(item.get("transaction_ref")), int(index)))
-            except (TypeError, ValueError):
-                issues.append(_issue("invalid_disposition", "repairable", "case-plan.json", "a non-case check index is not numeric", "repair only this check disposition"))
+        transaction = transactions.get(key[0])
+        if key in seen_assignments:
+            issues.append(_issue("duplicate_assignment", "repairable", "case-plan.json", f"check {key} is assigned more than once", "retain one canonical assignment"))
+        seen_assignments.add(key)
+        if not transaction or key[1] < 1 or key[1] > len(transaction.get("checks", [])):
+            issues.append(_issue("broken_reference", "repairable", "case-plan.json", f"assignment references unknown check {key}", "repair this assignment once"))
+            continue
+        disposition = str(assignment.get("disposition", ""))
+        if disposition == "case":
+            case_id = str(assignment.get("case_id", ""))
+            assigned_case_ids.add(case_id)
+            if case_id not in case_owners:
+                issues.append(_issue("broken_reference", "repairable", "case-plan.json", f"check {key} references unknown case {case_id!r}", "bind it to an existing case"))
+            elif case_owners[case_id] != str(transaction.get("function_ref", "")):
+                issues.append(_issue("wrong_function", "repairable", "case-plan.json", f"check {key} is assigned to another function's case", "bind it to its owning function"))
+        elif disposition in {"performance", "risk", "not_applicable"}:
+            if not str(assignment.get("reason", "")).strip():
+                issues.append(_issue("invalid_assignment", "repairable", "case-plan.json", f"non-case check {key} has no reason", "add one concrete reason"))
+        else:
+            issues.append(_issue("invalid_assignment", "repairable", "case-plan.json", f"check {key} has unsupported disposition {disposition!r}", "use case/performance/risk/not_applicable"))
+    empty_cases = set(case_owners) - assigned_case_ids
+    if empty_cases:
+        issues.append(_issue("unassigned_case", "repairable", "case-plan.json", f"cases have no assigned checks: {sorted(empty_cases)}", "assign observed checks or remove these empty intents"))
     all_checks = {
         (str(transaction["fact_id"]), index)
         for transaction in facts.get("transactions", [])
         for index, _ in enumerate(transaction.get("checks", []), 1)
     }
-    unassigned = all_checks - assigned_checks - non_case
+    unassigned = all_checks - seen_assignments
     if unassigned:
         issues.append(_issue("unassigned_check", "repairable", "case-plan.json", f"transaction checks have no planned disposition: {sorted(unassigned)}", "assign only these checks to a case or explicit non-case disposition"))
     return issues
@@ -649,6 +717,21 @@ def _normalize_core_prose(steps: list[dict[str, Any]]) -> tuple[tuple[str, str],
     return tuple(normalized)
 
 
+def _expected_satisfies_anchor(expected: str, check: dict[str, Any]) -> bool:
+    anchor = check.get("result_anchor") if isinstance(check.get("result_anchor"), dict) else {}
+    assertion = str(anchor.get("assertion", ""))
+    if assertion == "observed_text" or not assertion:
+        value = str(anchor.get("value") or check.get("result", "")).strip()
+        return not value or value in expected
+    tokens: list[str] = []
+    for key, value in anchor.items():
+        if key in {"assertion", "operator"} or value in (None, ""):
+            continue
+        values = value if isinstance(value, list) else [value]
+        tokens.extend(str(item).strip() for item in values if str(item).strip())
+    return all(token in expected for token in tokens)
+
+
 def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
     try:
         facts, plan, document = load_facts(run_dir), load_plan(run_dir), load_cases(run_dir)
@@ -657,12 +740,21 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
     issues: list[dict[str, str]] = []
     if document.get("source_plan") != "case-plan.json":
         issues.append(_issue("invalid_source", "repairable", "function-cases.json", "case source_plan must be case-plan.json", "repair the source declaration"))
-    if document.get("source_plan_digest") != _content_digest(plan):
+    if document.get("source_plan_digest") != _semantic_content_digest(plan):
         issues.append(_issue("stale_source", "repairable", "function-cases.json", "cases no longer match the plan", "regenerate only changed planned cases"))
     fact_ids = _all_fact_ids(facts)
     pages = {str(row["fact_id"]): row for row in facts.get("pages", [])}
     transactions = {str(row["fact_id"]): row for row in facts.get("transactions", [])}
     planned: dict[str, tuple[str, dict[str, Any], str]] = {}
+    assignments_by_case: dict[str, list[tuple[str, int]]] = {}
+    for assignment in plan.get("check_assignments", []):
+        if assignment.get("disposition") == "case":
+            try:
+                assignments_by_case.setdefault(str(assignment.get("case_id", "")), []).append(
+                    (str(assignment.get("transaction_ref", "")), int(assignment.get("check_index", 0)))
+                )
+            except (TypeError, ValueError):
+                pass
     for function in plan.get("functions", []):
         function_ref = str(function.get("function_ref", ""))
         function_name = str(function.get("name", ""))
@@ -723,12 +815,10 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
                 issues.append(_issue("ungrounded_expected", "repairable", "function-cases.json", f"case {case_id} navigation result lacks page anchor {page_anchor!r}", "use the observed page name or result anchor", **context))
             if steps[0].get("source_check"):
                 issues.append(_issue("invalid_source_check", "repairable", "function-cases.json", f"case {case_id} navigation must not claim a transaction check", "remove source_check from the navigation step", **context))
-        planned_checks = {
-            (str(transaction_ref), int(index))
-            for transaction_ref, indexes in planned_case.get("covered_checks", {}).items()
-            for index in indexes
-        }
+        planned_check_list = assignments_by_case.get(case_id, [])
+        planned_checks = set(planned_check_list)
         actual_checks: set[tuple[str, int]] = set()
+        actual_check_list: list[tuple[str, int]] = []
         for index, step in enumerate(steps[1:], 2):
             source = step.get("source_check")
             if not isinstance(source, dict):
@@ -739,14 +829,15 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
             except (TypeError, ValueError):
                 source_key = ("", 0)
             actual_checks.add(source_key)
+            actual_check_list.append(source_key)
             transaction = transactions.get(source_key[0])
             if source_key not in planned_checks or not transaction or source_key[1] < 1 or source_key[1] > len(transaction.get("checks", [])):
                 issues.append(_issue("invalid_source_check", "repairable", "function-cases.json", f"case {case_id} step {index} references an unplanned check", "repair only this source mapping", **context))
                 continue
-            observed = str(transaction["checks"][source_key[1] - 1].get("result", "")).strip()
-            if observed and observed not in str(step.get("expected", "")):
+            check = transaction["checks"][source_key[1] - 1]
+            if not _expected_satisfies_anchor(str(step.get("expected", "")), check):
                 issues.append(_issue("ungrounded_expected", "blocker", "function-cases.json", f"case {case_id} step {index} does not preserve its observed result", "rewrite this expected result from the transaction fact", **context))
-        if planned_checks != actual_checks or len(steps[1:]) != len(actual_checks):
+        if planned_checks != actual_checks or actual_check_list != planned_check_list or len(steps[1:]) != len(planned_check_list):
             issues.append(_issue("check_mapping_mismatch", "repairable", "function-cases.json", f"case {case_id} steps do not map one-to-one to all planned checks", "add, remove or remap only the affected paired steps", **context))
         prose = "\n".join(
             [title, str(case.get("test_data", ""))]
@@ -804,26 +895,97 @@ def _save_with_construction_check(path: Path, value: dict[str, Any], inspector: 
             path.unlink(missing_ok=True)
         else:
             path.write_bytes(old)
-        messages = " | ".join(item["message"] for item in issues[:10])
-        raise ValueError(f"construction needs a local correction: {messages}")
+        raise ValueError("construction needs one grouped local correction: " + json.dumps(_group_issues(issues), ensure_ascii=False))
+    return value
+
+
+def _derive_case_fact_refs(
+    function_ref: str,
+    page_ref: str,
+    assignments: list[dict[str, Any]],
+    transactions: dict[str, dict[str, Any]],
+) -> list[str]:
+    refs = [function_ref, page_ref]
+    for assignment in assignments:
+        transaction_ref = str(assignment.get("transaction_ref", ""))
+        transaction = transactions.get(transaction_ref, {})
+        refs.append(transaction_ref)
+        try:
+            check = transaction.get("checks", [])[int(assignment.get("check_index", 0)) - 1]
+        except (IndexError, TypeError, ValueError):
+            check = {}
+        if check.get("element_ref"):
+            refs.append(str(check["element_ref"]))
+    return list(dict.fromkeys(ref for ref in refs if ref))
+
+
+def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    facts = load_facts(run_dir)
+    value = json.loads(json.dumps(plan, ensure_ascii=False))
+    if "non_case_checks" in value or any("dfx_decisions" in function for function in value.get("functions", [])) or any(
+        "covered_checks" in case for function in value.get("functions", []) for case in function.get("cases", [])
+    ):
+        raise ValueError("deprecated parallel coverage ledgers are not accepted; use check_assignments only")
+    value["source"] = "facts.json"
+    value["source_digest"] = _planning_fact_digest(facts)
+    transactions = {str(row["fact_id"]): row for row in facts.get("transactions", [])}
+    by_case: dict[str, list[dict[str, Any]]] = {}
+    for assignment in value.get("check_assignments", []):
+        if assignment.get("disposition") == "case":
+            by_case.setdefault(str(assignment.get("case_id", "")), []).append(assignment)
+    for function in value.get("functions", []):
+        function_ref = str(function.get("function_ref", ""))
+        for case in function.get("cases", []):
+            case_id = str(case.get("case_id", ""))
+            case["fact_refs"] = _derive_case_fact_refs(
+                function_ref, str(case.get("page_ref", "")), by_case.get(case_id, []), transactions,
+            )
     return value
 
 
 def save_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
-    discovery_issues = inspect_discovery(run_dir)
-    if discovery_issues:
-        messages = " | ".join(item["message"] for item in discovery_issues[:10])
-        raise ValueError(f"discovery needs a local completion before planning: {messages}")
-    value = dict(plan)
-    value["source"] = "facts.json"
-    value["source_digest"] = _planning_fact_digest(load_facts(run_dir))
+    facts = load_facts(run_dir)
+    checkpoint = _current_checkpoint(facts)
+    if checkpoint.get("ready") is not True:
+        raise ValueError("discovery checkpoint is not ready: " + json.dumps(checkpoint, ensure_ascii=False))
+    value = _normalize_plan(run_dir, plan)
     return _save_with_construction_check(artifact_paths(run_dir)["plan"], value, inspect_plan, run_dir)
 
 
-def save_cases(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]:
-    value = dict(cases)
+def _assign_case_sources(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]:
+    plan = load_plan(run_dir)
+    value = json.loads(json.dumps(cases, ensure_ascii=False))
+    assignments: dict[str, list[dict[str, Any]]] = {}
+    for assignment in plan.get("check_assignments", []):
+        if assignment.get("disposition") == "case":
+            assignments.setdefault(str(assignment.get("case_id", "")), []).append(assignment)
+    planned_cases = {
+        str(case.get("case_id", "")): case
+        for function in plan.get("functions", [])
+        for case in function.get("cases", [])
+    }
+    for case in value.get("cases", []):
+        case_id = str(case.get("case_id", ""))
+        planned = planned_cases.get(case_id, {})
+        steps = case.get("steps", []) if isinstance(case.get("steps"), list) else []
+        sources = assignments.get(case_id, [])
+        for step in steps:
+            if isinstance(step, dict):
+                step.pop("source_check", None)
+        if len(steps[1:]) == len(sources):
+            for step, source in zip(steps[1:], sources):
+                step["source_check"] = {
+                    "transaction_ref": str(source.get("transaction_ref", "")),
+                    "check_index": int(source.get("check_index", 0)),
+                }
+        case["fact_refs"] = list(planned.get("fact_refs", []))
     value["source_plan"] = "case-plan.json"
-    value["source_plan_digest"] = _content_digest(load_plan(run_dir))
+    value["source_plan_digest"] = _semantic_content_digest(plan)
+    return value
+
+
+def save_cases(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]:
+    value = _assign_case_sources(run_dir, cases)
     return _save_with_construction_check(artifact_paths(run_dir)["cases"], value, inspect_cases, run_dir)
 
 
@@ -833,23 +995,26 @@ def inspect_cross_artifacts(run_dir: Path) -> list[dict[str, str]]:
     issues: list[dict[str, str]] = []
     if plan.get("source_digest") != _planning_fact_digest(facts):
         issues.append(_issue("stale_source", "repairable", "case-plan.json", "planning facts changed after the plan was written", "repair only affected function plans"))
-    if document.get("source_plan_digest") != _content_digest(plan):
+    if document.get("source_plan_digest") != _semantic_content_digest(plan):
         issues.append(_issue("stale_source", "repairable", "function-cases.json", "plan changed after cases were written", "repair only affected function cases"))
-    transactions = {str(row["fact_id"]): row for row in facts.get("transactions", [])}
+    assignments_by_case: dict[str, set[tuple[str, int]]] = {}
+    for assignment in plan.get("check_assignments", []):
+        if assignment.get("disposition") != "case":
+            continue
+        try:
+            assignments_by_case.setdefault(str(assignment.get("case_id", "")), set()).add(
+                (str(assignment.get("transaction_ref", "")), int(assignment.get("check_index", 0)))
+            )
+        except (TypeError, ValueError):
+            issues.append(_issue("cross_mapping", "repairable", "case-plan.json", "plan contains a malformed check assignment", "repair only this assignment"))
     planned: dict[str, tuple[str, set[tuple[str, int]]]] = {}
     for function in plan.get("functions", []):
         function_ref = str(function.get("function_ref", ""))
         for case in function.get("cases", []):
-            covered: set[tuple[str, int]] = set()
-            for ref, indexes in case.get("covered_checks", {}).items():
-                for index in indexes:
-                    try:
-                        covered.add((str(ref), int(index)))
-                    except (TypeError, ValueError):
-                        issues.append(_issue("cross_mapping", "repairable", "case-plan.json", f"case {case.get('case_id', '')} has a malformed planned check", "repair only this planned check", case_id=str(case.get("case_id", ""))))
+            case_id = str(case.get("case_id", ""))
             planned[str(case.get("case_id", ""))] = (
                 function_ref,
-                covered,
+                assignments_by_case.get(case_id, set()),
             )
     written: set[str] = set()
     for case in document.get("cases", []):
@@ -867,20 +1032,6 @@ def inspect_cross_artifacts(run_dir: Path) -> list[dict[str, str]]:
                 issues.append(_issue("cross_mapping", "repairable", "function-cases.json", f"case {case_id} has a malformed source check", "repair only this step mapping", case_id=case_id))
         if str(case.get("function_ref", "")) != expected_function or actual_checks != expected_checks:
             issues.append(_issue("cross_mapping", "repairable", "function-cases.json", f"case {case_id} differs from its function/check plan", "repair only this case", case_id=case_id))
-        for transaction_ref, check_index in actual_checks:
-            transaction = transactions.get(transaction_ref)
-            if not transaction or check_index < 1 or check_index > len(transaction.get("checks", [])):
-                issues.append(_issue("cross_mapping", "blocker", "function-cases.json", f"case {case_id} references a missing observed check", "restore the affected transaction fact or remap this step", case_id=case_id))
-                continue
-            result = str(transaction["checks"][check_index - 1].get("result", ""))
-            matching = [
-                step for step in case.get("steps", [])[1:]
-                if isinstance(step.get("source_check"), dict)
-                and str(step["source_check"].get("transaction_ref", "")) == transaction_ref
-                and str(step["source_check"].get("check_index", "")) == str(check_index)
-            ]
-            if len(matching) != 1 or result not in str(matching[0].get("expected", "")):
-                issues.append(_issue("cross_result", "blocker", "function-cases.json", f"case {case_id} does not preserve observed result {transaction_ref}#{check_index}", "repair only this paired expected result", case_id=case_id))
     if set(planned) != written:
         issues.append(_issue("cross_case_set", "repairable", "function-cases.json", "planned and written case sets differ", "add or remove only the differing cases"))
     return issues
@@ -925,8 +1076,7 @@ def review_run(run_dir: Path) -> dict[str, Any]:
             "open_items": len(unresolved),
         },
         "sources": {
-            name: artifact_digest(artifact_paths(run_dir)[name])
-            for name in ("facts", "plan", "cases")
+            **semantic_source_digests(run_dir)
         },
         "issues": issues,
     }
@@ -942,11 +1092,24 @@ def pipeline_status(run_dir: Path) -> dict[str, Any]:
     facts = load_facts(run_dir)
     if not paths["plan"].exists():
         return {"stage": "discovery", "state": "continue", "counts": {key: len(facts.get(key, [])) for key in FACT_COLLECTIONS.values()}, "next_action": "continue scanning and function transactions, then compile the plan"}
+    plan = load_plan(run_dir)
+    if plan.get("source_digest") != _planning_fact_digest(facts):
+        return {"stage": "planning", "state": "needs_local_fix", "next_action": "repair only function plans affected by changed facts"}
     if not paths["cases"].exists():
         return {"stage": "planning", "state": "continue", "next_action": "write paired executable cases in plan order"}
+    cases = load_cases(run_dir)
+    if cases.get("source_plan_digest") != _semantic_content_digest(plan):
+        return {"stage": "case_writing", "state": "needs_local_fix", "next_action": "repair only cases affected by the changed plan"}
     if not paths["review"].exists():
         return {"stage": "case_writing", "state": "continue", "next_action": "run the single cross-artifact review"}
     review = _read_json(paths["review"])
+    current_sources = semantic_source_digests(run_dir)
+    if review.get("sources") != current_sources:
+        return {
+            "stage": "review", "state": "needs_local_fix",
+            "issues": [_issue("stale_review", "repairable", "review.json", "upstream business content changed", "review the changed chain once")],
+            "next_action": "run the single semantic review once",
+        }
     return {"stage": "review", "state": review.get("status"), "issues": review.get("issues", []), "next_action": "deliver" if review.get("status") in {"ready", "ready_with_notes"} else "apply only the listed local repair"}
 
 

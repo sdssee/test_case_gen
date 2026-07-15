@@ -22,6 +22,7 @@
 
 ```powershell
 scripts/run-test-design.ps1 status --run-dir <run-dir>
+scripts/run-test-design.ps1 checkpoint --run-dir <run-dir>
 scripts/run-test-design.ps1 review --run-dir <run-dir>
 scripts/run-test-design.ps1 deliver --run-dir <run-dir> --project-root .
 scripts/validate-test-design.ps1 -Mode Fast

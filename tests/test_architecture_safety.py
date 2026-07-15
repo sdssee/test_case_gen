@@ -161,6 +161,11 @@ class ArchitectureSafetyTests(unittest.TestCase):
                 row.update(values)
                 writer.writerow(row)
         if path.name == "page-discovery.csv":
+            # Most architecture fixtures exercise the pre-existing ledger,
+            # risk, cache or delivery rule in isolation. Keep them as explicit
+            # legacy runs; left-shift execution has dedicated end-to-end tests.
+            control_config = path.parent / "artifacts" / "discovery-control" / "config.json"
+            control_config.unlink(missing_ok=True)
             inventory_path = path.with_name("page-element-inventory.csv")
             if inventory_path.exists():
                 with inventory_path.open("r", encoding="utf-8-sig", newline="") as stream:

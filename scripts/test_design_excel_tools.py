@@ -291,6 +291,12 @@ from test_design.batch import (
     init_batch_run,
 )
 from test_design.pipeline import derive_pipeline_status
+from test_design.discovery_control import (
+    abort_obligation,
+    begin_obligation,
+    complete_obligation,
+    discovery_status,
+)
 
 
 from test_design.product_map_sync import product_map_mutable_paths, sync_product_map
@@ -706,6 +712,49 @@ def main() -> int:
     pipeline_status.add_argument("--run-dir", required=True, type=Path)
     pipeline_status.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
+    discovery_next = sub.add_parser(
+        "discovery-next",
+        help="Return the next unmet page-discovery obligation before the phase gate is attempted.",
+    )
+    discovery_next.add_argument("--run-dir", required=True, type=Path)
+    discovery_next.add_argument("--json", action="store_true")
+
+    discovery_begin = sub.add_parser(
+        "discovery-begin",
+        help="Activate exactly one discovery obligation so page-tool calls are automatically recorded.",
+    )
+    discovery_begin.add_argument("--run-dir", required=True, type=Path)
+    discovery_begin.add_argument("--obligation-id", default="", help="Omit to begin the next pending obligation")
+    discovery_begin.add_argument("--json", action="store_true")
+
+    discovery_complete = sub.add_parser(
+        "discovery-complete",
+        help="Close one obligation using an audited read-mutation-changed-read sequence and evidence.",
+    )
+    discovery_complete.add_argument("--run-dir", required=True, type=Path)
+    discovery_complete.add_argument("--obligation-id", required=True)
+    discovery_complete.add_argument("--before-record-id", required=True)
+    discovery_complete.add_argument(
+        "--mutation-record-id", required=True, action="append",
+        help="Repeat for field change + save/submit + reopen actions in one persistent-mutation obligation",
+    )
+    discovery_complete.add_argument("--after-record-id", required=True)
+    discovery_complete.add_argument("--evidence-path", required=True)
+    discovery_complete.add_argument("--evidence-location", required=True)
+    discovery_complete.add_argument("--before-state", required=True)
+    discovery_complete.add_argument("--executed-action", required=True)
+    discovery_complete.add_argument("--observed-result", required=True)
+    discovery_complete.add_argument("--recovery-result", required=True)
+    discovery_complete.add_argument("--json", action="store_true")
+
+    discovery_abort = sub.add_parser(
+        "discovery-abort",
+        help="Abort only the active element obligation without invalidating completed elements.",
+    )
+    discovery_abort.add_argument("--run-dir", required=True, type=Path)
+    discovery_abort.add_argument("--obligation-id", required=True)
+    discovery_abort.add_argument("--reason", required=True)
+
     assemble = sub.add_parser("assemble-formal-workbook", help="Assemble all 8 formal-design Sheets from one batch run and the standard template.")
     assemble.add_argument("--run-dir", required=True, type=Path)
     assemble.add_argument("--template", type=Path)
@@ -779,6 +828,59 @@ def main() -> int:
                 print(f"command={status['command']}")
             for reason in status.get("reasons", []):
                 print(f"reason={reason}")
+    elif args.command == "discovery-next":
+        status = discovery_status(args.run_dir)
+        if args.json:
+            print(json.dumps(status, ensure_ascii=False, indent=2))
+        else:
+            print(f"state={status['state']}")
+            print(f"completed={status['completed_count']}/{status['obligation_count']}")
+            next_item = status.get("next_obligation")
+            if next_item:
+                print(f"obligation_id={next_item['obligation_id']}")
+                print(f"interaction_id={next_item['interaction_id']}")
+                print(f"instruction={next_item['instruction']}")
+            if status.get("active"):
+                print(f"active={status['active']['obligation_id']}")
+                for event in status.get("active_events", []):
+                    print(
+                        f"event={event.get('sequence')}:{event.get('record_id')}:"
+                        f"{event.get('operation_kind')}/{event.get('operation_name')}"
+                    )
+    elif args.command == "discovery-begin":
+        obligation_id = args.obligation_id.strip()
+        if not obligation_id:
+            pending = discovery_status(args.run_dir).get("next_obligation") or {}
+            obligation_id = str(pending.get("obligation_id", ""))
+        if not obligation_id:
+            raise ValueError("no pending discovery obligation is available")
+        active = begin_obligation(args.run_dir, obligation_id)
+        if args.json:
+            print(json.dumps(active, ensure_ascii=False, indent=2))
+        else:
+            print(f"OK: activated discovery obligation {active['obligation_id']}")
+            print(f"instruction={active['instruction']}")
+    elif args.command == "discovery-complete":
+        completion = complete_obligation(
+            args.run_dir,
+            args.obligation_id,
+            args.before_record_id,
+            args.mutation_record_id,
+            args.after_record_id,
+            args.evidence_path,
+            args.evidence_location,
+            args.before_state,
+            args.executed_action,
+            args.observed_result,
+            args.recovery_result,
+        )
+        if args.json:
+            print(json.dumps(completion, ensure_ascii=False, indent=2))
+        else:
+            print(f"OK: completed discovery obligation {completion['obligation_id']}")
+    elif args.command == "discovery-abort":
+        abort_obligation(args.run_dir, args.obligation_id, args.reason)
+        print(f"OK: aborted only discovery obligation {args.obligation_id}; completed elements remain valid")
     elif args.command == "assemble-formal-workbook":
         project_root = args.project_root.resolve()
         template = args.template or (project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx")

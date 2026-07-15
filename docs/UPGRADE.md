@@ -41,7 +41,7 @@
 `VERSION` 中包含两个版本：
 
 ```text
-framework_version=2.3.0
+framework_version=3.0.0
 asset_schema_version=2.0.0
 ```
 
@@ -67,6 +67,8 @@ powershell -ExecutionPolicy Bypass -File scripts\new-framework-upgrade-package.p
 2.2.0 起有限选择集合必须补录 `selection-option-observations.csv` 的每个选项事实；旧批次恢复时工具只补齐模板和 scope，不会伪造逐项点击、页面变化或证据。原用例分片若存在重复正文、标题参数未落地、计划功能点串位或临时选择误判为持久化变更，必须回到 discovery/plan 后重新 prepare 和生成。
 
 2.3.0 新增按角色/权限和数据状态采集的 `page-element-inventory.csv`；discovery、逐选项、元素计划和生命周期新增 `交互实例ID`，仅 page discovery 新增证据定位及通用步骤/结果锚点，逐选项新增非平凡 `预期结果锚点`。本次创建对象以同一测试数据 ID 和创建 owner 用例贯穿，各生命周期行使用对应 mutation plan 的交互实例 ID。状态计数按明确 DFX taxonomy 派生；分片从 001 非空连续；正式表与导入表确定性字段有序一致。`--resume` 只补空模板/列，不伪造事实；旧批次必须按角色和数据状态重新独立盘点、补录 ID/锚点，并把真实非空文件迁入当前批次作为证据。
+
+3.0.0 回到不依赖多 Agent 的单执行者架构，并把页面门禁左移为逐元素义务。新批次和恢复批次会启用 `discovery-next/begin/complete`、页面工具动作哈希留痕和 `interaction-branch-observations.csv`；旧记录不会被推断成真实执行，未形成读取→操作→变化后读取证明的元素必须局部重探。编辑/配置义务按元素一次变更完成保存回显、重新打开持久化和实际生效，避免同一字段重复修改三轮。正式用例和 Excel 同步加强内部 ID、截图留档、待观察预期、空标题和物理空行拦截。
 
 ## 内网应用升级包
 

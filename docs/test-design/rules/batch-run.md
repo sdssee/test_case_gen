@@ -19,6 +19,7 @@
 - `page-element-inventory.csv`
 - `page-discovery.csv`
 - `selection-option-observations.csv`
+- `interaction-branch-observations.csv`
 - `element-case-plan.csv`
 - `test-data-lifecycle.csv`
 - `risk-confirmation.csv`
@@ -46,7 +47,7 @@
 
 阶段性门禁必须按顺序执行：
 
-1. 先从 DOM/可访问性树/trace/控件树独立采集 `page-element-inventory.csv`，再执行页面交互；页面发现后运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery`，校验 inventory 与 discovery 双向一致、`交互实例ID` 传递、每个交互真实执行、当前批次 `artifacts/` 内存在非空证据文件和唯一定位、`batch-status.csv` 派生状态及逐选项账本。内容相同的静态截图即使改名也不得复用；有限选择集合必须每个选项一行且实际选择，每行 `预期结果锚点` 必须进入精确关联用例预期；数据不足或未执行必须退回 discovery。
+1. 先从 DOM/可访问性树/trace/控件树独立采集 `page-element-inventory.csv`，再循环 `discovery-next → discovery-begin → 操作前读取/真实操作/变化后读取 → discovery-complete`。完成命令自动写入输入、动态选择、分页和弹窗分支账本；未关闭义务必须当场局部补齐，不得先自由点击、最后依赖 discovery 门禁集中拒绝。全部义务关闭后运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase discovery`，校验 inventory 与 discovery 双向一致、`交互实例ID` 传递、每个交互真实执行、当前批次 `artifacts/` 内存在非空证据文件和唯一定位、`batch-status.csv` 派生状态及逐选项/逐分支账本。内容相同的静态截图即使改名也不得复用；有限选择集合必须每个选项一行且实际选择，每行 `预期结果锚点` 必须进入精确关联用例预期；数据不足或未执行必须退回 discovery。
 2. 先默认完成全部页面、元素、交互路径和 CRUD 生效闭环并通过 plan 门禁；随后仅把模型仍无法理解的业务语义、规则歧义或页面无法观察项写入 `risk-confirmation.csv`。真实风险必须声明页面可验证性、实际页面验证动作与结果、不可验证或外部依赖原因和证据；“仅查看/未逐项点击/权限未知”不算外部阻塞，可页面验证或验证未完成时必须退回 discovery。真实确认项由用户确认后更新为 `已确认/否`；没有模型不理解项时由模型运行 `record-risk-none` 写入唯一的 `RISK-NONE/无需用户确认/否`，不得伪造用户确认。
 3. 功能用例分片生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <batch-run-dir>`，清理旧分片和旧 manifest，确保本轮只保留当前批次有效 JSON。
 4. 功能用例分片、Sheet JSON 和正式 Excel 生成前运行：`powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <batch-run-dir> --phase cases`，先校验 `function_cases_manifest.json`、功能点感知三位编号分片、步骤与预期分别唯一、确定性 oracle、标题参数落地、逐选项落地、实探→计划→用例精确归属、owner 顺序和功能点单区块，再校验 Sheet 分文件、计划用例数量和实际分片数量一致。
@@ -63,7 +64,7 @@
 
 ## 文件格式门禁
 
-- `batch-scope.json`、`batch-status.csv`、`page-element-inventory.csv`、`page-discovery.csv`、`selection-option-observations.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 和 `risk-confirmation.csv` 必须由初始化工具生成或复制标准模板，禁止自定义精简表头或改写产品/批次范围。
+- `batch-scope.json`、`batch-status.csv`、`page-element-inventory.csv`、`page-discovery.csv`、`selection-option-observations.csv`、`interaction-branch-observations.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 和 `risk-confirmation.csv` 必须由初始化工具生成或复制标准模板，禁止自定义精简表头或改写产品/批次范围。
 - `page-discovery.csv`、`element-case-plan.csv` 和 `test-data-lifecycle.csv` 必须使用 CSV writer 或等价结构化方式写入，保证每行列数与表头一致，防止字段错位。
 - `batch-plan.md` 不得仍标记已完成批次为执行中或待开始；页面清单数量必须与 `batch-status.csv` 页面数一致。
 - `complete-deliverables` 必须把已完成批次的状态、覆盖数量、归档路径、导入路径、质量自检和遗留问题自动回填到 `batch-review.md` 的唯一完成行；空模板行、重复批次行或与 `batch-status.csv` 不一致的评审行必须拒绝交付。

@@ -686,6 +686,14 @@ def sheet_rows(path: Path, sheet_name: str) -> list[list[str]]:
         root = ET.fromstring(zf.read(paths[sheet_name]))
     rows: list[list[str]] = []
     for row in root.findall(".//x:sheetData/x:row", NS):
+        try:
+            row_number = int(row.attrib.get("r", str(len(rows) + 1)))
+        except ValueError:
+            fail(f"{sheet_name} contains an invalid worksheet row index")
+        if row_number <= len(rows):
+            fail(f"{sheet_name} worksheet row indexes must be strictly increasing")
+        while len(rows) < row_number - 1:
+            rows.append([])
         values: list[str] = []
         for cell in row.findall("x:c", NS):
             index = column_index(cell.attrib.get("r", "A1"))
@@ -706,6 +714,14 @@ def sheet_cell_rows(path: Path, sheet_name: str) -> list[list[tuple[str, str, in
         root = ET.fromstring(zf.read(paths[sheet_name]))
     rows: list[list[tuple[str, str, int]]] = []
     for row in root.findall(".//x:sheetData/x:row", NS):
+        try:
+            row_number = int(row.attrib.get("r", str(len(rows) + 1)))
+        except ValueError:
+            fail(f"{sheet_name} contains an invalid worksheet row index")
+        if row_number <= len(rows):
+            fail(f"{sheet_name} worksheet row indexes must be strictly increasing")
+        while len(rows) < row_number - 1:
+            rows.append([])
         values: list[tuple[str, str, int]] = []
         for cell in row.findall("x:c", NS):
             index = column_index(cell.attrib.get("r", "A1"))
@@ -840,6 +856,25 @@ def assert_no_sensitive_values(path: Path, sheet_names: list[str] | None = None)
                 if not value:
                     continue
                 assert_no_unmasked_value(value, f"{sheet_name} row {row_number} column {column_number}")
+
+
+def assert_no_internal_runtime_values(path: Path, sheet_names: list[str] | None = None) -> None:
+    patterns = [
+        re.compile(r"\buid\s*=", re.IGNORECASE),
+        re.compile(r"<element_uid>", re.IGNORECASE),
+        re.compile(r"\b(?:element|node|backend|accessibility)[_-]?id\s*=", re.IGNORECASE),
+        re.compile(r"\binteraction[-_ ]?id\s*=", re.IGNORECASE),
+    ]
+    with zipfile.ZipFile(path) as archive:
+        available_sheets = workbook_sheet_paths(archive)
+    for sheet_name in sheet_names or list(available_sheets):
+        for row_number, row in enumerate(sheet_rows(path, sheet_name), start=1):
+            for column_number, value in enumerate(row, start=1):
+                if value and any(pattern.search(value) for pattern in patterns):
+                    fail(
+                        f"{sheet_name} row {row_number} column {column_number} contains an internal "
+                        "probe identifier; formal workbooks must use visible business text"
+                    )
 
 
 def validate_formal_workbook_styles(workbook: Path) -> None:
@@ -1174,11 +1209,25 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
         fail(f"Workbook sheets mismatch. Expected {EXPECTED_SHEETS}, got {sheet_names}")
     assert_no_residual_markers(workbook, EXPECTED_SHEETS)
     assert_no_sensitive_values(workbook, EXPECTED_SHEETS)
+    assert_no_internal_runtime_values(workbook, EXPECTED_SHEETS)
     validate_table_ranges(workbook, EXPECTED_SHEETS)
     validate_formal_workbook_styles(workbook)
     formal_template_markers = ["TC-LOGIN-001", "STORY-001", "SCN-LOGIN-001", "PT-LOGIN-001", "EL-LOGIN-001", "示例项目"]
     for sheet_name in EXPECTED_SHEETS:
         rows = sheet_rows(workbook, sheet_name)
+        populated = [
+            index for index, row in enumerate(rows[1:], start=2)
+            if any(str(value or "").strip() for value in row)
+        ]
+        if populated:
+            if populated[0] != 2:
+                fail(f"{sheet_name} contains a blank physical row before its first data row")
+            blank_rows = [
+                index for index in range(populated[0], populated[-1] + 1)
+                if index > len(rows) or not any(str(value or "").strip() for value in rows[index - 1])
+            ]
+            if blank_rows:
+                fail(f"{sheet_name} contains blank physical data row(s): {blank_rows[:20]}")
         for row_index, row in enumerate(rows[1:], start=2):
             combined = "\n".join(str(value or "") for value in row)
             marker = next((item for item in formal_template_markers if item in combined), None)

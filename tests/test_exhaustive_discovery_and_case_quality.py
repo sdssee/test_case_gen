@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from openpyxl import Workbook
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +54,7 @@ from test_design.validators.batch_ledgers import (
     validate_selection_option_rows,
     validate_selection_plan_links,
 )
+from test_design.validators.function_cases import validate_case_steps_and_expected
 from test_design.batch import evidence_content_fingerprint, evidence_path_exists, manifest_parts
 from test_design.fact_store import (
     PRODUCT_MAP_SHEETS,
@@ -72,6 +74,66 @@ class CaseCollectionQualityTests(unittest.TestCase):
             "操作步骤": steps,
             "预期结果": expected,
         }
+
+    def executable_case(self) -> dict[str, str]:
+        return {
+            "功能点": "分页",
+            "用例标题": "分页-切换每页条数",
+            "前置条件": "1. 测试用户已具备告警查看权限\n2. 告警列表已准备超过一页的数据",
+            "测试数据": "告警列表超过30条",
+            "操作步骤": (
+                "1. 打开系统登录入口并登录\n"
+                "2. 通过一级菜单进入告警模块\n"
+                "3. 进入告警列表页面并打开每页条数下拉框\n"
+                "4. 选择20条/页后返回列表"
+            ),
+            "预期结果": (
+                "1. 告警列表展示每页条数选择控件\n"
+                "2. 控件回显20条/页\n"
+                "3. 当前页最多展示20条告警且页码重新计算"
+            ),
+            "备注": "",
+        }
+
+    def test_formal_steps_reject_internal_ids_screenshots_and_uncertain_results(self) -> None:
+        valid = self.executable_case()
+        validate_case_steps_and_expected(valid, "case")
+        with self.assertRaisesRegex(ValueError, "internal probe"):
+            validate_case_steps_and_expected(
+                {**valid, "操作步骤": valid["操作步骤"] + "，使用 UID=42 定位控件"}, "case"
+            )
+        with self.assertRaisesRegex(ValueError, "must not require screenshots"):
+            validate_case_steps_and_expected(
+                {**valid, "操作步骤": valid["操作步骤"] + "\n5. 截图留档"}, "case"
+            )
+        with self.assertRaisesRegex(ValueError, "not deterministic"):
+            validate_case_steps_and_expected(
+                {**valid, "预期结果": valid["预期结果"] + "，具体行为待页面确认"}, "case"
+            )
+
+    def test_screenshot_product_feature_is_not_mistaken_for_evidence_collection(self) -> None:
+        valid = self.executable_case()
+        valid.update({
+            "功能点": "截图导出",
+            "用例标题": "截图导出-保存当前图表",
+            "操作步骤": valid["操作步骤"].replace("选择20条/页后返回列表", "点击截图导出并保存后返回页面"),
+            "预期结果": valid["预期结果"].replace("控件回显20条/页", "系统生成当前图表截图文件"),
+        })
+        validate_case_steps_and_expected(valid, "case")
+
+    def test_raw_workbook_reader_preserves_physical_blank_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            path = Path(value) / "gap.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "功能测试用例"
+            sheet["A1"] = "用例 ID"
+            sheet["A3"] = "TC-001"
+            workbook.save(path)
+            rows = DELIVERABLE_VALIDATOR.sheet_rows(path, "功能测试用例")
+            self.assertEqual(["用例 ID"], rows[0])
+            self.assertEqual([], rows[1])
+            self.assertEqual(["TC-001"], rows[2])
 
     def test_rejects_different_titles_with_identical_execution_body(self) -> None:
         steps = (

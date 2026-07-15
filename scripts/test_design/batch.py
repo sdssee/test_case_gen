@@ -12,6 +12,11 @@ from datetime import datetime
 from pathlib import Path
 
 from .io_utils import atomic_copy, atomic_write_text, temporary_sibling
+from .discovery_control import (
+    assert_discovery_execution_complete,
+    discovery_control_enabled,
+    initialize_discovery_control,
+)
 from .contracts.function_cases import (
     FUNCTION_CASE_PART_RE,
     MAX_FUNCTION_CASES_PER_PART,
@@ -32,6 +37,9 @@ from .validators.batch_ledgers import (
     risk_confirmation_state,
     validate_single_batch_scope,
     validate_lifecycle_rows,
+    validate_interaction_branch_rows,
+    validate_branch_plan_links,
+    validate_branch_case_grounding,
     validate_page_element_inventory,
     validate_discovery_rows,
     validate_mutation_discovery_evidence,
@@ -146,6 +154,7 @@ CSV_REQUIRED_FILES = {
     "page-element-inventory.csv": "page-element-inventory-template.csv",
     "page-discovery.csv": "page-discovery-template.csv",
     "selection-option-observations.csv": "selection-option-observations-template.csv",
+    "interaction-branch-observations.csv": "interaction-branch-observations-template.csv",
     "element-case-plan.csv": "element-case-plan-template.csv",
     "test-data-lifecycle.csv": "test-data-lifecycle-template.csv",
     "risk-confirmation.csv": "risk-confirmation-template.csv",
@@ -654,7 +663,7 @@ def validation_input_paths(run_dir: Path, phase: str) -> list[Path]:
             run_dir / "artifacts" / "screenshots",
         ]
     )
-    for ledger_name in ["page-element-inventory.csv", "page-discovery.csv", "selection-option-observations.csv", "risk-confirmation.csv"]:
+    for ledger_name in ["page-element-inventory.csv", "page-discovery.csv", "selection-option-observations.csv", "interaction-branch-observations.csv", "risk-confirmation.csv"]:
         ledger = run_dir / ledger_name
         if not ledger.exists():
             continue
@@ -702,7 +711,7 @@ def generation_source_paths(run_dir: Path) -> list[Path]:
     if rule_dir.exists():
         paths.extend(rule_dir.glob("*.md"))
         paths.extend(rule_dir.glob("*.json"))
-    for ledger_name in ["page-element-inventory.csv", "page-discovery.csv", "selection-option-observations.csv", "risk-confirmation.csv"]:
+    for ledger_name in ["page-element-inventory.csv", "page-discovery.csv", "selection-option-observations.csv", "interaction-branch-observations.csv", "risk-confirmation.csv"]:
         ledger = run_dir / ledger_name
         if not ledger.exists():
             continue
@@ -873,6 +882,11 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
         expected_headers["selection-option-observations.csv"],
         "selection-option-observations.csv",
     )
+    interaction_branch_rows = read_csv_exact(
+        run_dir / "interaction-branch-observations.csv",
+        expected_headers["interaction-branch-observations.csv"],
+        "interaction-branch-observations.csv",
+    )
     plan_rows = read_csv_exact(run_dir / "element-case-plan.csv", expected_headers["element-case-plan.csv"], "element-case-plan.csv")
     lifecycle_rows = read_csv_exact(run_dir / "test-data-lifecycle.csv", expected_headers["test-data-lifecycle.csv"], "test-data-lifecycle.csv")
     risk_confirmation_rows = read_csv_exact(
@@ -886,6 +900,7 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
             "page-element-inventory.csv": inventory_rows,
             "page-discovery.csv": discovery_rows,
             "selection-option-observations.csv": selection_option_rows,
+            "interaction-branch-observations.csv": interaction_branch_rows,
             "element-case-plan.csv": plan_rows,
             "test-data-lifecycle.csv": lifecycle_rows,
             "risk-confirmation.csv": risk_confirmation_rows,
@@ -928,6 +943,20 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
             lambda value: evidence_path_exists(run_dir, value),
             lambda value: evidence_content_fingerprint(run_dir, value),
         )
+        real_interaction_branch_rows = [
+            row for row in interaction_branch_rows
+            if not is_template_or_empty_row(row, ["页面/入口", "交互实例ID", "分支类别", "分支动作"])
+        ]
+        if discovery_control_enabled(run_dir) or real_interaction_branch_rows:
+            validate_interaction_branch_rows(
+                interactive_rows,
+                real_selection_option_rows,
+                real_interaction_branch_rows,
+                lambda value: evidence_path_exists(run_dir, value),
+            )
+        # Legacy runs without a control config remain readable. Newly
+        # initialized/resumed runs must close deterministic obligations first.
+        assert_discovery_execution_complete(run_dir)
 
     confirmed_risk_rows: list[dict[str, str]] = []
     risk_case_ids: set[str] = set()
@@ -988,6 +1017,8 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
             declared_total += declared
 
         validate_selection_plan_links(real_selection_option_rows, real_plan_rows, split_plan_values)
+        if real_interaction_branch_rows:
+            validate_branch_plan_links(real_interaction_branch_rows, real_plan_rows, split_plan_values)
 
         if declared_total < len(interactive_rows):
             raise ValueError(
@@ -1100,6 +1131,8 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
             split_ids=split_plan_values,
         )
         validate_selection_case_grounding(real_selection_option_rows, actual_case_rows, split_plan_values)
+        if real_interaction_branch_rows:
+            validate_branch_case_grounding(real_interaction_branch_rows, actual_case_rows, split_plan_values)
         unknown_risk_case_ids = sorted(risk_case_ids - actual_case_ids)
         if unknown_risk_case_ids:
             raise ValueError(
@@ -1244,6 +1277,7 @@ def init_batch_run(
         "page-element-inventory.csv": templates_dir / "page-element-inventory-template.csv",
         "page-discovery.csv": templates_dir / "page-discovery-template.csv",
         "selection-option-observations.csv": templates_dir / "selection-option-observations-template.csv",
+        "interaction-branch-observations.csv": templates_dir / "interaction-branch-observations-template.csv",
         "element-case-plan.csv": templates_dir / "element-case-plan-template.csv",
         "test-data-lifecycle.csv": templates_dir / "test-data-lifecycle-template.csv",
         "risk-confirmation.csv": templates_dir / "risk-confirmation-template.csv",
@@ -1295,6 +1329,21 @@ def init_batch_run(
                 )
                 missing_run_files.remove("selection-option-observations.csv")
                 print(f"Added missing selection-option-observations.csv to legacy batch run: {run_dir}")
+            if "interaction-branch-observations.csv" in missing_run_files:
+                copy_template_if_missing(
+                    required_templates["interaction-branch-observations.csv"],
+                    run_dir / "interaction-branch-observations.csv",
+                )
+                write_single_csv_row(
+                    run_dir / "interaction-branch-observations.csv",
+                    {
+                        "批次ID": batch_id,
+                        "最小标题路径": resume_leaf_path,
+                        "备注": "由 --resume 补齐；必须按 discovery-next 返回的义务逐分支重新实探",
+                    },
+                )
+                missing_run_files.remove("interaction-branch-observations.csv")
+                print(f"Added missing interaction-branch-observations.csv to legacy batch run: {run_dir}")
             if "page-element-inventory.csv" in missing_run_files:
                 copy_template_if_missing(
                     required_templates["page-element-inventory.csv"],
@@ -1351,6 +1400,7 @@ def init_batch_run(
             if current_headers not in [expected_risk_headers, legacy_risk_headers, pre_page_verification_headers]:
                 raise ValueError(f"Cannot automatically migrate unsupported risk-confirmation.csv header: {current_headers}")
             migrate_structured_batch_ledgers(run_dir, templates_dir)
+            initialize_discovery_control(run_dir)
             if current_headers != expected_risk_headers:
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
                 backup_marker = "pre-default-deep-dive" if current_headers == legacy_risk_headers else "pre-page-verification"
@@ -1513,6 +1563,14 @@ def init_batch_run(
         },
     )
     write_single_csv_row(
+        run_dir / "interaction-branch-observations.csv",
+        {
+            "批次ID": batch_id,
+            "最小标题路径": leaf_path,
+            "备注": "输入、动态选择、分页和弹窗按 discovery-next 返回的义务逐项执行并绑定真实页面工具记录",
+        },
+    )
+    write_single_csv_row(
         run_dir / "element-case-plan.csv",
         {
             "批次ID": batch_id,
@@ -1566,6 +1624,8 @@ def init_batch_run(
         text = markdown_path.read_text(encoding="utf-8-sig")
         if "## 批次初始化" not in text:
             atomic_write_text(markdown_path, text.rstrip() + init_note, encoding="utf-8")
+
+    initialize_discovery_control(run_dir)
 
     print(f"Initialized batch run: {run_dir}")
     return run_dir

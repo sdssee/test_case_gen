@@ -16,11 +16,14 @@
 | 升级机制 | `VERSION`、`UPGRADE_MANIFEST.md`、`docs/UPGRADE.md`、`scripts/new-framework-upgrade-package.ps1`、`scripts/upgrade-framework.ps1` | 支持外网生成框架升级包、内网受控应用升级包，并保护内网业务资产。 |
 | 自动化校验 | `scripts/validate-test-design.py`、`scripts/validate-test-design.ps1`、`scripts/validate-test-design-deliverable.py`、`scripts/validate-test-design-deliverable.ps1` | 防止模板结构、导入模板下拉框、升级边界和关键规则发生漂移，并校验已生成交付件的覆盖关系、批次状态与产品版图同步。 |
 | 领域实现 | `scripts/test_design/`、`scripts/test_design_excel_tools.py` | 兼容 CLI 只负责编排；batch、formal_assembler、excel_utils、io_utils、paths、fact_store、product_map_sync 分别承载批次、8 Sheet 组装、Excel、事务、路径和事实领域逻辑。 |
+| 实探执行控制 | `scripts/test_design/discovery_control.py`、`.codebuddy/hooks/record-discovery-action.py` | 从元素清单生成逐项义务，自动记录页面工具调用哈希与顺序，完成时生成分支事实；不依赖多 Agent 或远程任务编排。 |
 | 运行时与事务保护 | `pyproject.toml`、`requirements.txt`、`scripts/run-test-design.ps1`、`tests/`、`.github/workflows/validate.yml` | 固定运行时契约，执行跨平台 CI，并验证批次幂等性、事实迁移、并发锁、交付回滚和升级回滚。 |
 
 规则归属和精简边界见 `docs/RULE_OWNERSHIP.md`。修改规则时，应先判断规则类型和权威源，再更新摘要引用和校验脚本。
 
 ## 关键架构决策
+
+0. 运行时采用单执行者架构。Agent 并行/串行不是正确性依赖，也没有“Agent 失败后降级成更弱流程”的分支；所有平台都走同一套确定性义务队列。页面阶段的约束在操作前展开，操作后立即闭环，阶段校验只负责发现绕过或损坏。单元素失败只修复该元素，已经完成的语义等价元素不因清单文字调整或阶段重跑而失效。
 
 1. 正式测试设计 Excel 只保留 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
 2. Skill、Rule、AGENTS、CODEBUDDY 是轻入口，目标低于 10000 字符；详细规则必须拆到 `docs/test-design/rules/`，由入口按任务类型读取，避免 CodeBuddy 加载超过 1 万字后截断或遗漏。

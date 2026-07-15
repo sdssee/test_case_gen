@@ -14,6 +14,7 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>_<BATCH-ID>/
   page-element-inventory.csv
   page-discovery.csv
   selection-option-observations.csv
+  interaction-branch-observations.csv
   element-case-plan.csv
   test-data-lifecycle.csv
   risk-confirmation.csv
@@ -44,6 +45,7 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>_<BATCH-ID>/
 - `page-element-inventory.csv`：在实际交互前从 DOM、可访问性树、浏览器 trace 或桌面控件树独立采集的元素盘点；通过快照、元素指纹和定位与实探双向对账。
 - `page-discovery.csv`：记录页面或功能点实探证据，包括最小标题路径、页面入口、元素、交互方式、选择类控件的选项取值/输入值、联动/依赖变化、输入类控件的实际输入、结果分支/后续状态、完整点击路径、观察行为、覆盖状态和关联用例 ID。
 - `selection-option-observations.csv`：选择类控件逐选项事实账本；有限集合每个选项一行，可选项实际选择，真实禁用项记录尝试结果、具体阻塞状态与独立证据；动态集合记录搜索、滚动/分页、边界与清空策略。每行保存前后状态、结果分支、恢复结果、证据路径/定位、关联用例 ID 和取自真实观察结果的 `预期结果锚点`。
+- `interaction-branch-observations.csv`：输入、动态选择、分页和弹窗的逐分支执行事实，由 discovery 义务完成命令自动写入并向计划、用例传递动作与结果锚点。
 - `element-case-plan.csv`：记录每个页面元素到 DFX 扩展方向、应生成用例数、计划用例ID和实际用例ID的映射，功能测试用例必须从该计划派生。
 - `test-data-lifecycle.csv`：记录本次创建或用户提供测试数据的创建、查看、编辑、配置生效、删除取消、删除确认和清理状态。
 - `risk-confirmation.csv`：默认全量深探完成后，仅记录模型仍无法理解的业务语义、规则歧义或页面无法观察项、已完成深探依据、用户结论和处置策略；它不是是否深探的开关。
@@ -56,7 +58,7 @@ docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>_<BATCH-ID>/
 1. 建立批次运行目录时，应通过 `init-batch-run` 复制 `templates/` 并显式传入真实 `--product-name`；工具写入 `batch-scope.json`，后续交付自动复用并拒绝冲突产品名。
 2. 每个批次正式写测试用例前，必须先完成当前批次最小标题路径下的页面或功能点遍历。
 3. 每个批次正式写测试用例前，必须先用 DOM/可访问性树/trace/控件树独立采集 `page-element-inventory.csv`，再把当前批次最小标题路径和页面或功能点实探结果写入 `page-discovery.csv`，两份账本双向对账。
-   `batch-status.csv`、`page-element-inventory.csv`、`page-discovery.csv`、`selection-option-observations.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 和 `risk-confirmation.csv` 必须复制 `templates/` 中的标准模板或保持与模板完全一致的表头，禁止自定义精简表头、增删列或在末尾追加汇总行。
+   `batch-status.csv`、`page-element-inventory.csv`、`page-discovery.csv`、`selection-option-observations.csv`、`interaction-branch-observations.csv`、`element-case-plan.csv`、`test-data-lifecycle.csv` 和 `risk-confirmation.csv` 必须复制 `templates/` 中的标准模板或保持与模板完全一致的表头，禁止自定义精简表头、增删列或在末尾追加汇总行。
    `page-discovery.csv` 必须使用 CSV writer 或等价结构化写入方式生成，每一行列数必须与表头一致，禁止手工拼接导致字段错位。
    同一元素的不同角色、状态、分支或动作必须使用稳定且不同的 `交互实例ID`。每个交互必须实际执行并记录当前批次 `artifacts/` 内存在的非空证据文件和唯一 `证据定位`；内容相同的静态截图即使改名或换路径也不得复用。未执行、仅展开、数据不足、缺少测试数据或证据矛盾时批次保持 `DISCOVERY_REQUIRED`，不能通过用户确认豁免。
    下拉框、级联选择、单选框、复选框、树选择、枚举筛选等选择类控件不得只展开查看选项；有限集合的每个可选项必须实际选择并写入 `selection-option-observations.csv`，页面真实禁用项必须尝试选择并记录具体阻塞状态与独立证据，动态集合必须记录覆盖策略，同时汇总 `选项取值/输入值` 和 `联动/依赖变化`。

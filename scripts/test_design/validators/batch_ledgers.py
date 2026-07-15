@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
+from ..discovery_control import canonical_element_type
+
 
 OPERATION_CATEGORIES = {
     "查看", "创建", "编辑", "删除", "配置", "状态变更", "搜索", "筛选", "分页",
@@ -21,6 +23,15 @@ SELECTION_MARKERS = {
 }
 STRONG_SELECTION_MARKERS = SELECTION_MARKERS - {"选择器", "选择框"}
 SELECTION_SET_TYPES = {"有限", "动态"}
+BRANCH_ACTIONS = {
+    "输入": {"正常输入", "空值", "非法输入", "边界输入"},
+    "动态选择": {
+        "有结果搜索", "无结果搜索", "滚动/分页加载", "首项选择", "中间项选择",
+        "末项/边界选择", "清空恢复",
+    },
+    "分页": {"每页条数", "上一页", "下一页", "页码跳转", "边界页", "末页/无数据", "筛选后重置"},
+    "弹窗": {"打开", "确认", "取消", "关闭/Esc", "恢复"},
+}
 CONCRETE_OPTION_BLOCKERS = {
     "禁用", "置灰", "不可选", "不可用", "无法选择", "无权限", "权限不足", "未开通", "前置条件不满足",
     "缺少依赖", "disabled", "readonly", "read-only",
@@ -115,7 +126,7 @@ def _selection_key(row: dict[str, str]) -> tuple[str, str, str, str, str]:
         row.get("交互实例ID", "").strip(),
         row.get("页面/入口", "").strip(),
         row.get("元素名称/文案", "").strip(),
-        row.get("元素类型", "").strip(),
+        canonical_element_type(row.get("元素类型", "")),
     )
 
 
@@ -129,6 +140,178 @@ def is_selection_control(row: dict[str, str]) -> bool:
     ):
         return False
     return _contains(combined, SELECTION_MARKERS)
+
+
+def _is_input_control(row: dict[str, str]) -> bool:
+    if is_selection_control(row):
+        return False
+    combined = "\n".join(
+        [row.get("元素名称/文案", ""), row.get("元素类型", ""), row.get("交互方式", "")]
+    ).lower()
+    if _contains(combined, {"按钮", "链接", "图标", "button", "link"}):
+        return False
+    return _contains(
+        combined,
+        {"输入", "填写", "文本框", "文本域", "数字框", "日期框", "搜索框", "查询框", "input", "textbox", "textarea"},
+    )
+
+
+def _is_pagination_control(row: dict[str, str]) -> bool:
+    combined = "\n".join(
+        [row.get("元素名称/文案", ""), row.get("元素类型", ""), row.get("交互方式", "")]
+    ).lower()
+    return _contains(combined, {"分页", "翻页", "页码", "每页", "上一页", "下一页", "跳页", "pagination", "pager"})
+
+
+def _is_modal_control(row: dict[str, str]) -> bool:
+    combined = "\n".join(
+        [
+            row.get("元素名称/文案", ""), row.get("元素类型", ""), row.get("交互方式", ""),
+            row.get("预期/观察行为", ""), row.get("结果分支/后续状态", ""),
+        ]
+    ).lower()
+    return _contains(combined, {"弹窗", "对话框", "抽屉", "浮层", "modal", "dialog", "drawer"})
+
+
+def validate_interaction_branch_rows(
+    discovery_rows: list[dict[str, str]],
+    option_rows: list[dict[str, str]],
+    branch_rows: list[dict[str, str]],
+    evidence_exists: Callable[[str], bool],
+) -> None:
+    """Require a distinct, actually executed row for every compound-control branch."""
+    discovery_by_key = {_selection_key(row): row for row in discovery_rows}
+    dynamic_keys = {
+        _selection_key(row) for row in option_rows if row.get("选项集合类型", "").strip() == "动态"
+    }
+    required: dict[tuple[str, tuple[str, ...]], set[str]] = {}
+    labels: dict[tuple[str, tuple[str, ...]], str] = {}
+    for key, discovery in discovery_by_key.items():
+        page = discovery.get("页面/入口", "").strip()
+        element = discovery.get("元素名称/文案", "").strip()
+        if _is_input_control(discovery):
+            owner = ("输入", key)
+            required[owner] = BRANCH_ACTIONS["输入"]
+            labels[owner] = f"{page}/{element}({key[1]})"
+        if key in dynamic_keys:
+            owner = ("动态选择", key)
+            required[owner] = BRANCH_ACTIONS["动态选择"]
+            labels[owner] = f"{page}/{element}({key[1]})"
+        if _is_modal_control(discovery):
+            owner = ("弹窗", key)
+            required[owner] = BRANCH_ACTIONS["弹窗"]
+            labels[owner] = f"{page}/{element}({key[1]})"
+        if _is_pagination_control(discovery):
+            page_key = (discovery.get("最小标题路径", "").strip(), page)
+            owner = ("分页", page_key)
+            required[owner] = BRANCH_ACTIONS["分页"]
+            labels[owner] = page
+
+    observed: dict[tuple[str, tuple[str, ...]], set[str]] = {}
+    evidence_owners: dict[tuple[str, str], str] = {}
+    for index, row in enumerate(branch_rows, start=2):
+        category = row.get("分支类别", "").strip()
+        action = row.get("分支动作", "").strip()
+        key = _selection_key(row)
+        label = (
+            f"interaction-branch-observations.csv row {index} "
+            f"({row.get('页面/入口', '')}/{row.get('元素名称/文案', '')}/{category}/{action})"
+        )
+        required_fields = [
+            "最小标题路径", "交互实例ID", "页面/入口", "元素名称/文案", "元素类型", "分支类别",
+            "分支动作", "执行前状态", "执行动作", "执行后结果", "恢复结果", "操作步骤锚点",
+            "预期结果锚点", "是否实际执行", "证据路径", "证据定位",
+        ]
+        missing = [field for field in required_fields if not row.get(field, "").strip()]
+        if missing:
+            raise ValueError(f"{label} is missing required branch facts: {missing}")
+        if category not in BRANCH_ACTIONS or action not in BRANCH_ACTIONS[category]:
+            raise ValueError(f"{label} must use one exact required branch action from {BRANCH_ACTIONS}")
+        discovery = discovery_by_key.get(key)
+        if discovery is None:
+            raise ValueError(f"{label} has no semantically matching page-discovery.csv interaction")
+        owner_key: tuple[str, ...] = (
+            (discovery.get("最小标题路径", "").strip(), discovery.get("页面/入口", "").strip())
+            if category == "分页" else key
+        )
+        owner = (category, owner_key)
+        if owner not in required:
+            raise ValueError(f"{label} category does not match the discovered control type")
+        if not _is_yes(row.get("是否实际执行", "")):
+            raise ValueError(f"{label} must use 是否实际执行=是 after a real attempted page operation")
+        facts = "\n".join(
+            [row.get("执行前状态", ""), row.get("执行动作", ""), row.get("执行后结果", ""), row.get("恢复结果", "")]
+        )
+        incomplete = [pattern.pattern for pattern in INCOMPLETE_DISCOVERY_PATTERNS if pattern.search(facts)]
+        if incomplete:
+            raise ValueError(f"{label} still contains incomplete execution facts: {incomplete}")
+        step_anchor = _normalized(row.get("操作步骤锚点", ""))
+        expected_anchor = _normalized(row.get("预期结果锚点", ""))
+        if len(step_anchor) < 4 or step_anchor not in _normalized(row.get("执行动作", "")):
+            raise ValueError(f"{label} 操作步骤锚点 must come from the concrete executed action")
+        if len(expected_anchor) < 4 or expected_anchor not in _normalized(
+            row.get("执行后结果", "") + row.get("恢复结果", "")
+        ):
+            raise ValueError(f"{label} 预期结果锚点 must come from the observed/recovery result")
+        if not evidence_exists(row.get("证据路径", "")):
+            raise ValueError(f"{label} must reference existing non-empty evidence")
+        evidence_key = (_normalized(row.get("证据路径", "")), _normalized(row.get("证据定位", "")))
+        previous = evidence_owners.get(evidence_key)
+        if previous:
+            raise ValueError(f"{label} reuses evidence path+locator from {previous}")
+        evidence_owners[evidence_key] = label
+        if action in observed.setdefault(owner, set()):
+            raise ValueError(f"{label} duplicates branch action {action!r}")
+        observed[owner].add(action)
+
+    for owner, expected in required.items():
+        missing = sorted(expected - observed.get(owner, set()))
+        if missing:
+            raise ValueError(
+                f"interaction-branch-observations.csv is incomplete for {labels[owner]} ({owner[0]}); "
+                f"missing independently executed branch(es): {missing}"
+            )
+
+
+def validate_branch_plan_links(
+    branch_rows: list[dict[str, str]],
+    plan_rows: list[dict[str, str]],
+    split_ids: Callable[[str], list[str]],
+) -> None:
+    plans_by_key: dict[tuple[str, str, str, str, str], list[dict[str, str]]] = {}
+    for plan in plan_rows:
+        plans_by_key.setdefault(_selection_key(plan), []).append(plan)
+    used_case_ids: dict[str, str] = {}
+    for index, branch in enumerate(branch_rows, start=2):
+        key = _selection_key(branch)
+        plans = plans_by_key.get(key, [])
+        label = f"interaction-branch-observations.csv row {index} ({key[2]}/{key[3]}/{branch.get('分支动作', '')})"
+        if not plans:
+            raise ValueError(f"{label} has no semantically matching element-case-plan.csv owner")
+        planned = {case_id for plan in plans for case_id in split_ids(plan.get("计划用例ID", ""))}
+        linked = split_ids(branch.get("关联用例ID", ""))
+        if len(linked) != 1 or linked[0] not in planned:
+            raise ValueError(f"{label} must link exactly one case ID owned by the exact control plan")
+        if linked[0] in used_case_ids:
+            raise ValueError(f"{label} reuses case {linked[0]} already assigned to {used_case_ids[linked[0]]}")
+        used_case_ids[linked[0]] = label
+
+
+def validate_branch_case_grounding(
+    branch_rows: list[dict[str, str]],
+    case_rows: list[dict[str, object]],
+    split_ids: Callable[[str], list[str]],
+) -> None:
+    case_by_id = {str(case.get("用例 ID", "") or "").strip(): case for case in case_rows}
+    for index, branch in enumerate(branch_rows, start=2):
+        linked = split_ids(branch.get("关联用例ID", ""))
+        if len(linked) != 1 or linked[0] not in case_by_id:
+            raise ValueError(f"interaction-branch-observations.csv row {index} must reference one generated case")
+        case = case_by_id[linked[0]]
+        if _normalized(branch.get("操作步骤锚点", "")) not in _normalized(str(case.get("操作步骤", "") or "")):
+            raise ValueError(f"case {linked[0]} does not contain the branch 操作步骤锚点")
+        if _normalized(branch.get("预期结果锚点", "")) not in _normalized(str(case.get("预期结果", "") or "")):
+            raise ValueError(f"case {linked[0]} does not contain the branch 预期结果锚点")
 
 
 def _split_option_tokens(value: str) -> set[str]:

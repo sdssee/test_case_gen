@@ -4,6 +4,8 @@
 
 本仓库不是业务应用代码。它提供可复制到业务项目根目录的 Memory、Skill、Rule、脚本和 Excel 模板。
 
+当前执行架构是“单执行者 + 确定性工具”，不依赖平台提供并行或串行 Agent。模型负责理解页面和执行操作；脚本在操作前给出逐元素义务、在操作时自动留痕、在完成时沉淀结构化事实，阶段校验只作为最后保险。这避免 Agent 调用失败导致流程中断，也避免门禁到阶段末才集中拒绝。
+
 ## 核心入口
 
 | 文件 | 作用 |
@@ -51,6 +53,30 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-
   --batch-id BATCH-001
 ```
 
+初始化后先采集 `page-element-inventory.csv`，然后循环执行以下实探闭环。`discovery-begin` 不传 ID 时自动领取下一项：
+
+```powershell
+scripts/run-test-design.ps1 discovery-next --run-dir <run-dir> --json
+scripts/run-test-design.ps1 discovery-begin --run-dir <run-dir> --json
+# 在页面工具中依次完成：操作前读取 → discovery-next 指定的真实操作 → 变化后读取
+scripts/run-test-design.ps1 discovery-next --run-dir <run-dir> --json
+scripts/run-test-design.ps1 discovery-complete --run-dir <run-dir> `
+  --obligation-id <当前义务ID> `
+  --before-record-id <操作前记录ID> `
+  --mutation-record-id <真实操作记录ID> `
+  --after-record-id <操作后记录ID> `
+  --evidence-path <artifacts内证据> `
+  --evidence-location <证据定位> `
+  --before-state <操作前页面状态> `
+  --executed-action <实际执行动作> `
+  --observed-result <实际观察结果> `
+  --recovery-result <恢复结果>
+```
+
+编辑、配置和状态变更义务需要重复传入 `--mutation-record-id`，依次绑定字段真实修改、保存/提交以及必要的重新进入动作；一个可修改元素只生成一个生效义务，但必须在该义务内同时证明保存回显、重新打开后的持久化和依赖功能实际生效。
+
+CodeBuddy 通过 `.codebuddy/settings.json` 的 PostToolUse Hook 自动记录页面工具调用的顺序、类型和哈希，不保存原始页面内容或输入值。每次完成义务会自动更新 `interaction-branch-observations.csv`；元素类型中英文同义词会语义归一，修正单个元素只重算该元素未完成义务，不清空整阶段成果。
+
 完成批次 JSON 分片后，优先使用真正的一站式组装与收口命令。该命令会从 manifest 和 7 个 Sheet JSON 生成 8 Sheet 正式工作簿，并同时写入 `current/`、`deliverables/`、内部归档和独立导入文件：
 
 ```powershell
@@ -81,7 +107,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
 - 生成功能测试用例分片前先运行 `prepare-function-case-generation` 清理旧分片和旧 manifest；功能用例按功能点感知、每片 1–10 条生成从 `artifacts/data/function_cases_part_001.json` 开始连续无断号的三位编号分片，同功能点可容纳时不得跨片，并同步 `function_cases_manifest.json`。
 - 功能用例 JSON 只允许标准字段，禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected`、英文模板或泛化占位文本；Excel 数据按 Sheet 分文件输出，避免单个脚本或 JSON 承载过多内容。
 - 七个 Sheet JSON 必须使用目标 Sheet 的精确表头且至少有一个非空值；错误字段在 cases 门禁直接失败，不延迟到 Excel 组装阶段。
-- 先运行 `pipeline-status` 获取事实派生的下一步，再按 `discovery → plan → risk → cases → delivery` 逐阶段执行；风险只阻塞 risk/cases，不阻塞元素计划。没有模型不理解项时运行 `record-risk-none`，不伪造用户确认。
+- 先运行 `pipeline-status` 获取事实派生的下一步；discovery 内先按 `discovery-next/begin/complete` 关闭逐元素义务，再按 `discovery → plan → risk → cases → delivery` 推进。风险只阻塞 risk/cases，不阻塞元素计划。没有模型不理解项时运行 `record-risk-none`，不伪造用户确认。
 - 日常修改运行 `scripts/validate-test-design.ps1 -Mode Fast`；提交、CI 和发布运行 `-Mode Full`。
 - `功能测试用例` 不写性能规格测试或 `DFP性能` 场景；性能、并发、大数据量、资源监控和极端压力进入 `性能测试设计`、风险或自动化建议。
 - 选择类有限集合逐项实际选择并写入 `selection-option-observations.csv`；每项 `预期结果锚点` 取自真实页面变化、不能只填选项值，并进入关联用例预期。创建对象后续生命周期复用同一测试数据 ID 和创建 owner 用例，各行绑定对应 mutation plan 交互实例 ID。

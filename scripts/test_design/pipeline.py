@@ -19,6 +19,7 @@ from .batch import (
 )
 from .validators.batch_ledgers import risk_confirmation_state, risk_page_verification_state
 from .fact_store import validate_catalog
+from .discovery_control import discovery_control_enabled, discovery_status
 
 
 def _failure(stage: str, action: str, reason: str, command: str = "") -> dict[str, object]:
@@ -98,6 +99,24 @@ def validate_delivery_receipt(
 
 def derive_pipeline_status(run_dir: Path) -> dict[str, object]:
     run_dir = run_dir.resolve()
+    control = discovery_status(run_dir) if discovery_control_enabled(run_dir) else None
+    if control is not None and control["state"] != "DISCOVERY_EXECUTION_COMPLETE":
+        next_item = control.get("next_obligation") or {}
+        if control["state"] == "INVENTORY_REQUIRED":
+            action = "先从 DOM/可访问性树/控件树采集 page-element-inventory.csv，再运行 discovery-next"
+            reason = "页面元素清单尚未形成，不能开始自由探索或编写 discovery 结论"
+        else:
+            action = str(next_item.get("instruction") or "继续执行 discovery-next 返回的未关闭页面义务")
+            reason = (
+                f"{control['pending_count']} 个执行前义务尚未关闭；"
+                f"当前={next_item.get('interaction_id', '')}/{next_item.get('branch', '')}"
+            )
+        return _failure(
+            "DISCOVERY_EXECUTION_REQUIRED",
+            action,
+            reason,
+            f"scripts/run-test-design.ps1 discovery-next --run-dir \"{run_dir}\" --json",
+        )
     for phase, state, action in [
         ("discovery", "DISCOVERY_REQUIRED", "继续默认全量深探，先补全 page-element-inventory.csv，再按交互实例ID补全 page-discovery.csv"),
         ("plan", "PLAN_REQUIRED", "补全结构化元素计划与逐修改项生命周期证据"),

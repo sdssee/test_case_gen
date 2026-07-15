@@ -17,6 +17,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from test_design.batch import init_batch_run
 from test_design.discovery_control import (
+    PAGINATION_BRANCHES,
     begin_obligation,
     build_obligations,
     canonical_element_type,
@@ -81,6 +82,34 @@ class LeftShiftDiscoveryTests(unittest.TestCase):
             writer = csv.DictWriter(stream, fieldnames=headers)
             writer.writeheader()
             writer.writerow(row)
+
+    def write_inventory_rows(self, rows: list[dict[str, str]]) -> None:
+        path = self.run_dir / "page-element-inventory.csv"
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            headers = next(csv.reader(stream))
+        materialized = []
+        for index, values in enumerate(rows, start=1):
+            row = {header: "" for header in headers}
+            row.update({
+                "批次ID": "BATCH-001",
+                "最小标题路径": "一级>二级>页面",
+                "页面/入口": "列表页面",
+                "角色/权限": "管理员",
+                "数据状态": "有多页数据",
+                "交互实例ID": f"PAGE-{index:03d}",
+                "采集快照ID": "SNAP-PAGER",
+                "元素指纹": f"pager-{index}",
+                "可交互状态": "是",
+                "发现来源": "DOM",
+                "证据路径": "artifacts/screenshots/inventory.txt",
+                "证据定位": f"分页控件-{index}",
+            })
+            row.update(values)
+            materialized.append(row)
+        with path.open("w", encoding="utf-8-sig", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=headers)
+            writer.writeheader()
+            writer.writerows(materialized)
 
     def add_events(
         self, obligation_id: str, *, changed: bool = True, operation: str = "input"
@@ -244,6 +273,35 @@ class LeftShiftDiscoveryTests(unittest.TestCase):
         status = discovery_status(self.run_dir)
         self.assertEqual("DISCOVERY_EXECUTION_REQUIRED", status["state"])
         self.assertEqual(4, status["pending_count"])
+
+    def test_composite_pager_expands_each_branch_once_on_its_real_control(self) -> None:
+        self.write_inventory_rows([
+            {"元素名称/文案": "每页条数", "元素类型": "下拉框", "交互方式": "选择"},
+            {"元素名称/文案": "上一页", "元素类型": "按钮", "交互方式": "点击"},
+            {"元素名称/文案": "下一页", "元素类型": "按钮", "交互方式": "点击"},
+            {"元素名称/文案": "跳转页码", "元素类型": "输入框", "交互方式": "输入"},
+            {"元素名称/文案": "当前页/总页数", "元素类型": "分页", "交互方式": "分页"},
+        ])
+        pagination = [item for item in build_obligations(self.run_dir) if item["kind"] == "pagination"]
+        self.assertEqual(set(PAGINATION_BRANCHES), {item["branch"] for item in pagination})
+        self.assertEqual(len(PAGINATION_BRANCHES), len(pagination))
+        owners = {item["branch"]: item["element_name"] for item in pagination}
+        self.assertEqual("每页条数", owners["每页条数"])
+        self.assertEqual("上一页", owners["上一页"])
+        self.assertEqual("下一页", owners["下一页"])
+        self.assertEqual("跳转页码", owners["页码跳转"])
+        self.assertEqual("当前页/总页数", owners["边界页"])
+        self.assertEqual("下一页", owners["末页/无数据"])
+        self.assertEqual("每页条数", owners["筛选后重置"])
+
+    def test_pager_child_does_not_receive_unsupported_pagination_branches(self) -> None:
+        self.write_inventory_rows([
+            {"元素名称/文案": "上一页", "元素类型": "按钮", "交互方式": "点击"},
+        ])
+        pagination = [item for item in build_obligations(self.run_dir) if item["kind"] == "pagination"]
+        self.assertEqual({"上一页", "边界页"}, {item["branch"] for item in pagination})
+        self.assertNotIn("每页条数", {item["branch"] for item in pagination})
+        self.assertNotIn("页码跳转", {item["branch"] for item in pagination})
 
     def test_completion_requires_changed_read(self) -> None:
         self.write_inventory()

@@ -90,6 +90,39 @@ def canonical_interaction(value: str) -> str:
     return _canonical(value, _INTERACTION_ALIASES, "unknown")
 
 
+def _pagination_role(row: dict[str, str]) -> str:
+    """Return the concrete role of one control inside a composite pager.
+
+    A pager is represented by several inventory rows.  Treating every child
+    row as the complete pager creates a Cartesian expansion of all pagination
+    branches.  Roles keep branch ownership on the control that can actually
+    execute the action while still allowing a single generic pager row.
+    """
+    element_type = canonical_element_type(row.get("元素类型", ""))
+    interaction = canonical_interaction(row.get("交互方式", ""))
+    direct = "\n".join(
+        [row.get("元素名称/文案", ""), row.get("元素类型", ""), row.get("交互方式", "")]
+    ).casefold()
+
+    if any(marker in direct for marker in {"每页", "条/页", "页容量", "page size", "page-size", "pagesize"}):
+        return "page_size"
+    if any(marker in direct for marker in {"上一页", "前一页", "previous", "prev"}):
+        return "previous"
+    if any(marker in direct for marker in {"下一页", "后一页", "next"}):
+        return "next"
+    if any(marker in direct for marker in {"跳页", "跳转", "目标页", "go to page", "goto page"}):
+        return "jump"
+    if "页码" in direct and (element_type in {"textbox", "textarea"} or interaction == "input"):
+        return "jump"
+    if any(marker in direct for marker in {"首页", "末页", "边界", "当前页", "禁用", "first page", "last page"}):
+        return "boundary"
+    if element_type == "pagination" or interaction == "paginate" or any(
+        marker in direct for marker in {"分页", "翻页", "pagination", "pager"}
+    ):
+        return "root"
+    return ""
+
+
 def normalized_control_identity(row: dict[str, str]) -> tuple[str, str, str, str, str]:
     """Stable identity tolerant of Chinese/English control synonyms."""
     return (
@@ -179,9 +212,7 @@ def _control_traits(row: dict[str, str], observed: dict[str, str] | None = None)
         traits.add("input")
     if element_type in {"select", "radio", "checkbox"} or interaction == "select":
         traits.add("selection")
-    if element_type == "pagination" or interaction == "paginate" or any(
-        marker in f"{direct}\n{observed_behavior}" for marker in {"分页", "翻页", "页码", "每页", "上一页", "下一页", "pagination", "pager"}
-    ):
+    if _pagination_role(row):
         traits.add("pagination")
     if element_type == "dialog" or any(marker in f"{direct}\n{observed_behavior}" for marker in {"弹窗", "对话框", "抽屉", "浮层", "modal", "dialog", "drawer"}):
         traits.add("modal")
@@ -327,6 +358,50 @@ def _make_obligation(
     return result
 
 
+def _pagination_branch_owners(
+    inventory_rows: list[dict[str, str]],
+    discovery_by_identity: dict[tuple[str, str, str, str, str], dict[str, str]],
+) -> dict[tuple[str, str, str, str, str], tuple[str, ...]]:
+    """Assign every pagination branch once per leaf/page composite control."""
+    groups: dict[tuple[str, str], list[tuple[dict[str, str], str]]] = {}
+    for row in inventory_rows:
+        observed = discovery_by_identity.get(normalized_control_identity(row))
+        if "pagination" not in _control_traits(row, observed):
+            continue
+        groups.setdefault(
+            (row.get("最小标题路径", "").strip(), row.get("页面/入口", "").strip()), []
+        ).append((row, _pagination_role(row)))
+
+    preferences = {
+        "每页条数": ("page_size", "root"),
+        "上一页": ("previous", "root"),
+        "下一页": ("next", "root"),
+        "页码跳转": ("jump", "root"),
+        "边界页": ("boundary", "previous", "next", "root"),
+        "末页/无数据": ("next", "boundary", "root"),
+        "筛选后重置": ("page_size", "root"),
+    }
+    assigned: dict[tuple[str, str, str, str, str], list[str]] = {}
+    for rows in groups.values():
+        for branch in PAGINATION_BRANCHES:
+            owner = next(
+                (
+                    row
+                    for preferred_role in preferences[branch]
+                    for row, role in rows
+                    if role == preferred_role
+                ),
+                None,
+            )
+            # Do not assign an unsupported action to an unrelated child
+            # control.  The discovery gate will expose a genuinely missing
+            # pager capability instead of manufacturing a false interaction.
+            if owner is None:
+                continue
+            assigned.setdefault(normalized_control_identity(owner), []).append(branch)
+    return {key: tuple(branches) for key, branches in assigned.items()}
+
+
 def build_obligations(run_dir: Path) -> list[dict[str, Any]]:
     """Derive deterministic obligations from the mutable element inventory."""
     run_dir = run_dir.resolve()
@@ -336,7 +411,9 @@ def build_obligations(run_dir: Path) -> list[dict[str, Any]]:
         for row in _read_csv(run_dir / "page-discovery.csv")
         if row.get("交互实例ID") and row.get("元素名称/文案")
     }
-    for row in _real_inventory_rows(run_dir):
+    inventory_rows = _real_inventory_rows(run_dir)
+    pagination_branches = _pagination_branch_owners(inventory_rows, discovery_by_identity)
+    for row in inventory_rows:
         if not _looks_interactive(row):
             continue
         interaction_id = row["交互实例ID"]
@@ -375,7 +452,7 @@ def build_obligations(run_dir: Path) -> list[dict[str, Any]]:
                     ))
         if "pagination" in traits:
             specialized = True
-            for branch in PAGINATION_BRANCHES:
+            for branch in pagination_branches.get(normalized_control_identity(row), ()):
                 obligations.append(_make_obligation(
                     row, "pagination", branch, "click" if branch != "每页条数" else "select",
                     f"在“{element}”所在列表实际执行分页分支“{branch}”，观察页码、条数、列表和边界状态。",

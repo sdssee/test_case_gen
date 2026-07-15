@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if python3 -c \"import sys\" >/dev/null 2>&1; then python3 \"$CODEBUDDY_PROJECT_DIR/.codebuddy/hooks/record-discovery-action.py\" || exit 2; elif python -c \"import sys\" >/dev/null 2>&1; then python \"$CODEBUDDY_PROJECT_DIR/.codebuddy/hooks/record-discovery-action.py\" || exit 2; else echo 'CodeBuddy discovery recorder: Python interpreter unavailable' >&2; exit 2; fi",
+            "command": ".codebuddy\\hooks\\run-discovery-recorder.cmd",
             "timeout": 30
           }
         ]

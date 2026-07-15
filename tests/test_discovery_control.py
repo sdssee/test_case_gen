@@ -119,6 +119,67 @@ class LeftShiftDiscoveryTests(unittest.TestCase):
         )
         return tuple(record["record_id"] for record in records)  # type: ignore[return-value]
 
+    def add_configuration_variant(
+        self,
+        variant_id: str,
+        category: str,
+        value: str,
+        *,
+        timing: str = "编辑后",
+        strategy: str = "复用测试对象修改",
+        data_id: str = "CODEX_TEST_CONFIG_001",
+    ) -> None:
+        path = self.run_dir / "configuration-variant-observations.csv"
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            headers = list(reader.fieldnames or [])
+            rows = [row for row in reader if row.get("交互实例ID")]
+        row = {header: "" for header in headers}
+        row.update({
+            "批次ID": "BATCH-001",
+            "最小标题路径": "一级>二级>页面",
+            "交互实例ID": "INTR-001",
+            "页面/入口": "编辑配置页面",
+            "配置项": "名称",
+            "变体ID": variant_id,
+            "变体类别": category,
+            "配置值/组合": value,
+            "生效时机": timing,
+            "执行策略": strategy,
+            "测试数据ID/名称": data_id,
+            "组合覆盖策略": "单项全量+依赖互斥边界+Pairwise",
+        })
+        rows.append(row)
+        with path.open("w", encoding="utf-8-sig", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=headers)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def add_finite_options(self, *values: str) -> None:
+        path = self.run_dir / "selection-option-observations.csv"
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            headers = next(csv.reader(stream))
+        rows = []
+        for index, value in enumerate(values, start=1):
+            row = {header: "" for header in headers}
+            row.update({
+                "批次ID": "BATCH-001",
+                "最小标题路径": "一级>二级>页面",
+                "交互实例ID": "INTR-001",
+                "页面/入口": "编辑配置页面",
+                "元素名称/文案": "模式",
+                "元素类型": "下拉框",
+                "选项集合类型": "有限",
+                "可用选项总数": str(len(values)),
+                "选项序号": str(index),
+                "选项值": value,
+            })
+            rows.append(row)
+        with path.open("w", encoding="utf-8-sig", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=headers)
+            writer.writeheader()
+            writer.writerows(rows)
+
     def complete_first(self, *, changed: bool = True) -> str:
         status = discovery_status(self.run_dir)
         obligation = status["next_obligation"]
@@ -275,6 +336,108 @@ class LeftShiftDiscoveryTests(unittest.TestCase):
         self.assertNotIn("AI_TEST_secret", raw)
         self.assertNotIn("sensitive-content", raw)
 
+    def test_windows_hook_wrapper_works_without_project_environment(self) -> None:
+        self.write_inventory()
+        obligation = discovery_status(self.run_dir)["next_obligation"]
+        begin_obligation(self.run_dir, obligation["obligation_id"])
+        hook_dir = self.root / ".codebuddy" / "hooks"
+        hook_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(REPO_ROOT / ".codebuddy" / "hooks", hook_dir)
+        environment = dict(os.environ)
+        environment.pop("CODEBUDDY_PROJECT_DIR", None)
+        completed = subprocess.run(
+            ["cmd", "/c", str(hook_dir / "run-discovery-recorder.cmd")],
+            input=json.dumps({
+                "tool_name": "Browser",
+                "tool_input": {"request": {"action": "snapshot"}},
+                "tool_response": {"page": "before"},
+                "session_id": "session-wrapper",
+                "transcript_path": "history.jsonl",
+            }),
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            env=environment,
+            check=False,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        events = self.run_dir / "artifacts" / "discovery-control" / "action-events.jsonl"
+        self.assertTrue(events.is_file())
+
+    def test_hook_unavailable_falls_back_to_artifact_evidence(self) -> None:
+        self.write_inventory()
+        obligation = discovery_status(self.run_dir)["next_obligation"]
+        begin_obligation(self.run_dir, obligation["obligation_id"])
+        evidence_dir = self.run_dir / "artifacts" / "screenshots"
+        for name, value in (("before.txt", "empty input"), ("after.txt", "validation shown"), ("recovery.txt", "input restored")):
+            (evidence_dir / name).write_text(value, encoding="utf-8")
+        completion = complete_obligation(
+            self.run_dir,
+            obligation["obligation_id"],
+            evidence_mode="artifact",
+            before_evidence_path="artifacts/screenshots/before.txt",
+            before_evidence_location="before input state",
+            after_evidence_path="artifacts/screenshots/after.txt",
+            after_evidence_location="validation result state",
+            recovery_evidence_path="artifacts/screenshots/recovery.txt",
+            recovery_evidence_location="restored input state",
+            before_state="输入框为空且可编辑",
+            executed_action="输入有效测试值并触发校验",
+            observed_result="页面展示该输入对应的确定结果",
+            recovery_result="输入框已经恢复初始状态",
+        )
+        self.assertEqual("ARTIFACT_VERIFIED", completion["evidence_mode"])
+        self.assertEqual([], completion["mutation_record_ids"])
+
+    def test_auto_mode_recovers_from_missing_hook_records(self) -> None:
+        self.write_inventory()
+        obligation = discovery_status(self.run_dir)["next_obligation"]
+        begin_obligation(self.run_dir, obligation["obligation_id"])
+        evidence_dir = self.run_dir / "artifacts" / "screenshots"
+        for name, value in (("auto-before.txt", "before"), ("auto-after.txt", "after"), ("auto-recovery.txt", "recovery")):
+            (evidence_dir / name).write_text(value, encoding="utf-8")
+        completion = complete_obligation(
+            self.run_dir,
+            obligation["obligation_id"],
+            before_record_id="missing-before",
+            mutation_record_id="missing-action",
+            after_record_id="missing-after",
+            before_evidence_path="artifacts/screenshots/auto-before.txt",
+            before_evidence_location="before state",
+            after_evidence_path="artifacts/screenshots/auto-after.txt",
+            after_evidence_location="after state",
+            recovery_evidence_path="artifacts/screenshots/auto-recovery.txt",
+            recovery_evidence_location="recovery state",
+            before_state="输入框处于初始状态",
+            executed_action="输入测试值并触发页面校验",
+            observed_result="页面展示输入值对应的明确结果",
+            recovery_result="输入框恢复到初始状态",
+        )
+        self.assertEqual("ARTIFACT_VERIFIED", completion["evidence_mode"])
+        self.assertIn("unknown action-event", completion["hook_fallback_reason"])
+
+    def test_trace_evidence_closes_without_hook_events(self) -> None:
+        self.write_inventory()
+        obligation = discovery_status(self.run_dir)["next_obligation"]
+        begin_obligation(self.run_dir, obligation["obligation_id"])
+        trace = self.run_dir / "artifacts" / "trace.json"
+        trace.write_text('{"events":["before","action","after","recovery"]}', encoding="utf-8")
+        completion = complete_obligation(
+            self.run_dir,
+            obligation["obligation_id"],
+            evidence_mode="trace",
+            trace_evidence_path="artifacts/trace.json",
+            trace_before_location="event=before",
+            trace_action_location="event=action",
+            trace_after_location="event=after",
+            trace_recovery_location="event=recovery",
+            before_state="输入框为空且可编辑",
+            executed_action="输入边界值并提交校验",
+            observed_result="页面展示边界值对应的明确结果",
+            recovery_result="页面恢复到可继续测试状态",
+        )
+        self.assertEqual("TRACE_VERIFIED", completion["evidence_mode"])
+
     def test_inventory_is_required_before_free_exploration(self) -> None:
         status = discovery_status(self.run_dir)
         self.assertEqual("INVENTORY_REQUIRED", status["state"])
@@ -291,10 +454,13 @@ class LeftShiftDiscoveryTests(unittest.TestCase):
         self.assertEqual({"INTR-001": 5}, expanded["pending_by_element"])
         self.assertEqual("modal", expanded["next_obligation"]["kind"])
 
-    def test_editable_field_uses_one_committed_effect_obligation(self) -> None:
+    def test_editable_configuration_uses_one_transaction_per_variant(self) -> None:
         self.write_inventory(page="编辑配置页面")
-        effects = [item for item in build_obligations(self.run_dir) if item["kind"] == "mutation-effect"]
-        self.assertEqual(1, len(effects))
+        self.assertEqual("CONFIGURATION_VARIANT_PLAN_REQUIRED", discovery_status(self.run_dir)["state"])
+        self.add_configuration_variant("CFG-DEFAULT", "默认不配置", "保持默认")
+        self.add_configuration_variant("CFG-VALUE", "单值", "新名称")
+        effects = [item for item in build_obligations(self.run_dir) if item["kind"] == "configuration-variant"]
+        self.assertEqual(2, len(effects))
         self.assertTrue(effects[0]["requires_commit"])
         begin_obligation(self.run_dir, effects[0]["obligation_id"])
         before, mutation, after = self.add_events(effects[0]["obligation_id"], operation="input")
@@ -314,6 +480,77 @@ class LeftShiftDiscoveryTests(unittest.TestCase):
                 "保存成功且重新打开后回显新名称",
                 "页面已恢复可继续测试状态",
             )
+
+    def test_save_button_is_not_misclassified_as_editable_configuration(self) -> None:
+        self.write_inventory(
+            page="编辑配置页面", element_type="按钮", interaction="点击", element_name="保存"
+        )
+        obligations = build_obligations(self.run_dir)
+        self.assertEqual(1, len(obligations))
+        self.assertEqual("interaction", obligations[0]["kind"])
+        self.assertEqual("DISCOVERY_EXECUTION_REQUIRED", discovery_status(self.run_dir)["state"])
+
+    def test_finite_configuration_requires_every_observed_value(self) -> None:
+        self.write_inventory(
+            page="编辑配置页面", element_type="下拉框", interaction="选择", element_name="模式"
+        )
+        self.add_finite_options("标准", "增强")
+        self.add_configuration_variant("CFG-DEFAULT", "默认不配置", "保持默认")
+        self.add_configuration_variant("CFG-STANDARD", "单值", "标准")
+        status = discovery_status(self.run_dir)
+        self.assertEqual("CONFIGURATION_VARIANT_PLAN_REQUIRED", status["state"])
+        self.assertTrue(any("增强" in issue for issue in status["configuration_plan_issues"]))
+        self.add_configuration_variant("CFG-ENHANCED", "单值", "增强")
+        status = discovery_status(self.run_dir)
+        self.assertNotEqual("CONFIGURATION_VARIANT_PLAN_REQUIRED", status["state"])
+        variants = [item for item in build_obligations(self.run_dir) if item["kind"] == "configuration-variant"]
+        self.assertEqual(3, len(variants))
+
+    def test_completed_configuration_variant_survives_local_plan_extension(self) -> None:
+        self.write_inventory(page="编辑配置页面")
+        self.add_configuration_variant("CFG-DEFAULT", "默认不配置", "保持默认")
+        self.add_configuration_variant("CFG-VALUE", "单值", "新名称")
+        obligation = next(
+            item for item in build_obligations(self.run_dir)
+            if item.get("configuration_variant_id") == "CFG-DEFAULT"
+        )
+        begin_obligation(self.run_dir, obligation["obligation_id"])
+        evidence_dir = self.run_dir / "artifacts" / "screenshots"
+        for name, value in (
+            ("cfg-before.txt", "old configuration"),
+            ("cfg-after.txt", "save succeeded"),
+            ("cfg-recovery.txt", "baseline restored"),
+            ("cfg-effect.txt", "dependent behavior observed"),
+        ):
+            (evidence_dir / name).write_text(value, encoding="utf-8")
+        complete_obligation(
+            self.run_dir,
+            obligation["obligation_id"],
+            evidence_mode="artifact",
+            before_evidence_path="artifacts/screenshots/cfg-before.txt",
+            before_evidence_location="配置前详情",
+            after_evidence_path="artifacts/screenshots/cfg-after.txt",
+            after_evidence_location="保存成功详情",
+            recovery_evidence_path="artifacts/screenshots/cfg-recovery.txt",
+            recovery_evidence_location="恢复基线详情",
+            effect_evidence_path="artifacts/screenshots/cfg-effect.txt",
+            effect_evidence_location="依赖功能实际效果",
+            before_state="配置项显示原始值",
+            executed_action="保持默认值并提交保存",
+            observed_result="保存成功并重新进入显示默认值",
+            recovery_result="测试对象已经恢复到基线状态",
+            commit_result="页面明确提示保存成功",
+            persistence_result="重新进入详情仍回显默认值",
+            effect_result="依赖功能按默认值产生预期效果",
+        )
+        self.add_configuration_variant("CFG-BOUNDARY", "边界值", "最大长度名称")
+        completed_ids = {
+            json.loads(line)["obligation_id"]
+            for line in (self.run_dir / "artifacts" / "discovery-control" / "completions.jsonl")
+            .read_text(encoding="utf-8").splitlines()
+        }
+        self.assertIn(obligation["obligation_id"], completed_ids)
+        self.assertEqual(1, discovery_status(self.run_dir)["completed_count"])
 
 
 if __name__ == "__main__":

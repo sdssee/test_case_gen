@@ -53,7 +53,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 init-batch-
   --batch-id BATCH-001
 ```
 
-初始化后先采集 `page-element-inventory.csv`，然后循环执行以下实探闭环。`discovery-begin` 不传 ID 时自动领取下一项：
+初始化后先采集 `page-element-inventory.csv`。创建、编辑或配置页存在可配置控件时，先在 `configuration-variant-observations.csv` 登记默认/不配置、每个有限值、开关双态、依赖互斥和必要组合；然后循环执行以下实探闭环。`discovery-begin` 不传 ID 时自动领取下一项：
 
 ```powershell
 scripts/run-test-design.ps1 discovery-next --run-dir <run-dir> --json
@@ -75,7 +75,9 @@ scripts/run-test-design.ps1 discovery-complete --run-dir <run-dir> `
 
 编辑、配置和状态变更义务需要重复传入 `--mutation-record-id`，依次绑定字段真实修改、保存/提交以及必要的重新进入动作；一个可修改元素只生成一个生效义务，但必须在该义务内同时证明保存回显、重新打开后的持久化和依赖功能实际生效。
 
-CodeBuddy 通过 `.codebuddy/settings.json` 的 PostToolUse Hook 自动记录页面工具调用的顺序、类型和哈希，不保存原始页面内容或输入值。每次完成义务会自动更新 `interaction-branch-observations.csv`；元素类型中英文同义词会语义归一，修正单个元素只重算该元素未完成义务，不清空整阶段成果。
+CodeBuddy 可通过 `.codebuddy/settings.json` 的 PostToolUse Hook 自动记录页面工具调用顺序、类型和哈希，但 Hook 是增强证据源，不是流程依赖。Windows 使用 `.codebuddy/hooks/run-discovery-recorder.cmd`，环境变量缺失时自动从脚本位置识别项目根目录。Hook 不可用时，`discovery-complete --evidence-mode trace|artifact` 自动改用同一次操作的 trace 定位，或操作前/操作后/恢复证据；CRUD 和配置变体还必须提供实际生效证据。完成结果明确记录 `HOOK_VERIFIED`、`TRACE_VERIFIED` 或 `ARTIFACT_VERIFIED`，降级不降低覆盖标准。
+
+配置变体按“一变体、一紧凑事务”执行：实际配置 → 创建/保存 → 重新进入回显/持久化 → 依赖功能实际生效 → 恢复/清理，不拆成多轮页面任务。创建时配置的每个变体使用独立 `AI_TEST/CODEX_TEST` 对象；编辑后配置可复用同一测试对象。新增变体只增加该元素的新待办，已完成义务不会被整阶段清空。
 
 完成批次 JSON 分片后，优先使用真正的一站式组装与收口命令。该命令会从 manifest 和 7 个 Sheet JSON 生成 8 Sheet 正式工作簿，并同时写入 `current/`、`deliverables/`、内部归档和独立导入文件：
 
@@ -103,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run-test-design.ps1 complete-de
 - 测试策略以 `DFX维度` 和 `DFX场景` 为主字段，`场景类型`、`正向/反向` 已废弃；详细矩阵见 `docs/test-design/rules/dfx-test-strategy.md`。
 - DFX 是扩展检查矩阵，不是用例生成主轴；必须先按页面元素和交互路径建立覆盖骨架，再用 DFX 扩展功能、异常、边界、权限、状态、数据一致性、性能、风险和自动化建议。
 - 页面实探前先从 DOM/可访问性树/trace/控件树独立采集 `page-element-inventory.csv`，再按稳定 `交互实例ID` 执行并写入 `page-discovery.csv`；两者必须双向一致。实探后沉淀 `element-case-plan.csv` 和 `test-data-lifecycle.csv`；`应生成用例数` 按元素类型 × DFX 最低预算计算，真实新增/编辑/删除形成测试数据生命周期闭环。
-- 配置项保存类用例必须验证保存后回显和实际生效，不能只写点击保存或提示成功。
+- 配置项保存类用例必须来自 `configuration-variant-observations.csv` 的已执行事务，验证保存、回显、持久化和实际生效，不能只写点击保存或提示成功。
 - 生成功能测试用例分片前先运行 `prepare-function-case-generation` 清理旧分片和旧 manifest；功能用例按功能点感知、每片 1–10 条生成从 `artifacts/data/function_cases_part_001.json` 开始连续无断号的三位编号分片，同功能点可容纳时不得跨片，并同步 `function_cases_manifest.json`。
 - 功能用例 JSON 只允许标准字段，禁止 `用例编号`、`用侊 ID`、`用侊标题`、`场景类型`、`steps`、`expected`、英文模板或泛化占位文本；Excel 数据按 Sheet 分文件输出，避免单个脚本或 JSON 承载过多内容。
 - 七个 Sheet JSON 必须使用目标 Sheet 的精确表头且至少有一个非空值；错误字段在 cases 门禁直接失败，不延迟到 Excel 组装阶段。

@@ -155,6 +155,7 @@ CSV_REQUIRED_FILES = {
     "page-discovery.csv": "page-discovery-template.csv",
     "selection-option-observations.csv": "selection-option-observations-template.csv",
     "interaction-branch-observations.csv": "interaction-branch-observations-template.csv",
+    "configuration-variant-observations.csv": "configuration-variant-observations-template.csv",
     "element-case-plan.csv": "element-case-plan-template.csv",
     "test-data-lifecycle.csv": "test-data-lifecycle-template.csv",
     "risk-confirmation.csv": "risk-confirmation-template.csv",
@@ -663,7 +664,7 @@ def validation_input_paths(run_dir: Path, phase: str) -> list[Path]:
             run_dir / "artifacts" / "screenshots",
         ]
     )
-    for ledger_name in ["page-element-inventory.csv", "page-discovery.csv", "selection-option-observations.csv", "interaction-branch-observations.csv", "risk-confirmation.csv"]:
+    for ledger_name in ["page-element-inventory.csv", "page-discovery.csv", "selection-option-observations.csv", "interaction-branch-observations.csv", "configuration-variant-observations.csv", "risk-confirmation.csv"]:
         ledger = run_dir / ledger_name
         if not ledger.exists():
             continue
@@ -711,7 +712,7 @@ def generation_source_paths(run_dir: Path) -> list[Path]:
     if rule_dir.exists():
         paths.extend(rule_dir.glob("*.md"))
         paths.extend(rule_dir.glob("*.json"))
-    for ledger_name in ["page-element-inventory.csv", "page-discovery.csv", "selection-option-observations.csv", "interaction-branch-observations.csv", "risk-confirmation.csv"]:
+    for ledger_name in ["page-element-inventory.csv", "page-discovery.csv", "selection-option-observations.csv", "interaction-branch-observations.csv", "configuration-variant-observations.csv", "risk-confirmation.csv"]:
         ledger = run_dir / ledger_name
         if not ledger.exists():
             continue
@@ -887,6 +888,11 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
         expected_headers["interaction-branch-observations.csv"],
         "interaction-branch-observations.csv",
     )
+    configuration_variant_rows = read_csv_exact(
+        run_dir / "configuration-variant-observations.csv",
+        expected_headers["configuration-variant-observations.csv"],
+        "configuration-variant-observations.csv",
+    )
     plan_rows = read_csv_exact(run_dir / "element-case-plan.csv", expected_headers["element-case-plan.csv"], "element-case-plan.csv")
     lifecycle_rows = read_csv_exact(run_dir / "test-data-lifecycle.csv", expected_headers["test-data-lifecycle.csv"], "test-data-lifecycle.csv")
     risk_confirmation_rows = read_csv_exact(
@@ -901,6 +907,7 @@ def validate_batch_artifacts(run_dir: Path, phase: str = "cases", use_cache: boo
             "page-discovery.csv": discovery_rows,
             "selection-option-observations.csv": selection_option_rows,
             "interaction-branch-observations.csv": interaction_branch_rows,
+            "configuration-variant-observations.csv": configuration_variant_rows,
             "element-case-plan.csv": plan_rows,
             "test-data-lifecycle.csv": lifecycle_rows,
             "risk-confirmation.csv": risk_confirmation_rows,
@@ -1278,6 +1285,7 @@ def init_batch_run(
         "page-discovery.csv": templates_dir / "page-discovery-template.csv",
         "selection-option-observations.csv": templates_dir / "selection-option-observations-template.csv",
         "interaction-branch-observations.csv": templates_dir / "interaction-branch-observations-template.csv",
+        "configuration-variant-observations.csv": templates_dir / "configuration-variant-observations-template.csv",
         "element-case-plan.csv": templates_dir / "element-case-plan-template.csv",
         "test-data-lifecycle.csv": templates_dir / "test-data-lifecycle-template.csv",
         "risk-confirmation.csv": templates_dir / "risk-confirmation-template.csv",
@@ -1344,6 +1352,21 @@ def init_batch_run(
                 )
                 missing_run_files.remove("interaction-branch-observations.csv")
                 print(f"Added missing interaction-branch-observations.csv to legacy batch run: {run_dir}")
+            if "configuration-variant-observations.csv" in missing_run_files:
+                copy_template_if_missing(
+                    required_templates["configuration-variant-observations.csv"],
+                    run_dir / "configuration-variant-observations.csv",
+                )
+                write_single_csv_row(
+                    run_dir / "configuration-variant-observations.csv",
+                    {
+                        "批次ID": batch_id,
+                        "最小标题路径": resume_leaf_path,
+                        "备注": "由 --resume 补齐；创建/编辑/配置页面的可配置项必须补充默认、逐值及依赖互斥变体",
+                    },
+                )
+                missing_run_files.remove("configuration-variant-observations.csv")
+                print(f"Added missing configuration-variant-observations.csv to legacy batch run: {run_dir}")
             if "page-element-inventory.csv" in missing_run_files:
                 copy_template_if_missing(
                     required_templates["page-element-inventory.csv"],
@@ -1568,6 +1591,14 @@ def init_batch_run(
             "批次ID": batch_id,
             "最小标题路径": leaf_path,
             "备注": "输入、动态选择、分页和弹窗按 discovery-next 返回的义务逐项执行并绑定真实页面工具记录",
+        },
+    )
+    write_single_csv_row(
+        run_dir / "configuration-variant-observations.csv",
+        {
+            "批次ID": batch_id,
+            "最小标题路径": leaf_path,
+            "备注": "创建/编辑/配置页面的可配置控件先登记变体；每个变体用一次事务完成保存、回显、持久化、生效与恢复",
         },
     )
     write_single_csv_row(

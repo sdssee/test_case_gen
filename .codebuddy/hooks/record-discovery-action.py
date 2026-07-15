@@ -123,9 +123,10 @@ def append_event(path: Path, event: dict[str, Any]) -> None:
 
 def main() -> int:
     root_text = os.environ.get("CODEBUDDY_PROJECT_DIR", "").strip()
-    if not root_text:
-        return 0
-    root = Path(root_text).resolve()
+    # CodeBuddy on Windows does not always export CODEBUDDY_PROJECT_DIR to
+    # PostToolUse.  The hook lives at <project>/.codebuddy/hooks, so this is a
+    # deterministic and safe fallback instead of silently disabling evidence.
+    root = Path(root_text).resolve() if root_text else Path(__file__).resolve().parents[2]
     active = active_file(root)
     if active is None:
         return 0

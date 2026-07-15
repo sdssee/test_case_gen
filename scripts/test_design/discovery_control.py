@@ -126,6 +126,14 @@ def _option_rows(run_dir: Path, interaction_id: str) -> list[dict[str, str]]:
     ]
 
 
+def _configuration_rows(run_dir: Path, interaction_id: str = "") -> list[dict[str, str]]:
+    rows = [
+        row for row in _read_csv(run_dir / "configuration-variant-observations.csv")
+        if row.get("交互实例ID") and row.get("变体ID") and row.get("变体类别")
+    ]
+    return [row for row in rows if row.get("交互实例ID") == interaction_id] if interaction_id else rows
+
+
 def _slug(value: str) -> str:
     text = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", value).strip("-")
     return text[:40] or "item"
@@ -179,11 +187,114 @@ def _control_traits(row: dict[str, str], observed: dict[str, str] | None = None)
         traits.add("modal")
     if any(marker in direct for marker in {"创建", "新增", "添加", "create", "add"}):
         traits.add("create")
-    if any(marker in context for marker in {"编辑", "修改", "配置", "状态", "启用", "停用", "edit", "update", "config"}):
+    persistent_context = any(
+        marker in context for marker in {"编辑", "修改", "配置", "状态", "edit", "update", "config"}
+    )
+    editable_control = element_type in {
+        "textbox", "textarea", "select", "radio", "checkbox", "switch", "upload"
+    } or interaction in {"input", "select", "toggle", "upload"}
+    direct_mutation = any(
+        marker in direct for marker in {"编辑", "修改", "配置", "启用", "停用", "发布", "下线", "edit", "update", "config"}
+    )
+    if direct_mutation or (persistent_context and editable_control):
         traits.add("persistent_mutation")
     if any(marker in direct for marker in {"删除", "移除", "delete", "remove"}):
         traits.add("delete")
     return traits
+
+
+def _is_configurable(row: dict[str, str], traits: set[str]) -> bool:
+    return "persistent_mutation" in traits and bool(
+        traits.intersection({"input", "selection"})
+        or canonical_element_type(row.get("元素类型", "")) in {"switch", "upload", "radio", "checkbox"}
+    )
+
+
+def configuration_plan_issues(run_dir: Path) -> list[str]:
+    issues: list[str] = []
+    all_rows = _configuration_rows(run_dir)
+    variant_ids: set[str] = set()
+    inventory_by_id = {row.get("交互实例ID", ""): row for row in _real_inventory_rows(run_dir)}
+    configurable_ids: set[str] = set()
+    for interaction_id, inventory in inventory_by_id.items():
+        traits = _control_traits(inventory)
+        if not _is_configurable(inventory, traits) and not any(
+            row.get("交互实例ID") == interaction_id for row in all_rows
+        ):
+            continue
+        configurable_ids.add(interaction_id)
+        variants = [row for row in all_rows if row.get("交互实例ID") == interaction_id]
+        if not variants:
+            issues.append(f"{interaction_id}/{inventory.get('元素名称/文案')}: configuration variants are not planned")
+            continue
+        categories = {row.get("变体类别", "") for row in variants}
+        if not categories.intersection({"默认不配置", "默认值", "不配置"}):
+            issues.append(f"{interaction_id}: missing default/unconfigured variant")
+        option_values = {row.get("选项值", "") for row in _option_rows(run_dir, interaction_id)}
+        planned_values = {row.get("配置值/组合", "") for row in variants}
+        missing_values = sorted(option_values - planned_values)
+        if missing_values:
+            issues.append(f"{interaction_id}: finite option variants missing {missing_values}")
+        if canonical_element_type(inventory.get("元素类型", "")) == "switch":
+            normalized = "\n".join(categories | planned_values)
+            if not all(any(marker in normalized for marker in markers) for markers in (("开启", "开", "on"), ("关闭", "关", "off"))):
+                issues.append(f"{interaction_id}: switch must plan both on and off variants")
+        for row in variants:
+            variant_id = row.get("变体ID", "")
+            if variant_id in variant_ids:
+                issues.append(f"duplicate configuration variant id: {variant_id}")
+            variant_ids.add(variant_id)
+            required = ["页面/入口", "配置项", "配置值/组合", "生效时机", "执行策略"]
+            missing = [field for field in required if not row.get(field, "")]
+            if missing:
+                issues.append(f"{interaction_id}/{variant_id}: missing {missing}")
+            if row.get("生效时机") == "创建时":
+                data_id = row.get("测试数据ID/名称", "")
+                if not re.search(r"(?:AI_TEST|CODEX_TEST)", data_id):
+                    issues.append(f"{interaction_id}/{variant_id}: create-time variant requires tagged independent test data")
+                if row.get("执行策略") != "独立创建":
+                    issues.append(f"{interaction_id}/{variant_id}: create-time variant must use 独立创建")
+        combination_declared = any(
+            row.get("依赖/互斥条件", "") or "组合" in row.get("变体类别", "") for row in variants
+        )
+        totals = {row.get("可达组合总数", "") for row in variants if row.get("可达组合总数", "")}
+        if combination_declared and not totals:
+            issues.append(f"{interaction_id}: combination variants must declare 可达组合总数")
+        if len(totals) > 1:
+            issues.append(f"{interaction_id}: 可达组合总数 must be consistent")
+        if totals:
+            raw_total = next(iter(totals))
+            try:
+                total = int(raw_total)
+            except ValueError:
+                issues.append(f"{interaction_id}: 可达组合总数 must be an integer")
+            else:
+                strategies = {row.get("组合覆盖策略", "") for row in variants}
+                if total <= 16:
+                    if strategies != {"全组合"} or len(planned_values) < total:
+                        issues.append(f"{interaction_id}: reachable combinations <=16 require 全组合 and {total} unique variants")
+                else:
+                    required_strategy = "单项全量+依赖互斥边界+Pairwise"
+                    required_categories = {"边界组合", "Pairwise组合"}
+                    dependency_text = "\n".join(row.get("依赖/互斥条件", "") for row in variants)
+                    if "依赖" in dependency_text:
+                        required_categories.add("依赖组合")
+                    if "互斥" in dependency_text:
+                        required_categories.add("互斥组合")
+                    if strategies != {required_strategy} or not required_categories.issubset(categories):
+                        issues.append(
+                            f"{interaction_id}: large combination space requires {required_strategy} and {sorted(required_categories)}"
+                        )
+    extras = sorted({row.get("交互实例ID", "") for row in all_rows} - configurable_ids)
+    if extras:
+        issues.append(f"configuration variants reference non-configurable or missing interactions: {extras}")
+    create_data_ids = [
+        row.get("测试数据ID/名称", "") for row in all_rows if row.get("生效时机") == "创建时"
+    ]
+    duplicates = sorted({item for item in create_data_ids if item and create_data_ids.count(item) > 1})
+    if duplicates:
+        issues.append(f"create-time variants must use independent test objects; duplicated: {duplicates}")
+    return issues
 
 
 def _make_obligation(
@@ -194,10 +305,11 @@ def _make_obligation(
     instruction: str,
     *,
     requires_commit: bool = False,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     interaction_id = row.get("交互实例ID", "").strip()
     semantic_identity = normalized_control_identity(row)
-    return {
+    result = {
         "obligation_id": _obligation_id(interaction_id, kind, branch, semantic_identity),
         "interaction_id": interaction_id,
         "leaf_path": row.get("最小标题路径", "").strip(),
@@ -211,6 +323,8 @@ def _make_obligation(
         "requires_commit": requires_commit,
         "instruction": instruction,
     }
+    result.update(extra or {})
+    return result
 
 
 def build_obligations(run_dir: Path) -> list[dict[str, Any]]:
@@ -228,6 +342,8 @@ def build_obligations(run_dir: Path) -> list[dict[str, Any]]:
         interaction_id = row["交互实例ID"]
         element = row["元素名称/文案"]
         traits = _control_traits(row, discovery_by_identity.get(normalized_control_identity(row)))
+        configuration_rows = _configuration_rows(run_dir, interaction_id)
+        configurable = _is_configurable(row, traits) or bool(configuration_rows)
         specialized = False
         if "input" in traits:
             specialized = True
@@ -277,7 +393,30 @@ def build_obligations(run_dir: Path) -> list[dict[str, Any]]:
                 row, "crud", "创建成功", "click",
                 f"使用本次 AI_TEST/CODEX_TEST 数据通过“{element}”完成真实创建，并验证列表或详情出现该数据。",
             ))
-        if "persistent_mutation" in traits:
+        if configurable and configuration_rows:
+            specialized = True
+            field_operation = canonical_interaction(row.get("交互方式", ""))
+            if field_operation not in {"input", "select", "toggle", "upload", "click"}:
+                field_operation = "click"
+            for variant in sorted(configuration_rows, key=lambda item: item.get("变体ID", "")):
+                variant_id = variant.get("变体ID", "")
+                variant_value = variant.get("配置值/组合", "")
+                obligations.append(_make_obligation(
+                    row,
+                    "configuration-variant",
+                    f"{variant_id}:{variant_value}",
+                    field_operation,
+                    f"对“{element}”执行配置变体“{variant_value}”，在同一次事务中完成创建/保存、重新进入回显、持久化、实际生效及恢复/清理。",
+                    requires_commit=True,
+                    extra={
+                        "configuration_variant_id": variant_id,
+                        "configuration_value": variant_value,
+                        "effective_timing": variant.get("生效时机", ""),
+                        "execution_strategy": variant.get("执行策略", ""),
+                        "test_data_id": variant.get("测试数据ID/名称", ""),
+                    },
+                ))
+        elif "persistent_mutation" in traits and not configurable:
             specialized = True
             field_operation = canonical_interaction(row.get("交互方式", ""))
             if field_operation not in {"input", "select", "toggle", "upload", "click"}:
@@ -459,11 +598,69 @@ def _upsert_interaction_branch_row(
     atomic_write_text(path, "\ufeff" + output.getvalue(), encoding="utf-8")
 
 
+def _record_configuration_variant_result(
+    run_dir: Path,
+    active: dict[str, Any],
+    completion: dict[str, Any],
+) -> None:
+    if active.get("kind") != "configuration-variant":
+        return
+    path = run_dir / "configuration-variant-observations.csv"
+    with path.open("r", encoding="utf-8-sig", newline="") as stream:
+        reader = csv.DictReader(stream)
+        headers = list(reader.fieldnames or [])
+        rows = list(reader)
+    variant_id = str(active.get("configuration_variant_id", ""))
+    matched = 0
+    for row in rows:
+        if row.get("交互实例ID", "").strip() != active.get("interaction_id") or row.get("变体ID", "").strip() != variant_id:
+            continue
+        matched += 1
+        row.update({
+            "执行前状态": completion["before_state"],
+            "实际配置动作": completion["executed_action"],
+            "创建/保存结果": completion["commit_result"],
+            "回显/持久化结果": completion["persistence_result"],
+            "实际生效结果": completion["effect_result"],
+            "恢复/清理结果": completion["recovery_result"],
+            "是否实际执行": "是",
+            "证据路径": completion["evidence_path"],
+            "证据定位": completion["evidence_location"],
+        })
+    if matched != 1:
+        raise ValueError(f"configuration variant {variant_id!r} must match exactly one ledger row")
+    from io import StringIO
+    output = StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=headers, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    atomic_write_text(path, "\ufeff" + output.getvalue(), encoding="utf-8")
+
+
 def _completion_map(run_dir: Path) -> dict[str, dict[str, Any]]:
     return {
         str(item.get("obligation_id")): item
         for item in _read_jsonl(_control_root(run_dir) / COMPLETIONS_FILE)
         if item.get("obligation_id")
+    }
+
+
+def hook_runtime_status(run_dir: Path) -> dict[str, Any]:
+    project_root = run_dir.resolve().parents[3]
+    wrapper = project_root / ".codebuddy" / "hooks" / "run-discovery-recorder.cmd"
+    settings = project_root / ".codebuddy" / "settings.json"
+    configured = False
+    if settings.is_file():
+        try:
+            configured = "run-discovery-recorder.cmd" in settings.read_text(encoding="utf-8")
+        except OSError:
+            configured = False
+    return {
+        "optional": True,
+        "configured": configured,
+        "wrapper_exists": wrapper.is_file(),
+        "events_recorded": len(_read_jsonl(_control_root(run_dir) / EVENTS_FILE)),
+        "fallback_modes": ["TRACE_VERIFIED", "ARTIFACT_VERIFIED"],
     }
 
 
@@ -486,6 +683,7 @@ def discovery_status(run_dir: Path) -> dict[str, Any]:
     obligations = build_obligations(run_dir)
     completions = _completion_map(run_dir)
     pending = [item for item in obligations if item["obligation_id"] not in completions]
+    configuration_issues = configuration_plan_issues(run_dir)
     root = _control_root(run_dir)
     active = None
     if (root / ACTIVE_FILE).is_file():
@@ -497,7 +695,12 @@ def discovery_status(run_dir: Path) -> dict[str, Any]:
             item for item in _read_jsonl(root / EVENTS_FILE)
             if int(item.get("sequence", 0)) >= first_sequence
         ]
-    state = "INVENTORY_REQUIRED" if not inventory else ("DISCOVERY_EXECUTION_REQUIRED" if pending else "DISCOVERY_EXECUTION_COMPLETE")
+    state = (
+        "INVENTORY_REQUIRED" if not inventory
+        else "CONFIGURATION_VARIANT_PLAN_REQUIRED" if configuration_issues
+        else "DISCOVERY_EXECUTION_REQUIRED" if pending
+        else "DISCOVERY_EXECUTION_COMPLETE"
+    )
     snapshot = {
         "version": CONTROL_VERSION,
         "state": state,
@@ -509,7 +712,13 @@ def discovery_status(run_dir: Path) -> dict[str, Any]:
         "active_events": active_events,
         "next_obligation": pending[0] if pending else None,
         "pending_by_element": {},
+        "completion_by_evidence_mode": {},
+        "hook": hook_runtime_status(run_dir),
+        "configuration_plan_issues": configuration_issues,
     }
+    for item in completions.values():
+        mode = str(item.get("evidence_mode") or "LEGACY_HOOK_VERIFIED")
+        snapshot["completion_by_evidence_mode"][mode] = snapshot["completion_by_evidence_mode"].get(mode, 0) + 1
     for item in pending:
         snapshot["pending_by_element"].setdefault(item["interaction_id"], 0)
         snapshot["pending_by_element"][item["interaction_id"]] += 1
@@ -524,6 +733,11 @@ def discovery_status(run_dir: Path) -> dict[str, Any]:
 def begin_obligation(run_dir: Path, obligation_id: str) -> dict[str, Any]:
     run_dir = run_dir.resolve()
     status = discovery_status(run_dir)
+    if status["state"] == "CONFIGURATION_VARIANT_PLAN_REQUIRED":
+        raise ValueError(
+            "complete configuration-variant-observations.csv planning before executing page mutations: "
+            + "; ".join(status.get("configuration_plan_issues", [])[:10])
+        )
     obligations = {item["obligation_id"]: item for item in build_obligations(run_dir)}
     if obligation_id not in obligations:
         raise ValueError(f"unknown or stale discovery obligation: {obligation_id}")
@@ -586,44 +800,25 @@ def _validate_evidence(run_dir: Path, raw_path: str) -> Path:
     return path
 
 
-def _operation_satisfies(required: str, actual: str) -> bool:
-    allowed = {
-        "input": {"input"},
-        "select": {"select", "click"},
-        "expand": {"expand", "click", "select"},
-        "click": {"click", "toggle", "other_mutation"},
-        "toggle": {"toggle", "click"},
-        "upload": {"upload", "input", "other_mutation"},
+def _evidence_segment(run_dir: Path, stage: str, raw_path: str, location: str) -> dict[str, str]:
+    path = _validate_evidence(run_dir, raw_path)
+    if len(location.strip()) < 3:
+        raise ValueError(f"{stage} evidence location must identify the concrete step/state")
+    return {
+        "stage": stage,
+        "path": path.relative_to(run_dir).as_posix(),
+        "location": location.strip(),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
     }
-    return actual in allowed.get(required, {required})
 
 
-def complete_obligation(
-    run_dir: Path,
-    obligation_id: str,
+def _validate_hook_sequence(
+    root: Path,
+    active: dict[str, Any],
     before_record_id: str,
     mutation_record_id: str | list[str],
     after_record_id: str,
-    evidence_path: str,
-    evidence_location: str,
-    before_state: str,
-    executed_action: str,
-    observed_result: str,
-    recovery_result: str,
-) -> dict[str, Any]:
-    run_dir = run_dir.resolve()
-    root = _control_root(run_dir)
-    active_path = root / ACTIVE_FILE
-    if not active_path.is_file():
-        raise ValueError("no active discovery obligation; run discovery-begin first")
-    active = json.loads(active_path.read_text(encoding="utf-8"))
-    if active.get("obligation_id") != obligation_id:
-        raise ValueError("active discovery obligation does not match")
-    current_obligations = {item["obligation_id"] for item in build_obligations(run_dir)}
-    if obligation_id not in current_obligations:
-        raise ValueError("active discovery obligation became stale after the element inventory changed; abort and re-begin it")
-    if obligation_id in _completion_map(run_dir):
-        raise ValueError("discovery obligation is already complete")
+) -> tuple[list[str], str, str]:
     events = {str(item.get("record_id")): item for item in _read_jsonl(root / EVENTS_FILE)}
     mutation_record_ids = (
         [item.strip() for item in mutation_record_id if item.strip()]
@@ -631,7 +826,7 @@ def complete_obligation(
         else [item.strip() for item in mutation_record_id.split(",") if item.strip()]
     )
     if not mutation_record_ids:
-        raise ValueError("at least one mutation record id is required")
+        raise ValueError("at least one mutation record id is required for HOOK_VERIFIED")
     try:
         before = events[before_record_id]
         mutations = [events[record_id] for record_id in mutation_record_ids]
@@ -675,9 +870,144 @@ def complete_obligation(
         raise ValueError("page-tool records must identify a non-empty physical session and transcript")
     if before.get("tool_response_sha256") == after.get("tool_response_sha256"):
         raise ValueError("before and after page reads are identical; a determinable page response change is required")
-    evidence = _validate_evidence(run_dir, evidence_path)
-    if len(evidence_location.strip()) < 3:
-        raise ValueError("evidence location must identify the concrete step/state")
+    return mutation_record_ids, str(session_hash), str(transcript_hash)
+
+
+def _operation_satisfies(required: str, actual: str) -> bool:
+    allowed = {
+        "input": {"input"},
+        "select": {"select", "click"},
+        "expand": {"expand", "click", "select"},
+        "click": {"click", "toggle", "other_mutation"},
+        "toggle": {"toggle", "click"},
+        "upload": {"upload", "input", "other_mutation"},
+    }
+    return actual in allowed.get(required, {required})
+
+
+def complete_obligation(
+    run_dir: Path,
+    obligation_id: str,
+    before_record_id: str = "",
+    mutation_record_id: str | list[str] = "",
+    after_record_id: str = "",
+    evidence_path: str = "",
+    evidence_location: str = "",
+    before_state: str = "",
+    executed_action: str = "",
+    observed_result: str = "",
+    recovery_result: str = "",
+    *,
+    evidence_mode: str = "auto",
+    trace_evidence_path: str = "",
+    trace_before_location: str = "",
+    trace_action_location: str = "",
+    trace_after_location: str = "",
+    trace_recovery_location: str = "",
+    before_evidence_path: str = "",
+    before_evidence_location: str = "",
+    after_evidence_path: str = "",
+    after_evidence_location: str = "",
+    recovery_evidence_path: str = "",
+    recovery_evidence_location: str = "",
+    effect_evidence_path: str = "",
+    effect_evidence_location: str = "",
+    commit_result: str = "",
+    persistence_result: str = "",
+    effect_result: str = "",
+) -> dict[str, Any]:
+    run_dir = run_dir.resolve()
+    root = _control_root(run_dir)
+    active_path = root / ACTIVE_FILE
+    if not active_path.is_file():
+        raise ValueError("no active discovery obligation; run discovery-begin first")
+    active = json.loads(active_path.read_text(encoding="utf-8"))
+    if active.get("obligation_id") != obligation_id:
+        raise ValueError("active discovery obligation does not match")
+    current_obligations = {item["obligation_id"] for item in build_obligations(run_dir)}
+    if obligation_id not in current_obligations:
+        raise ValueError("active discovery obligation became stale after the element inventory changed; abort and re-begin it")
+    if obligation_id in _completion_map(run_dir):
+        raise ValueError("discovery obligation is already complete")
+    requested_mode = evidence_mode.strip().casefold() or "auto"
+    if requested_mode not in {"auto", "hook", "trace", "artifact"}:
+        raise ValueError("evidence mode must be auto, hook, trace, or artifact")
+    auto_requested = requested_mode == "auto"
+    if requested_mode == "auto":
+        if before_record_id.strip() and after_record_id.strip() and mutation_record_id:
+            requested_mode = "hook"
+        elif trace_evidence_path.strip():
+            requested_mode = "trace"
+        else:
+            requested_mode = "artifact"
+    mutation_record_ids: list[str] = []
+    session_hash = ""
+    transcript_hash = ""
+    hook_fallback_reason = ""
+    segments: list[dict[str, str]] = []
+    if requested_mode == "hook":
+        try:
+            mutation_record_ids, session_hash, transcript_hash = _validate_hook_sequence(
+                root, active, before_record_id, mutation_record_id, after_record_id
+            )
+        except ValueError as exc:
+            if not auto_requested:
+                raise
+            hook_fallback_reason = str(exc)
+            if trace_evidence_path.strip():
+                requested_mode = "trace"
+            elif before_evidence_path.strip() and recovery_evidence_path.strip() and (
+                after_evidence_path.strip() or evidence_path.strip()
+            ):
+                requested_mode = "artifact"
+            else:
+                raise ValueError(
+                    f"Hook evidence failed and automatic fallback evidence is incomplete: {exc}"
+                ) from exc
+    verified_mode = f"{requested_mode.upper()}_VERIFIED"
+    if requested_mode == "hook":
+        segments.append(_evidence_segment(run_dir, "after", evidence_path, evidence_location))
+    elif requested_mode == "trace":
+        locations = [trace_before_location, trace_action_location, trace_after_location, trace_recovery_location]
+        if any(len(item.strip()) < 3 for item in locations) or len({item.strip() for item in locations}) != 4:
+            raise ValueError("TRACE_VERIFIED requires four distinct before/action/after/recovery locations")
+        for stage, location in zip(("before", "action", "after", "recovery"), locations):
+            segments.append(_evidence_segment(run_dir, stage, trace_evidence_path, location))
+    else:
+        artifact_inputs = [
+            ("before", before_evidence_path, before_evidence_location),
+            ("after", after_evidence_path or evidence_path, after_evidence_location or evidence_location),
+            ("recovery", recovery_evidence_path, recovery_evidence_location),
+        ]
+        segments = [_evidence_segment(run_dir, *item) for item in artifact_inputs]
+        identities = {(item["path"], item["location"]) for item in segments}
+        if len(identities) != len(segments):
+            raise ValueError("ARTIFACT_VERIFIED requires distinct before/after/recovery evidence states")
+        image_segments = [item for item in segments if Path(item["path"]).suffix.casefold() in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}]
+        if len({item["sha256"] for item in image_segments}) != len(image_segments):
+            raise ValueError("renamed/copied screenshots cannot represent different evidence states")
+    effect_kinds = {"crud", "mutation-effect", "configuration-variant"}
+    effect_required = active.get("kind") in effect_kinds or (
+        active.get("kind") == "delete" and active.get("branch") == "确认删除成功"
+    )
+    if effect_required:
+        effect_segment = _evidence_segment(run_dir, "effect", effect_evidence_path, effect_evidence_location)
+        if (effect_segment["path"], effect_segment["location"]) in {
+            (item["path"], item["location"]) for item in segments
+        }:
+            raise ValueError("actual effect evidence must identify a state distinct from save/after evidence")
+        if Path(effect_segment["path"]).suffix.casefold() in {".png", ".jpg", ".jpeg", ".webp", ".bmp"} and any(
+            item["sha256"] == effect_segment["sha256"] for item in segments
+        ):
+            raise ValueError("actual effect screenshot cannot reuse copied save/after evidence")
+        segments.append(effect_segment)
+        for label, value in {
+            "commit result": commit_result,
+            "persistence result": persistence_result,
+            "effect result": effect_result,
+        }.items():
+            if len(value.strip()) < 4:
+                raise ValueError(f"{label} must be concrete for CRUD/configuration effect closure")
     if len(before_state.strip()) < 4:
         raise ValueError("before state must be concrete and at least 4 characters")
     if len(executed_action.strip()) < 4:
@@ -698,27 +1028,36 @@ def complete_obligation(
         "kind": active.get("kind"),
         "branch": active.get("branch"),
         "completed_at": _now(),
-        "before_record_id": before_record_id,
-        "mutation_record_id": mutation_record_ids[0],
+        "evidence_mode": verified_mode,
+        "hook_fallback_reason": hook_fallback_reason,
+        "evidence_segments": segments,
+        "before_record_id": before_record_id if requested_mode == "hook" else "",
+        "mutation_record_id": mutation_record_ids[0] if mutation_record_ids else "",
         "mutation_record_ids": mutation_record_ids,
-        "after_record_id": after_record_id,
-        "evidence_path": evidence.relative_to(run_dir).as_posix(),
-        "evidence_location": evidence_location.strip(),
+        "after_record_id": after_record_id if requested_mode == "hook" else "",
+        "session_sha256": session_hash,
+        "transcript_sha256": transcript_hash,
+        "evidence_path": next(item["path"] for item in segments if item["stage"] == "after"),
+        "evidence_location": next(item["location"] for item in segments if item["stage"] == "after"),
         "before_state": before_state.strip(),
         "executed_action": executed_action.strip(),
         "observed_result": observed_result.strip(),
         "recovery_result": recovery_result.strip(),
+        "commit_result": commit_result.strip(),
+        "persistence_result": persistence_result.strip(),
+        "effect_result": effect_result.strip(),
     }
     _upsert_interaction_branch_row(
         run_dir,
         active,
         completion["evidence_path"],
-        evidence_location,
+        completion["evidence_location"],
         before_state,
         executed_action,
         observed_result,
         recovery_result,
     )
+    _record_configuration_variant_result(run_dir, active, completion)
     _append_jsonl(root / COMPLETIONS_FILE, completion)
     active_path.unlink()
     discovery_status(run_dir)
@@ -732,6 +1071,10 @@ def assert_discovery_execution_complete(run_dir: Path) -> None:
     status = discovery_status(run_dir)
     if status["state"] == "INVENTORY_REQUIRED":
         raise ValueError("left-shift discovery requires page-element-inventory.csv before any interaction")
+    if status["state"] == "CONFIGURATION_VARIANT_PLAN_REQUIRED":
+        raise ValueError(
+            "configuration variant plan is incomplete: " + "; ".join(status.get("configuration_plan_issues", [])[:10])
+        )
     if status.get("active"):
         raise ValueError(
             f"left-shift discovery has an unfinished active obligation: {status['active'].get('obligation_id')}"
@@ -742,3 +1085,13 @@ def assert_discovery_execution_complete(run_dir: Path) -> None:
             "left-shift discovery execution is incomplete; run discovery-next and execute the returned obligation: "
             f"{next_item.get('interaction_id')}/{next_item.get('branch')} ({status['pending_count']} pending)"
         )
+    for row in _configuration_rows(run_dir):
+        required = [
+            "执行前状态", "实际配置动作", "创建/保存结果", "回显/持久化结果",
+            "实际生效结果", "恢复/清理结果", "证据路径", "证据定位",
+        ]
+        missing = [field for field in required if not row.get(field, "").strip()]
+        if row.get("是否实际执行", "").strip() != "是" or missing:
+            raise ValueError(
+                f"configuration variant {row.get('变体ID')} is not a complete executed transaction; missing {missing}"
+            )

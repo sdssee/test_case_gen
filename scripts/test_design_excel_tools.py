@@ -729,22 +729,32 @@ def main() -> int:
 
     discovery_complete = sub.add_parser(
         "discovery-complete",
-        help="Close one obligation using an audited read-mutation-changed-read sequence and evidence.",
+        help="Close one obligation using Hook, trace, or before/after/recovery artifact evidence.",
     )
     discovery_complete.add_argument("--run-dir", required=True, type=Path)
     discovery_complete.add_argument("--obligation-id", required=True)
-    discovery_complete.add_argument("--before-record-id", required=True)
+    discovery_complete.add_argument("--before-record-id", default="")
     discovery_complete.add_argument(
-        "--mutation-record-id", required=True, action="append",
+        "--mutation-record-id", action="append", default=[],
         help="Repeat for field change + save/submit + reopen actions in one persistent-mutation obligation",
     )
-    discovery_complete.add_argument("--after-record-id", required=True)
-    discovery_complete.add_argument("--evidence-path", required=True)
-    discovery_complete.add_argument("--evidence-location", required=True)
+    discovery_complete.add_argument("--after-record-id", default="")
+    discovery_complete.add_argument("--evidence-mode", choices=["auto", "hook", "trace", "artifact"], default="auto")
+    discovery_complete.add_argument("--evidence-path", default="")
+    discovery_complete.add_argument("--evidence-location", default="")
+    discovery_complete.add_argument("--trace-evidence-path", default="")
+    for stage in ("before", "action", "after", "recovery"):
+        discovery_complete.add_argument(f"--trace-{stage}-location", default="")
+    for stage in ("before", "after", "recovery", "effect"):
+        discovery_complete.add_argument(f"--{stage}-evidence-path", default="")
+        discovery_complete.add_argument(f"--{stage}-evidence-location", default="")
     discovery_complete.add_argument("--before-state", required=True)
     discovery_complete.add_argument("--executed-action", required=True)
     discovery_complete.add_argument("--observed-result", required=True)
     discovery_complete.add_argument("--recovery-result", required=True)
+    discovery_complete.add_argument("--commit-result", default="")
+    discovery_complete.add_argument("--persistence-result", default="")
+    discovery_complete.add_argument("--effect-result", default="")
     discovery_complete.add_argument("--json", action="store_true")
 
     discovery_abort = sub.add_parser(
@@ -873,6 +883,23 @@ def main() -> int:
             args.executed_action,
             args.observed_result,
             args.recovery_result,
+            evidence_mode=args.evidence_mode,
+            trace_evidence_path=args.trace_evidence_path,
+            trace_before_location=args.trace_before_location,
+            trace_action_location=args.trace_action_location,
+            trace_after_location=args.trace_after_location,
+            trace_recovery_location=args.trace_recovery_location,
+            before_evidence_path=args.before_evidence_path,
+            before_evidence_location=args.before_evidence_location,
+            after_evidence_path=args.after_evidence_path,
+            after_evidence_location=args.after_evidence_location,
+            recovery_evidence_path=args.recovery_evidence_path,
+            recovery_evidence_location=args.recovery_evidence_location,
+            effect_evidence_path=args.effect_evidence_path,
+            effect_evidence_location=args.effect_evidence_location,
+            commit_result=args.commit_result,
+            persistence_result=args.persistence_result,
+            effect_result=args.effect_result,
         )
         if args.json:
             print(json.dumps(completion, ensure_ascii=False, indent=2))

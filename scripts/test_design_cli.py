@@ -15,6 +15,7 @@ from test_design.session_runtime import (
     checkpoint_facts,
     compile_facts,
     ensure_run,
+    pending_exploration_requirements,
     pipeline_status,
     review_run,
     save_cases,
@@ -104,6 +105,18 @@ def main() -> int:
             for item in recorded
         )
         result = {"recorded": len(recorded), "facts": [item["fact_id"] for item in recorded], "checkpointed": should_checkpoint}
+        element_plans = [
+            {
+                "element_ref": item["fact_id"],
+                "element_name": str(item.get("data", {}).get("name", "")),
+                "requirements": item.get("data", {}).get("exploration_requirements", []),
+            }
+            for item in recorded
+            if item.get("kind") == "element" and item.get("data", {}).get("exploration_requirements")
+        ]
+        if element_plans:
+            result["exploration_plan"] = element_plans
+        result["remaining_exploration"] = pending_exploration_requirements(args.run_dir)
         if should_checkpoint:
             result["checkpoint"] = checkpoint_facts(args.run_dir)
         _print(result)

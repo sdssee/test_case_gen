@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import json
 import sys
 import tempfile
 import unittest
@@ -11,7 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from test_design.session_runtime import (
-    append_events, build_plan_skeleton, checkpoint_facts, ensure_run, save_cases, save_plan,
+    append_events, build_plan_skeleton, checkpoint_facts, ensure_run,
+    pending_exploration_requirements, save_cases, save_plan,
 )
 
 
@@ -25,7 +25,24 @@ class QualityRuleTests(unittest.TestCase):
                     "name": "目标地址", "type": "文本输入框", "default_value": "192.168.1.1"
                 }}])
 
-    def test_required_input_branches_and_trigger_are_enforced_before_recording(self) -> None:
+    def test_element_properties_compile_a_dynamic_dfx_exploration_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "dynamic-plan"
+            ensure_run(run_dir, "工具>诊断")
+            element = append_events(run_dir, [{"kind": "element", "fact_id": "EL", "data": {
+                "name": "目标", "type": "input", "interactive": True,
+                "input_format": "domain", "unique": True, "min_length": 1, "max_length": 253,
+            }}])[0]
+            requirements = element["data"]["exploration_requirements"]
+            self.assertEqual(
+                ["valid", "invalid_format", "duplicate", "boundary_min", "boundary_max"],
+                [item["value"] for item in requirements],
+            )
+            self.assertNotIn("empty", [item["value"] for item in requirements])
+            self.assertEqual("baseline", requirements[0]["strategy"])
+            self.assertTrue(all(item["strategy"] == "DFX" for item in requirements[1:]))
+
+    def test_dfx_input_branches_are_declared_before_interaction_without_rejecting_progress(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             run_dir = Path(value) / "diagnostics"
             ensure_run(run_dir, "网络>网络诊断")
@@ -35,31 +52,39 @@ class QualityRuleTests(unittest.TestCase):
                 {"kind": "element", "fact_id": "EL-INPUT", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "目标地址", "type": "文本输入框", "interactive": True, "required": True}},
                 {"kind": "element", "fact_id": "EL-RUN", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "Traceroute", "type": "按钮", "interactive": True}},
             ]
+            recorded = append_events(run_dir, base)
+            input_element = next(item for item in recorded if item["fact_id"] == "EL-INPUT")
+            self.assertEqual(
+                ["valid", "empty"],
+                [item["value"] for item in input_element["data"]["exploration_requirements"]],
+            )
             incomplete = {"kind": "transaction", "fact_id": "TX", "data": {
                 "function_ref": "FN", "element_refs": ["EL-INPUT", "EL-RUN"], "checks": [
                     {"element_ref": "EL-INPUT", "used_element_refs": ["EL-INPUT", "EL-RUN"], "trigger_element_ref": "EL-RUN",
                      "input_class": "valid_domain", "action": "输入有效域名并点击Traceroute", "result": "显示路由追踪结果", "result_anchor": {"assertion": "contains", "value": "路由追踪结果"}},
                 ]
             }}
-            with self.assertRaisesRegex(ValueError, "onsite branches.*empty"):
-                append_events(run_dir, [*base, incomplete])
-            complete = json.loads(json.dumps(incomplete, ensure_ascii=False))
-            complete["data"]["checks"].append(
-                {"element_ref": "EL-INPUT", "used_element_refs": ["EL-INPUT", "EL-RUN"], "trigger_element_ref": "EL-RUN",
-                 "input_class": "empty", "action": "清空目标地址并点击Traceroute", "result": "显示地址不合法提示", "result_anchor": {"assertion": "contains", "value": "不合法"}}
-            )
-            append_events(run_dir, [*base, complete])
+            append_events(run_dir, [incomplete])
+            pending = pending_exploration_requirements(run_dir)
+            self.assertEqual(["empty"], [item["value"] for item in pending[0]["requirements"]])
+            self.assertFalse(checkpoint_facts(run_dir)["ready"])
+            append_events(run_dir, [{"kind": "transaction", "fact_id": "TX-EMPTY", "data": {
+                "function_ref": "FN", "element_refs": ["EL-INPUT", "EL-RUN"], "checks": [
+                    {"element_ref": "EL-INPUT", "used_element_refs": ["EL-INPUT", "EL-RUN"], "trigger_element_ref": "EL-RUN",
+                     "input_class": "empty", "action": "清空目标地址并点击Traceroute", "result": "显示地址不合法提示", "result_anchor": {"assertion": "contains", "value": "不合法"}}
+                ]
+            }}])
             self.assertTrue(checkpoint_facts(run_dir)["ready"])
             hints = build_plan_skeleton(run_dir)["functions"][0]["dfx_hints"]
             empty = next(item for item in hints if item["code"] == "empty")
-            self.assertEqual([{"transaction_ref": "TX", "check_index": 2}], empty["related_checks"])
+            self.assertEqual([{"transaction_ref": "TX-EMPTY", "check_index": 1}], empty["related_checks"])
             save_plan(run_dir, {
                 "schema_version": "2.0", "functions": [{"function_ref": "FN", "name": "Traceroute", "cases": [
                     {"case_id": "TC-VALID", "page_ref": "PAGE", "title": "正常域名追踪", "strategy": "baseline"},
                     {"case_id": "TC-EMPTY", "page_ref": "PAGE", "title": "空地址校验", "strategy": "DFX", "dfx_dimension": "DFT功能", "dfx_scenario": "必填项为空"},
                 ]}], "check_assignments": [
                     {"transaction_ref": "TX", "check_index": 1, "disposition": "case", "case_id": "TC-VALID"},
-                    {"transaction_ref": "TX", "check_index": 2, "disposition": "case", "case_id": "TC-EMPTY"},
+                    {"transaction_ref": "TX-EMPTY", "check_index": 1, "disposition": "case", "case_id": "TC-EMPTY"},
                 ],
             })
             navigation = {"action": "进入网络-网络诊断", "expected": "显示网络诊断页面"}

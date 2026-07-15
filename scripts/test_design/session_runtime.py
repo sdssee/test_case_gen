@@ -139,6 +139,11 @@ def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
     data = item.get("data", {})
     if not isinstance(data, dict):
         raise ValueError("event.data must be an object")
+    data = dict(data)
+    if kind == "element":
+        # Exploration branches are a deterministic DFX decision made when the
+        # element is discovered. Callers cannot supply or weaken this list.
+        data["exploration_requirements"] = _derive_exploration_requirements(data)
     serialized_data = json.dumps(data, ensure_ascii=False)
     if URL_PATTERN.search(serialized_data) or IPV4_PATTERN.search(serialized_data):
         raise ValueError("event data must mask URLs and IP addresses before persistence")
@@ -223,20 +228,67 @@ def _action_has_trigger(action: str) -> bool:
     return bool(re.search(r"点击|单击|提交|执行|保存|查询|搜索|确认|触发|click|submit|execute|run", action, re.IGNORECASE))
 
 
-def _required_input_classes(element: dict[str, Any]) -> set[str]:
-    if not _is_input_element(element):
-        return set()
+def _derive_exploration_requirements(element: dict[str, Any]) -> list[dict[str, Any]]:
+    """Compile the small, element-local exploration plan before interaction."""
+    requirements: list[dict[str, Any]] = []
     constraints = element.get("constraints") if isinstance(element.get("constraints"), dict) else {}
-    required = {"valid"}
-    if element.get("required") is True or constraints.get("required") is True:
-        required.add("empty")
-    if element.get("input_format") or constraints.get("format") or constraints.get("pattern"):
-        required.add("invalid_format")
-    if element.get("min_value") is not None or element.get("min_length") is not None or constraints.get("min") is not None or constraints.get("min_length") is not None:
-        required.add("boundary_min")
-    if element.get("max_value") is not None or element.get("max_length") is not None or constraints.get("max") is not None or constraints.get("max_length") is not None:
-        required.add("boundary_max")
-    return required
+    if _is_input_element(element):
+        requirements.append({
+            "kind": "input_class", "value": "valid", "strategy": "baseline",
+            "reason": "输入元素的有效等价类",
+        })
+        if element.get("required") is True or constraints.get("required") is True:
+            requirements.append({
+                "kind": "input_class", "value": "empty", "strategy": "DFX",
+                "dfx_code": "empty", "dfx_dimension": "DFT功能", "dfx_scenario": "必填项为空",
+                "reason": "页面声明该输入为必填",
+            })
+        if element.get("input_format") or constraints.get("format") or constraints.get("pattern"):
+            requirements.append({
+                "kind": "input_class", "value": "invalid_format", "strategy": "DFX",
+                "dfx_code": "invalid_format", "dfx_dimension": "DFT功能", "dfx_scenario": "无效输入格式",
+                "reason": "页面声明了输入格式",
+            })
+        if element.get("unique") is True or constraints.get("unique") is True:
+            requirements.append({
+                "kind": "input_class", "value": "duplicate", "strategy": "DFX",
+                "dfx_code": "duplicate", "dfx_dimension": "DFR可靠", "dfx_scenario": "重复值",
+                "reason": "页面声明了唯一性约束",
+            })
+        if element.get("min_value") is not None or element.get("min_length") is not None or constraints.get("min") is not None or constraints.get("min_length") is not None:
+            requirements.append({
+                "kind": "input_class", "value": "boundary_min", "strategy": "DFX",
+                "dfx_code": "boundary", "dfx_dimension": "DFT功能", "dfx_scenario": "输入下边界",
+                "reason": "页面声明了最小值或最小长度",
+            })
+        if element.get("max_value") is not None or element.get("max_length") is not None or constraints.get("max") is not None or constraints.get("max_length") is not None:
+            requirements.append({
+                "kind": "input_class", "value": "boundary_max", "strategy": "DFX",
+                "dfx_code": "boundary", "dfx_dimension": "DFT功能", "dfx_scenario": "输入上边界",
+                "reason": "页面声明了最大值或最大长度",
+            })
+    if element.get("option_set") == "finite":
+        for option in element.get("options", []):
+            is_configuration_baseline = element.get("configuration") is True and str(option) == str(element.get("default_value"))
+            requirement = {
+                "kind": "option_value", "value": str(option),
+                "strategy": "baseline" if is_configuration_baseline else "DFX",
+                "reason": "单因素配置的默认或未配置基线" if is_configuration_baseline else "页面呈现了有限选项",
+            }
+            if not is_configuration_baseline:
+                requirement.update({
+                    "dfx_code": "finite_options", "dfx_dimension": "DFT功能", "dfx_scenario": "有限选项逐项结果",
+                })
+            requirements.append(requirement)
+    default = element.get("default_value")
+    if element.get("configuration") is True and default is not None and not any(
+        item["kind"] == "option_value" and item["value"] == str(default) for item in requirements
+    ):
+        requirements.append({
+            "kind": "option_value", "value": str(default), "strategy": "baseline",
+            "reason": "单因素配置的默认或未配置基线",
+        })
+    return requirements
 
 
 def _input_class_matches(required: str, observed: set[str]) -> bool:
@@ -245,9 +297,22 @@ def _input_class_matches(required: str, observed: set[str]) -> bool:
     return required in observed
 
 
+def _requirement_is_observed(requirement: dict[str, Any], checks: list[dict[str, Any]]) -> bool:
+    kind = str(requirement.get("kind", ""))
+    value = str(requirement.get("value", ""))
+    if kind == "input_class":
+        return _input_class_matches(value, {
+            str(check.get("input_class", "")).strip()
+            for check in checks if str(check.get("input_class", "")).strip()
+        })
+    if kind == "option_value":
+        return value in {str(check.get("option_value")) for check in checks if check.get("option_value") is not None}
+    return False
+
+
 def _validate_new_transactions(run_dir: Path, items: list[dict[str, Any]]) -> None:
-    """Validate discovery completeness once, immediately before appending the batch."""
-    latest = {str(event.get("fact_id", "")): event for event in load_events(run_dir)}
+    """Validate transaction structure without inventing late exploration work."""
+    latest = {str(event.get("fact_id", "")): _prepare_event(event) for event in load_events(run_dir)}
     latest.update({str(item.get("fact_id", "")): item for item in items})
     elements = {
         fact_id: event.get("data", {})
@@ -274,25 +339,6 @@ def _validate_new_transactions(run_dir: Path, items: list[dict[str, Any]]) -> No
         missing_usage = declared - used
         if missing_usage:
             raise ValueError(f"transaction elements were declared but not actually used by any check: {sorted(missing_usage)}")
-        for ref in declared:
-            element = elements[ref]
-            related = [check for check in checks if ref in {str(value) for value in check.get("used_element_refs", [])}]
-            required_classes = _required_input_classes(element)
-            if required_classes:
-                observed_classes = {str(check.get("input_class", "")).strip() for check in related if str(check.get("input_class", "")).strip()}
-                missing_classes = sorted(value for value in required_classes if not _input_class_matches(value, observed_classes))
-                if missing_classes:
-                    raise ValueError(f"input element {ref} lacks onsite branches: {missing_classes}")
-            options = [str(value) for value in element.get("options", [])]
-            if element.get("option_set") == "finite" and options:
-                selected = {str(check.get("option_value")) for check in related if check.get("option_value") is not None}
-                missing_options = sorted(set(options) - selected)
-                if missing_options:
-                    raise ValueError(f"finite options were not actually selected for {ref}: {missing_options}")
-            if element.get("configuration") is True and element.get("default_value") is not None:
-                selected = {str(check.get("option_value")) for check in related if check.get("option_value") is not None}
-                if str(element.get("default_value")) not in selected:
-                    raise ValueError(f"configuration element {ref} lacks its default/unconfigured baseline")
         for index, check in enumerate(checks, 1):
             used_refs = {str(value) for value in check.get("used_element_refs", [])}
             trigger_refs = [ref for ref in used_refs if ref in elements and _is_trigger_element(elements[ref])]
@@ -525,6 +571,53 @@ def _transaction_check_refs(transaction: dict[str, Any]) -> set[str]:
     return refs
 
 
+def _pending_exploration(
+    elements: list[dict[str, Any]], transactions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    checks_by_element: dict[str, list[dict[str, Any]]] = {}
+    for transaction in transactions:
+        for check in transaction.get("checks", []):
+            refs = {str(value) for value in check.get("used_element_refs", []) if str(value).strip()}
+            if check.get("element_ref"):
+                refs.add(str(check["element_ref"]))
+            for ref in refs:
+                checks_by_element.setdefault(ref, []).append(check)
+    pending: list[dict[str, Any]] = []
+    for element in elements:
+        if element.get("status") in NON_ACTIONABLE_STATUSES or element.get("interactive", True) is False:
+            continue
+        ref = str(element.get("fact_id", ""))
+        missing = [
+            requirement for requirement in element.get("exploration_requirements", [])
+            if not _requirement_is_observed(requirement, checks_by_element.get(ref, []))
+        ]
+        if missing:
+            pending.append({
+                "element_ref": ref,
+                "element_name": str(element.get("name", "")),
+                "requirements": missing,
+            })
+    return pending
+
+
+def pending_exploration_requirements(run_dir: Path) -> list[dict[str, Any]]:
+    """Return only the remaining predeclared exploration branches."""
+    latest: dict[str, dict[str, Any]] = {}
+    for event in load_events(run_dir):
+        prepared = _prepare_event(event)
+        latest[str(prepared["fact_id"])] = prepared
+    elements = [
+        {"fact_id": item["fact_id"], "status": item.get("status", "active"), **item.get("data", {})}
+        for item in latest.values() if item.get("kind") == "element"
+    ]
+    transactions = [
+        {"fact_id": item["fact_id"], "status": item.get("status", "active"), **item.get("data", {})}
+        for item in latest.values()
+        if item.get("kind") == "transaction" and item.get("status", "active") not in NON_ACTIONABLE_STATUSES
+    ]
+    return _pending_exploration(elements, transactions)
+
+
 def inspect_discovery(run_dir: Path, facts: dict[str, Any] | None = None) -> list[dict[str, str]]:
     if facts is None:
         try:
@@ -558,13 +651,25 @@ def inspect_discovery(run_dir: Path, facts: dict[str, Any] | None = None) -> lis
         function_ref = str(element.get("function_ref", ""))
         if function_ref and function_ref not in function_refs:
             issues.append(_issue("broken_reference", "blocker", "facts.json", f"element {ref} references unknown function {function_ref}", "correct this element relation"))
-        if element.get("interactive", True) and element.get("status") not in NON_ACTIONABLE_STATUSES and not transaction_by_element.get(ref):
+        if (
+            element.get("interactive", True)
+            and element.get("status") not in NON_ACTIONABLE_STATUSES
+            and not transaction_by_element.get(ref)
+            and not element.get("exploration_requirements")
+        ):
             issues.append(_issue("missing_fact", "blocker", "facts.json", f"interactive element {ref} was not actually operated", "execute one related function transaction"))
         page_ref = str(element.get("page_ref", ""))
         if page_ref not in page_refs:
             issues.append(_issue("broken_reference", "blocker", "facts.json", f"element {ref} references unknown page {page_ref!r}", "bind the element to the observed page"))
         if element.get("dynamic") is True and not str(element.get("trigger_condition", "")).strip():
             issues.append(_issue("missing_fact", "blocker", "facts.json", f"dynamic element {ref} lacks its trigger condition", "record the action or state that makes it appear"))
+    for item in _pending_exploration(facts.get("elements", []), facts.get("transactions", [])):
+        labels = [f"{row.get('kind')}={row.get('value')}" for row in item["requirements"]]
+        issues.append(_issue(
+            "pending_exploration", "blocker", "facts.json",
+            f"element {item['element_ref']} still has predeclared exploration branches: {labels}",
+            "continue the current page transaction with only these listed branches",
+        ))
     for transaction in facts.get("transactions", []):
         kind = transaction.get("transaction_type")
         if kind in {"create", "edit", "configuration", "delete"}:
@@ -619,17 +724,20 @@ def _current_checkpoint(facts: dict[str, Any]) -> dict[str, Any]:
 
 
 def _dfx_hints(element: dict[str, Any]) -> list[dict[str, Any]]:
-    hints: list[dict[str, Any]] = []
-    constraints = element.get("constraints") if isinstance(element.get("constraints"), dict) else {}
-    candidates = (
-        (element.get("required") is True or constraints.get("required") is True, "empty", "必填项为空"),
-        (any(element.get(key) is not None for key in ("min_value", "max_value", "min_length", "max_length")) or any(constraints.get(key) is not None for key in ("min", "max", "min_value", "max_value", "min_length", "max_length")), "boundary", "已观察到的输入边界"),
-        (element.get("unique") is True or constraints.get("unique") is True, "duplicate", "唯一性冲突"),
-        (element.get("option_set") == "finite", "finite_options", "有限选项逐项结果"),
-    )
-    for applies, code, reason in candidates:
-        if applies:
-            hints.append({"code": code, "scope": "element", "scope_ref": str(element.get("fact_id", "")), "reason": reason})
+    hints = [
+        {
+            "code": str(requirement.get("dfx_code", "")),
+            "scope": "element",
+            "scope_ref": str(element.get("fact_id", "")),
+            "reason": str(requirement.get("reason", "")),
+            "dfx_dimension": str(requirement.get("dfx_dimension", "")),
+            "dfx_scenario": str(requirement.get("dfx_scenario", "")),
+            "requirement_kind": str(requirement.get("kind", "")),
+            "requirement_value": str(requirement.get("value", "")),
+        }
+        for requirement in element.get("exploration_requirements", [])
+        if requirement.get("strategy") == "DFX" and requirement.get("dfx_code")
+    ]
     return hints
 
 
@@ -686,16 +794,15 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
                         continue
                     tags = {str(tag) for tag in check.get("dfx_tags", [])}
                     hint_code = str(hint.get("code", ""))
-                    input_class = str(check.get("input_class", ""))
-                    if hint_code == "empty" and input_class != "empty":
+                    requirement_kind = str(hint.get("requirement_kind", ""))
+                    requirement_value = str(hint.get("requirement_value", ""))
+                    if requirement_kind == "input_class" and not _input_class_matches(
+                        requirement_value, {str(check.get("input_class", ""))},
+                    ):
                         continue
-                    if hint_code == "boundary" and not (input_class.startswith("boundary_") or "boundary" in tags):
+                    if requirement_kind == "option_value" and str(check.get("option_value", "")) != requirement_value:
                         continue
-                    if hint_code == "duplicate" and not (input_class == "duplicate" or "duplicate" in tags):
-                        continue
-                    if hint_code == "finite_options" and check.get("option_value") is None:
-                        continue
-                    if tags and hint_code not in tags and hint_code not in {"empty", "boundary", "duplicate", "finite_options"}:
+                    if not requirement_kind and tags and hint_code not in tags:
                         continue
                     related_checks.append({"transaction_ref": transaction_ref, "check_index": index})
             hint["related_checks"] = related_checks
@@ -1212,7 +1319,13 @@ def pipeline_status(run_dir: Path) -> dict[str, Any]:
         return {"stage": "scope_binding", "state": "transparent", "next_action": "invoke the Skill with a target menu path"}
     facts = load_facts(run_dir)
     if not paths["plan"].exists():
-        return {"stage": "discovery", "state": "continue", "counts": {key: len(facts.get(key, [])) for key in FACT_COLLECTIONS.values()}, "next_action": "continue scanning and function transactions, then compile the plan"}
+        pending = pending_exploration_requirements(run_dir)
+        return {
+            "stage": "discovery", "state": "continue",
+            "counts": {key: len(facts.get(key, [])) for key in FACT_COLLECTIONS.values()},
+            "remaining_exploration": pending,
+            "next_action": "execute only the listed predeclared branches" if pending else "continue scanning and function transactions, then compile the plan",
+        }
     plan = load_plan(run_dir)
     if plan.get("source_digest") != _planning_fact_digest(facts):
         return {"stage": "planning", "state": "needs_local_fix", "next_action": "repair only function plans affected by changed facts"}

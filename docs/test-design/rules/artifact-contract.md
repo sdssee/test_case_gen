@@ -20,7 +20,7 @@ run-dir/
 
 事件类型只有 `scope`、`page`、`function`、`element`、`transaction`、`test_object`、`open_item`。新事实只需提交 `kind` 和 `data`，运行时自动生成 `fact_id`；同批事件可声明 `local_ref`，并在后续字段中用 `@local_ref` 建立关系。更新既有事实时使用运行时已返回的 `fact_id`。同一 `fact_id` 的最后有效事件形成当前事实。
 
-页面事实必须记录实际观察到的 `menu_path` 数组和页面名称。每个事务检查点必须同时记录 `result`、结构化 `result_anchor`、主验证 `element_ref` 和全部 `used_element_refs`；输入检查同时记录 `input_class`。缺少可观察值/tokens、必需输入分支、有限选项或声明但未使用的触发控件时事务不写入。`target` 和 `field` 用于表达观察语义，不要求逐字进入用例；只有 `tokens`（优先）或 `value` 用于预期锚定。用例导航由页面事实生成。一个完整业务事务通过校验后才追加为一行；进程中断时只自动丢弃无法解析的最后一个未完整行，中间行损坏仍立即报错。
+页面事实必须记录实际观察到的 `menu_path` 数组和页面名称。元素事实由运行时追加精简的 `exploration_requirements`，它是页面属性经过 DFX 策略得到的交互前清单，不是新的产物或义务队列。每个事务检查点必须同时记录 `result`、结构化 `result_anchor`、主验证 `element_ref` 和全部 `used_element_refs`；输入检查同时记录 `input_class`。已完成检查可立即写入，尚未执行的既定输入分支和有限选项由记录结果持续扣减并在checkpoint汇总；缺少可观察值/tokens、声明但未使用的控件或触发动作时事务不写入。`target` 和 `field` 用于表达观察语义，不要求逐字进入用例；只有 `tokens`（优先）或 `value` 用于预期锚定。用例导航由页面事实生成。进程中断时只自动丢弃无法解析的最后一个未完整行，中间行损坏仍立即报错。
 
 一个有限选项功能事务示例（仅说明契约，不代表预置功能）：
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 from openpyxl.formula.translate import Translator
 from openpyxl.styles import Alignment
 
@@ -54,9 +55,16 @@ def _visual_line_count(value: Any, characters_per_line: int = 36) -> int:
     return sum(max(1, math.ceil(len(line) / characters_per_line)) for line in text.splitlines())
 
 
-def _row_height(values: Iterable[Any]) -> float:
-    lines = max((_visual_line_count(value) for value in values), default=1)
-    return float(max(36, min(180, 8 + lines * 16)))
+def _mapped_row_height(worksheet, headers: dict[str, int], row: dict[str, Any], multiline_headers: Iterable[str]) -> float:
+    lines = 1
+    for header in multiline_headers:
+        if header not in headers:
+            continue
+        column = headers[header]
+        dimension = worksheet.column_dimensions.get(get_column_letter(column))
+        width = (dimension.width if dimension else worksheet.sheet_format.defaultColWidth) or 10
+        lines = max(lines, _visual_line_count(row.get(header, ""), max(4, int(width))))
+    return float(max(36, min(360, 8 + lines * 16)))
 
 
 def _workbook_structure(workbook) -> dict[str, Any]:
@@ -128,11 +136,13 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
     case_document = load_cases(run_dir)
     scope = facts.get("scope", {})
     functions = _function_names(facts, plan)
+    pages = {str(row.get("fact_id", "")): row for row in facts.get("pages", [])}
     fact_names = {
         str(row.get("fact_id")): str(row.get("name") or row.get("transaction_type") or "页面实探事实")
-        for collection in ("pages", "functions", "elements", "transactions")
+        for collection in ("pages", "functions", "elements")
         for row in facts.get(collection, [])
     }
+    written_cases = {str(case.get("case_id", "")): case for case in case_document.get("cases", [])}
     open_items = facts.get("open_items", [])
     pending = [row for row in open_items if row.get("category") in {"external_question", "blocked_condition"}]
     risks = [row for row in open_items if row.get("category") == "observed_risk"] + plan.get("risks", [])
@@ -167,6 +177,12 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         })
     for function in plan.get("functions", []):
         for case in function.get("cases", []):
+            written = written_cases.get(str(case.get("case_id", "")), {})
+            expected_points = [
+                str(step.get("expected", "")).strip()
+                for step in written.get("steps", [])[1:]
+                if str(step.get("expected", "")).strip()
+            ]
             rows["测试场景矩阵"].append({
                 "场景 ID": _text(case.get("case_id")),
                 "Story ID/需求 ID": _text(case.get("requirement_id")),
@@ -177,10 +193,10 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
                 "测试对象/页面元素": "；".join(dict.fromkeys(
                     fact_names.get(str(ref), "") for ref in case.get("fact_refs", []) if fact_names.get(str(ref), "")
                 )),
-                "输入数据/状态条件": _text(case.get("test_data")),
-                "观察点": _text(case.get("observation")),
-                "风险等级": _text(case.get("risk_level") or "中"),
-                "优先级": _text(case.get("priority") or "P1"),
+                "输入数据/状态条件": _text(written.get("test_data") or case.get("test_data")),
+                "观察点": "；".join(expected_points) or _text(case.get("observation")),
+                "风险等级": _text(written.get("risk_level") or case.get("risk_level") or "中"),
+                "优先级": _text(written.get("priority") or case.get("priority") or "P1"),
                 "是否生成用例": "是",
                 "备注": _text(case.get("notes")),
             })
@@ -243,14 +259,35 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
     for case in case_document.get("cases", []):
         for fact_id in case.get("fact_refs", []):
             case_by_fact.setdefault(str(fact_id), []).append(str(case.get("case_id")))
+    non_case_by_element: dict[str, list[str]] = {}
+    transactions = {str(row.get("fact_id", "")): row for row in facts.get("transactions", [])}
+    for assignment in plan.get("check_assignments", []):
+        if assignment.get("disposition") == "case":
+            continue
+        transaction = transactions.get(str(assignment.get("transaction_ref", "")), {})
+        try:
+            check_index = int(assignment.get("check_index", 0))
+            if check_index < 1:
+                continue
+            check = transaction.get("checks", [])[check_index - 1]
+        except (IndexError, TypeError, ValueError):
+            continue
+        reason = str(assignment.get("reason") or assignment.get("disposition") or "").strip()
+        for ref in check.get("used_element_refs", []):
+            if str(ref).strip() and reason:
+                non_case_by_element.setdefault(str(ref), []).append(reason)
     for element in facts.get("elements", []):
         element_id = str(element.get("fact_id"))
-        element_label = "-".join(filter(None, [str(element.get("page_name", "")).strip(), str(element.get("name", "")).strip()]))
+        page = pages.get(str(element.get("page_ref", "")), {})
+        page_name = str(element.get("page_name") or page.get("name") or "").strip()
+        menu_path = element.get("menu_path") or page.get("menu_path") or []
+        element_label = "-".join(filter(None, [page_name, str(element.get("name", "")).strip()]))
         covered_case_ids = list(dict.fromkeys(case_by_fact.get(element_id, [])))
+        non_case_reasons = list(dict.fromkeys(non_case_by_element.get(element_id, [])))
         rows["页面元素覆盖清单"].append({
             "元素 ID": element_label or _text(element.get("name")), "Story ID/需求 ID": _text(element.get("requirement_id")),
-            "页面/入口": _text(element.get("page_name") or element.get("page_id")),
-            "页面 URL/菜单路径": _text(element.get("menu_path")),
+            "页面/入口": page_name,
+            "页面 URL/菜单路径": "-".join(str(value) for value in menu_path) if isinstance(menu_path, list) else _text(menu_path),
             "元素名称/文案": _text(element.get("name")), "元素类型": _text(element.get("type")),
             "交互方式": _text(element.get("interaction")), "适用DFX维度": _text(element.get("dfx_dimensions")),
             "适用DFX场景": _text(element.get("dfx_scenarios")), "前置状态/权限": _text(element.get("precondition")),
@@ -258,7 +295,7 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
             "覆盖用例 ID": "；".join(covered_case_ids),
             "覆盖状态": "已覆盖" if covered_case_ids else "未覆盖",
             "发现方式": "页面实探",
-            "素材来源": "", "待确认问题/备注": _text(element.get("notes")),
+            "素材来源": "", "待确认问题/备注": _text(element.get("notes")) or "；".join(non_case_reasons),
         })
     return rows
 
@@ -303,8 +340,7 @@ def assemble_formal_workbook(run_dir: Path, template: Path, output: Path) -> dic
                 if header in headers:
                     cell = worksheet.cell(row_index, headers[header])
                     cell.alignment = Alignment(vertical="top", wrap_text=True)
-            multiline_values = [row.get(header, "") for header in MULTILINE_HEADERS if header in headers]
-            worksheet.row_dimensions[row_index].height = _row_height(multiline_values)
+            worksheet.row_dimensions[row_index].height = _mapped_row_height(worksheet, headers, row, MULTILINE_HEADERS)
         counts[sheet_name] = len(rows_by_sheet[sheet_name])
     resize_workbook_structures(workbook)
     _assert_structure_preserved(structure, workbook, "formal workbook")
@@ -359,9 +395,10 @@ def generate_import_workbook(run_dir: Path, template: Path, output: Path, module
         for header in ("测试步骤描述", "测试步骤预期结果", "测试用例说明", "前置条件", "备注"):
             if header in target_headers:
                 target.cell(count + 1, target_headers[header]).alignment = Alignment(vertical="top", wrap_text=True)
-        target.row_dimensions[count + 1].height = _row_height([
-            row.get("测试步骤描述"), row.get("测试步骤预期结果"), row.get("前置条件"), row.get("测试用例说明"),
-        ])
+        target.row_dimensions[count + 1].height = _mapped_row_height(
+            target, target_headers, row,
+            ("测试步骤描述", "测试步骤预期结果", "前置条件", "测试用例说明", "备注"),
+        )
     if count == 0:
         raise ValueError("no function cases were available for the import workbook")
     resize_workbook_structures(target_book)

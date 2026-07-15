@@ -35,6 +35,8 @@ INTERNAL_PROSE = re.compile(
 )
 SCREENSHOT_MARKERS = ("截图", "截屏", "screenshot", "screen shot")
 PLACEHOLDER_MARKERS = ("TODO", "TBD", "待补充", "请补充", "示例数据", "占位", "输入测试数据", "填写测试数据")
+URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
+IPV4_PATTERN = re.compile(r"(?<![\d.])(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?![\d.])")
 FACT_ID_PREFIXES = {
     "page": "PAGE",
     "function": "FN",
@@ -137,6 +139,9 @@ def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
     data = item.get("data", {})
     if not isinstance(data, dict):
         raise ValueError("event.data must be an object")
+    serialized_data = json.dumps(data, ensure_ascii=False)
+    if URL_PATTERN.search(serialized_data) or IPV4_PATTERN.search(serialized_data):
+        raise ValueError("event data must mask URLs and IP addresses before persistence")
     if kind == "transaction":
         checks = data.get("checks")
         if not isinstance(checks, list) or not checks:
@@ -149,8 +154,20 @@ def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
             anchor = check.get("result_anchor")
             if not isinstance(anchor, dict) or not str(anchor.get("assertion", "")).strip():
                 raise ValueError(f"transaction check {index} result_anchor requires an assertion")
-            if not any(value not in (None, "", []) for key, value in anchor.items() if key not in {"assertion", "operator"}):
-                raise ValueError(f"transaction check {index} result_anchor requires an observable target, field, value or tokens")
+            if anchor.get("value") in (None, "", []) and anchor.get("tokens") in (None, "", []):
+                raise ValueError(f"transaction check {index} result_anchor requires observable value or tokens")
+            primary_ref = str(check.get("element_ref", "")).strip()
+            used_refs = check.get("used_element_refs")
+            if used_refs is None:
+                used_refs = [primary_ref] if primary_ref else []
+            if not isinstance(used_refs, list) or any(not str(ref).strip() for ref in used_refs):
+                raise ValueError(f"transaction check {index} used_element_refs must be a non-empty reference array")
+            check["used_element_refs"] = list(dict.fromkeys(str(ref).strip() for ref in used_refs))
+            if primary_ref and primary_ref not in check["used_element_refs"]:
+                raise ValueError(f"transaction check {index} used_element_refs must contain element_ref")
+            trigger_ref = str(check.get("trigger_element_ref", "")).strip()
+            if trigger_ref and trigger_ref not in check["used_element_refs"]:
+                raise ValueError(f"transaction check {index} trigger_element_ref must be one of used_element_refs")
         transaction_type = str(data.get("transaction_type", ""))
         if transaction_type in {"create", "edit", "delete", "configuration"}:
             if data.get("outcome") != "success" or not str(data.get("test_object_ref", "")).strip():
@@ -190,6 +207,105 @@ def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
     item.setdefault("observed_at", _now())
     item.setdefault("status", "active")
     return item
+
+
+def _is_input_element(element: dict[str, Any]) -> bool:
+    kind = str(element.get("type", "")).strip().lower()
+    return any(marker in kind for marker in ("输入", "input", "textarea", "文本框", "数字框", "密码框"))
+
+
+def _is_trigger_element(element: dict[str, Any]) -> bool:
+    kind = str(element.get("type", "")).strip().lower()
+    return any(marker in kind for marker in ("按钮", "button", "submit"))
+
+
+def _action_has_trigger(action: str) -> bool:
+    return bool(re.search(r"点击|单击|提交|执行|保存|查询|搜索|确认|触发|click|submit|execute|run", action, re.IGNORECASE))
+
+
+def _required_input_classes(element: dict[str, Any]) -> set[str]:
+    if not _is_input_element(element):
+        return set()
+    constraints = element.get("constraints") if isinstance(element.get("constraints"), dict) else {}
+    required = {"valid"}
+    if element.get("required") is True or constraints.get("required") is True:
+        required.add("empty")
+    if element.get("input_format") or constraints.get("format") or constraints.get("pattern"):
+        required.add("invalid_format")
+    if element.get("min_value") is not None or element.get("min_length") is not None or constraints.get("min") is not None or constraints.get("min_length") is not None:
+        required.add("boundary_min")
+    if element.get("max_value") is not None or element.get("max_length") is not None or constraints.get("max") is not None or constraints.get("max_length") is not None:
+        required.add("boundary_max")
+    return required
+
+
+def _input_class_matches(required: str, observed: set[str]) -> bool:
+    if required == "valid":
+        return any(value == "valid" or value.startswith("valid_") for value in observed)
+    return required in observed
+
+
+def _validate_new_transactions(run_dir: Path, items: list[dict[str, Any]]) -> None:
+    """Validate discovery completeness once, immediately before appending the batch."""
+    latest = {str(event.get("fact_id", "")): event for event in load_events(run_dir)}
+    latest.update({str(item.get("fact_id", "")): item for item in items})
+    elements = {
+        fact_id: event.get("data", {})
+        for fact_id, event in latest.items()
+        if event.get("kind") == "element" and event.get("status", "active") not in NON_ACTIONABLE_STATUSES
+    }
+    for item in items:
+        if item.get("kind") != "transaction":
+            continue
+        data = item["data"]
+        checks = data.get("checks", [])
+        declared = {str(ref) for ref in data.get("element_refs", []) if str(ref).strip()}
+        if not declared:
+            raise ValueError("transaction element_refs must list every control used by the business transaction")
+        unknown = declared - set(elements)
+        if unknown:
+            raise ValueError(f"transaction references unknown elements: {sorted(unknown)}")
+        used = {
+            str(ref)
+            for check in checks
+            for ref in check.get("used_element_refs", [])
+            if str(ref).strip()
+        }
+        missing_usage = declared - used
+        if missing_usage:
+            raise ValueError(f"transaction elements were declared but not actually used by any check: {sorted(missing_usage)}")
+        for ref in declared:
+            element = elements[ref]
+            related = [check for check in checks if ref in {str(value) for value in check.get("used_element_refs", [])}]
+            required_classes = _required_input_classes(element)
+            if required_classes:
+                observed_classes = {str(check.get("input_class", "")).strip() for check in related if str(check.get("input_class", "")).strip()}
+                missing_classes = sorted(value for value in required_classes if not _input_class_matches(value, observed_classes))
+                if missing_classes:
+                    raise ValueError(f"input element {ref} lacks onsite branches: {missing_classes}")
+            options = [str(value) for value in element.get("options", [])]
+            if element.get("option_set") == "finite" and options:
+                selected = {str(check.get("option_value")) for check in related if check.get("option_value") is not None}
+                missing_options = sorted(set(options) - selected)
+                if missing_options:
+                    raise ValueError(f"finite options were not actually selected for {ref}: {missing_options}")
+            if element.get("configuration") is True and element.get("default_value") is not None:
+                selected = {str(check.get("option_value")) for check in related if check.get("option_value") is not None}
+                if str(element.get("default_value")) not in selected:
+                    raise ValueError(f"configuration element {ref} lacks its default/unconfigured baseline")
+        for index, check in enumerate(checks, 1):
+            used_refs = {str(value) for value in check.get("used_element_refs", [])}
+            trigger_refs = [ref for ref in used_refs if ref in elements and _is_trigger_element(elements[ref])]
+            if not trigger_refs:
+                continue
+            trigger_ref = str(check.get("trigger_element_ref", "")).strip()
+            if not trigger_ref and len(trigger_refs) == 1 and _action_has_trigger(str(check.get("action", ""))):
+                trigger_ref = trigger_refs[0]
+                check["trigger_element_ref"] = trigger_ref
+            if trigger_ref not in trigger_refs:
+                raise ValueError(f"transaction check {index} must identify the trigger control that produces its result")
+            if not _action_has_trigger(str(check.get("action", ""))):
+                raise ValueError(f"transaction check {index} action omits its submit/execute trigger")
 
 
 def ensure_run(
@@ -273,6 +389,7 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
     items = [resolve(item) for item in items]
     if not items:
         return []
+    _validate_new_transactions(run_dir, items)
     paths["events"].parent.mkdir(parents=True, exist_ok=True)
     payload = "".join(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in items)
     with paths["events"].open("a", encoding="utf-8", newline="\n") as handle:
@@ -398,7 +515,12 @@ def _all_fact_ids(facts: dict[str, Any]) -> set[str]:
 
 
 def _transaction_check_refs(transaction: dict[str, Any]) -> set[str]:
-    refs = {str(value) for value in transaction.get("element_refs", [])}
+    refs = {
+        str(value)
+        for check in transaction.get("checks", [])
+        for value in check.get("used_element_refs", [])
+        if str(value).strip()
+    }
     refs.update(str(check.get("element_ref")) for check in transaction.get("checks", []) if check.get("element_ref"))
     return refs
 
@@ -443,28 +565,6 @@ def inspect_discovery(run_dir: Path, facts: dict[str, Any] | None = None) -> lis
             issues.append(_issue("broken_reference", "blocker", "facts.json", f"element {ref} references unknown page {page_ref!r}", "bind the element to the observed page"))
         if element.get("dynamic") is True and not str(element.get("trigger_condition", "")).strip():
             issues.append(_issue("missing_fact", "blocker", "facts.json", f"dynamic element {ref} lacks its trigger condition", "record the action or state that makes it appear"))
-        options = [str(value) for value in element.get("options", [])]
-        if element.get("option_set") == "finite" and options:
-            selected = {
-                str(check.get("option_value"))
-                for transaction in transaction_by_element.get(ref, [])
-                for check in transaction.get("checks", [])
-                if str(check.get("element_ref", ref)) == ref and check.get("option_value") is not None
-            }
-            missing = set(options) - selected
-            if missing:
-                issues.append(_issue("missing_fact", "blocker", "facts.json", f"finite options not selected for {ref}: {sorted(missing)}", "select only the missing options in the current session"))
-        if element.get("configuration") is True:
-            checks = [
-                check
-                for transaction in transaction_by_element.get(ref, [])
-                for check in transaction.get("checks", [])
-                if str(check.get("element_ref", ref)) == ref
-            ]
-            default = element.get("default_value")
-            values = {str(check.get("option_value")): check for check in checks if check.get("option_value") is not None}
-            if default is not None and str(default) not in values:
-                issues.append(_issue("missing_fact", "blocker", "facts.json", f"configuration element {ref} lacks its default baseline", "verify the default/unconfigured value"))
     for transaction in facts.get("transactions", []):
         kind = transaction.get("transaction_type")
         if kind in {"create", "edit", "configuration", "delete"}:
@@ -579,10 +679,23 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
                 if hint.get("scope") == "transaction" and hint.get("scope_ref") != transaction_ref:
                     continue
                 for index, check in enumerate(transaction.get("checks", []), 1):
-                    if hint.get("scope") == "element" and str(check.get("element_ref", "")) != str(hint.get("scope_ref", "")):
+                    used_refs = {str(value) for value in check.get("used_element_refs", [])}
+                    if check.get("element_ref"):
+                        used_refs.add(str(check.get("element_ref")))
+                    if hint.get("scope") == "element" and str(hint.get("scope_ref", "")) not in used_refs:
                         continue
                     tags = {str(tag) for tag in check.get("dfx_tags", [])}
-                    if tags and str(hint.get("code", "")) not in tags:
+                    hint_code = str(hint.get("code", ""))
+                    input_class = str(check.get("input_class", ""))
+                    if hint_code == "empty" and input_class != "empty":
+                        continue
+                    if hint_code == "boundary" and not (input_class.startswith("boundary_") or "boundary" in tags):
+                        continue
+                    if hint_code == "duplicate" and not (input_class == "duplicate" or "duplicate" in tags):
+                        continue
+                    if hint_code == "finite_options" and check.get("option_value") is None:
+                        continue
+                    if tags and hint_code not in tags and hint_code not in {"empty", "boundary", "duplicate", "finite_options"}:
                         continue
                     related_checks.append({"transaction_ref": transaction_ref, "check_index": index})
             hint["related_checks"] = related_checks
@@ -723,12 +836,13 @@ def _expected_satisfies_anchor(expected: str, check: dict[str, Any]) -> bool:
     if assertion == "observed_text" or not assertion:
         value = str(anchor.get("value") or check.get("result", "")).strip()
         return not value or value in expected
-    tokens: list[str] = []
-    for key, value in anchor.items():
-        if key in {"assertion", "operator"} or value in (None, ""):
-            continue
+    raw_tokens = anchor.get("tokens")
+    if raw_tokens not in (None, "", []):
+        values = raw_tokens if isinstance(raw_tokens, list) else [raw_tokens]
+    else:
+        value = anchor.get("value")
         values = value if isinstance(value, list) else [value]
-        tokens.extend(str(item).strip() for item in values if str(item).strip())
+    tokens = [str(item).strip() for item in values if item not in (None, "") and str(item).strip()]
     return all(token in expected for token in tokens)
 
 
@@ -745,6 +859,7 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
     fact_ids = _all_fact_ids(facts)
     pages = {str(row["fact_id"]): row for row in facts.get("pages", [])}
     transactions = {str(row["fact_id"]): row for row in facts.get("transactions", [])}
+    elements = {str(row["fact_id"]): row for row in facts.get("elements", [])}
     planned: dict[str, tuple[str, dict[str, Any], str]] = {}
     assignments_by_case: dict[str, list[tuple[str, int]]] = {}
     for assignment in plan.get("check_assignments", []):
@@ -835,6 +950,9 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
                 issues.append(_issue("invalid_source_check", "repairable", "function-cases.json", f"case {case_id} step {index} references an unplanned check", "repair only this source mapping", **context))
                 continue
             check = transaction["checks"][source_key[1] - 1]
+            trigger_ref = str(check.get("trigger_element_ref", ""))
+            if trigger_ref and trigger_ref in elements and not _action_has_trigger(str(step.get("action", ""))):
+                issues.append(_issue("missing_trigger", "blocker", "function-cases.json", f"case {case_id} step {index} omits the observed submit/execute trigger", "restore the complete observed action", **context))
             if not _expected_satisfies_anchor(str(step.get("expected", "")), check):
                 issues.append(_issue("ungrounded_expected", "blocker", "function-cases.json", f"case {case_id} step {index} does not preserve its observed result", "rewrite this expected result from the transaction fact", **context))
         if planned_checks != actual_checks or actual_check_list != planned_check_list or len(steps[1:]) != len(planned_check_list):
@@ -850,6 +968,8 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
             issues.append(_issue("screenshot_step", "repairable", "function-cases.json", f"case {case_id} asks the tester to take a screenshot", "replace it with an observable assertion", **context))
         if any(marker.lower() in prose.lower() for marker in PLACEHOLDER_MARKERS):
             issues.append(_issue("placeholder", "repairable", "function-cases.json", f"case {case_id} contains placeholder prose", "supply concrete masked data", **context))
+        if URL_PATTERN.search(prose) or IPV4_PATTERN.search(prose):
+            issues.append(_issue("sensitive_network", "blocker", "function-cases.json", f"case {case_id} exposes a URL or IP address", "replace it with a controlled masked test-data reference", **context))
         refs = {str(value) for value in case.get("fact_refs", [])}
         planned_refs = {str(value) for value in planned_case.get("fact_refs", [])}
         if not refs or not refs <= fact_ids or not planned_refs <= refs:
@@ -916,6 +1036,7 @@ def _derive_case_fact_refs(
             check = {}
         if check.get("element_ref"):
             refs.append(str(check["element_ref"]))
+        refs.extend(str(value) for value in check.get("used_element_refs", []) if str(value).strip())
     return list(dict.fromkeys(ref for ref in refs if ref))
 
 

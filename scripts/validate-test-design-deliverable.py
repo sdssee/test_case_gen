@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sys
 import zipfile
@@ -15,6 +16,22 @@ from test_design.excel_utils import header_map
 
 def _nonempty_rows(ws) -> list[int]:
     return [row for row in range(2, ws.max_row + 1) if any(ws.cell(row, col).value not in (None, "") for col in range(1, ws.max_column + 1))]
+
+
+def _assert_readable_rows(ws, headers: dict[str, int], rows: list[int], multiline_headers: set[str]) -> None:
+    for row in rows:
+        lines = 1
+        for header in multiline_headers & set(headers):
+            column = headers[header]
+            dimension = ws.column_dimensions.get(ws.cell(1, column).column_letter)
+            width = (dimension.width if dimension else ws.sheet_format.defaultColWidth) or 10
+            text = str(ws.cell(row, column).value or "")
+            visual = sum(max(1, math.ceil(len(line) / max(4, int(width)))) for line in text.splitlines()) if text else 1
+            lines = max(lines, visual)
+        required = float(max(36, min(360, 8 + lines * 16)))
+        actual = float(ws.row_dimensions[row].height or ws.sheet_format.defaultRowHeight or 15)
+        if actual + 1 < required:
+            raise ValueError(f"{ws.title} row {row} is visually clipped: height {actual} < {required}")
 
 
 def validate_workbook(path: Path) -> int:
@@ -57,6 +74,32 @@ def validate_workbook(path: Path) -> int:
         text = "\n".join(values.values()).lower()
         if any(marker in text for marker in ("截图", "screenshot", "uid", "fact_id", "todo", "tbd")):
             raise ValueError(f"non-executable/internal wording found at row {row}")
+    _assert_readable_rows(ws, headers, rows, {"前置条件", "测试数据", "操作步骤", "预期结果", "备注"})
+    matrix = workbook["测试场景矩阵"]
+    matrix_headers = header_map(matrix)
+    matrix_rows = _nonempty_rows(matrix)
+    by_case = {
+        str(matrix.cell(row, matrix_headers["场景 ID"]).value or "").strip(): row
+        for row in matrix_rows
+    }
+    for row in rows:
+        case_id = str(ws.cell(row, headers["用例 ID"]).value or "").strip()
+        matrix_row = by_case.get(case_id)
+        if not matrix_row:
+            raise ValueError(f"scenario matrix is missing case {case_id}")
+        for case_header, matrix_header in (("功能点", "功能点"), ("优先级", "优先级"), ("DFX维度", "DFX维度"), ("DFX场景", "DFX场景")):
+            case_value = str(ws.cell(row, headers[case_header]).value or "").strip()
+            matrix_value = str(matrix.cell(matrix_row, matrix_headers[matrix_header]).value or "").strip()
+            if case_value != matrix_value:
+                raise ValueError(f"scenario matrix {case_id} {matrix_header} differs from function cases")
+    coverage = workbook["页面元素覆盖清单"]
+    coverage_headers = header_map(coverage)
+    for row in _nonempty_rows(coverage):
+        status = str(coverage.cell(row, coverage_headers["覆盖状态"]).value or "").strip()
+        note = str(coverage.cell(row, coverage_headers["待确认问题/备注"]).value or "").strip()
+        if status == "未覆盖" and not note:
+            name = str(coverage.cell(row, coverage_headers["元素名称/文案"]).value or "").strip()
+            raise ValueError(f"interactive element {name!r} is uncovered without a real blocker")
     return len(rows)
 
 
@@ -90,6 +133,7 @@ def validate_import(formal_path: Path, path: Path, expected_count: int) -> None:
                 raise ValueError(
                     f"import row {import_row} {import_header} does not match formal case row {formal_row}"
                 )
+    _assert_readable_rows(ws, headers, rows, {"测试步骤描述", "测试步骤预期结果", "测试用例说明", "前置条件", "备注"})
 
 
 def main() -> int:

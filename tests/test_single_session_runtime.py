@@ -55,7 +55,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                 "transaction_type": "selection", "recovery_result": "恢复标准视图",
                 "checks": [
                     {"element_ref": "EL-VIEW-MODE", "action": "选择精简视图", "option_value": "精简", "result": "列表仅显示核心告警字段",
-                     "result_anchor": {"assertion": "field_visible", "target": "列表", "field": "核心告警字段"}},
+                     "result_anchor": {"assertion": "field_visible", "target": "列表", "field": "核心告警字段", "tokens": ["核心告警字段"]}},
                     {"element_ref": "EL-VIEW-MODE", "action": "选择标准视图", "option_value": "标准", "result": "列表显示默认告警字段", "result_anchor": {"assertion": "contains", "value": "默认告警字段"}},
                     {"element_ref": "EL-VIEW-MODE", "action": "选择详细视图", "option_value": "详细", "result": "列表显示全部可见告警字段", "result_anchor": {"assertion": "contains", "value": "全部可见告警字段"}},
                     {"element_ref": "EL-VIEW-MODE", "action": "选择仅未确认", "option_value": "仅未确认", "result": "列表只显示未确认告警", "result_anchor": {"assertion": "contains", "value": "未确认告警"}},
@@ -98,7 +98,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
              "priority": "P1", "test_type": "功能测试", "dfx_dimension": "DFT功能", "dfx_scenario": "正向流程",
              "preconditions": ["告警列表存在包含完整字段的可查看数据"], "test_data": "视图模式：精简、标准、详细",
              "steps": [navigation,
-                       {"action": "选择精简视图", "expected": "列表切换为精简布局，核心告警字段保持可见"},
+                       {"action": "选择精简视图", "expected": "核心告警字段保持可见"},
                        {"action": "选择标准视图", "expected": "列表显示默认告警字段"},
                        {"action": "选择详细视图", "expected": "列表显示全部可见告警字段"}],
              "fact_refs": refs, "automation": True},
@@ -110,7 +110,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                        {"action": "选择仅已确认", "expected": "列表只显示已确认告警"}],
              "fact_refs": refs, "automation": True},
             {"case_id": "TC-VIEW-003", "function_ref": "FN-VIEW", "title": "告警视图模式-严重与全部范围切换",
-             "priority": "P1", "test_type": "功能测试", "dfx_dimension": "DFT功能", "dfx_scenario": "边界值",
+             "priority": "P2", "test_type": "功能测试", "dfx_dimension": "DFT功能", "dfx_scenario": "边界值",
              "preconditions": ["告警列表同时存在严重和其他级别数据"], "test_data": "告警范围：仅严重、全部",
              "steps": [navigation,
                        {"action": "选择仅严重", "expected": "列表只显示严重告警"},
@@ -148,6 +148,15 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertNotIn("menu_path", resumed)
         with self.assertRaisesRegex(ValueError, "choose a new run directory"):
             ensure_run(self.run_dir, "告警管理>告警详情")
+
+    def test_cli_rejects_a_run_directory_outside_the_project(self) -> None:
+        with tempfile.TemporaryDirectory() as outside:
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "test_design_cli.py"), "status", "--run-dir", outside],
+                cwd=ROOT, capture_output=True, text=True, check=False,
+            )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("must stay inside the current project root", result.stderr)
 
     def test_resume_automatically_rebuilds_a_stale_facts_view(self) -> None:
         append_events(self.run_dir, [{"kind": "open_item", "data": {
@@ -337,6 +346,10 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         matrix_text = "\n".join(str(matrix.cell(row, column).value or "") for row in range(2, matrix.max_row + 1) for column in range(1, matrix.max_column + 1))
         self.assertNotIn("TX-VIEW", matrix_text)
         self.assertNotIn("EL-VIEW", matrix_text)
+        matrix_headers = {cell.value: cell.column for cell in matrix[1]}
+        self.assertEqual("P2", matrix.cell(4, matrix_headers["优先级"]).value)
+        self.assertEqual("告警范围：仅严重、全部", matrix.cell(4, matrix_headers["输入数据/状态条件"]).value)
+        self.assertIn("严重告警", matrix.cell(4, matrix_headers["观察点"]).value)
         coverage = workbook["页面元素覆盖清单"]
         coverage_text = "\n".join(str(coverage.cell(row, column).value or "") for row in range(2, coverage.max_row + 1) for column in range(1, coverage.max_column + 1))
         self.assertNotIn("DOM", coverage_text)

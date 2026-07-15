@@ -34,6 +34,14 @@ def _print(value: object) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
+def _project_scoped_run_dir(value: Path) -> Path:
+    project_root = Path.cwd().resolve()
+    resolved = value.resolve()
+    if resolved != project_root and project_root not in resolved.parents:
+        raise ValueError(f"run-dir must stay inside the current project root: {project_root}")
+    return resolved
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Internal helpers for one-session test design")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -73,6 +81,8 @@ def main() -> int:
     deliver.add_argument("--project-root", type=Path, default=Path("."))
 
     args = parser.parse_args()
+    if hasattr(args, "run_dir"):
+        args.run_dir = _project_scoped_run_dir(args.run_dir)
     if args.command == "record":
         paths = artifact_paths(args.run_dir)
         if not paths["facts"].exists():

@@ -1,39 +1,10 @@
-# 产品级测试资产库
+# 测试资产
 
-`docs/test-assets/` 是内部维护资产库，用于让 AI 和团队长期维护产品测试知识图谱。该目录不作为默认客户交付件，其中 `docs/test-assets/batch-runs/` 用于保存大范围任务的批次运行状态账本。
+`docs/test-assets/` 保存用户长期产品事实和运行目录，框架修改不得删除真实内容。
 
-## 目录职责
+- `catalog/`：结构化产品事实（如已存在）。
+- `product-map.xlsx`：产品事实查询视图。
+- `batch-runs/`：按最小功能标题隔离的运行产物。
+- `modules/`、`imports/`：可选的正式归档与导入副本。
 
-```text
-docs/test-assets/
-  catalog/          # 按模块保存的版本化 JSON 权威事实源
-  product-map.xlsx  # 从 catalog 投影生成的 Excel 查询视图
-  modules/          # 按模块归档最终版测试设计
-  imports/          # 归档测试系统导入文件副本
-  batch-runs/       # 大范围任务的批次计划、状态、复盘和中间材料
-  indexes/          # 兼容或补充索引
-```
-
-客户交付件应放在 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。交付件只包含本次任务范围，不默认包含 `product-map.xlsx`、全量业务链路、全量历史用例索引或内部可复用测试数据。
-
-## AI 使用规则
-
-1. 每次生成或维护测试用例前，先读取 `catalog/index.json`；需要表格化浏览时读取由它投影生成的 `product-map.xlsx`。旧项目首次迁移时会从现有 Excel 保留真实行并创建 catalog。
-2. 如果用户指定依赖模块，读取产品版图中登记的对应模块归档测试设计。
-3. 生成前向用户展示产品理解摘要，包括当前模块、依赖模块、业务对象、业务链路、可复用历史用例、风险项和待确认问题。
-4. 用户确认风险项与待确认问题，并完成 DFX 覆盖评估后，动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级，再生成客户交付件。
-5. 生成或人工修订后，将最终版测试设计回存 `modules/`，导入文件副本回存 `imports/`，按模块 upsert `catalog/modules/*.json`，再重建 `product-map.xlsx`。
-6. 当任务范围超过一个最小标题时，创建或更新 `batch-runs/` 下的批次运行状态账本，按最小标题路径记录计划、状态、覆盖质量自检和复盘。
-
-## 维护原则
-
-- 规则存放在 `AGENTS.md`、`CODEBUDDY.md`、Skill 和 Rule 中。
-- 结构化事实存放在 `catalog/modules/*.json`，归档测试设计保存完整测试正文；`product-map.xlsx` 是可重建视图。
-- 大范围任务的执行进度和质量门禁存放在 `batch-runs/`，不依赖 AI 对话记忆。
-- 不依赖 AI 对话记忆保存具体业务事实。
-- 用户人工新增或修改后的最终版本必须回存资产库。
-- 外网到内网做普通框架升级时，`docs/test-assets/` 是受保护目录，不得被升级包覆盖或删除。标识：PROTECTED_ASSET_DIRS。
-- `docs/test-design/schemas/product-facts.schema.json` 定义事实文档契约；结构变化时通过 `asset_schema_version`、升级清单、校验脚本和迁移脚本处理。
-- `modules/` 和 `imports/` 中的历史 Excel 默认作为历史快照保留，不因框架升级而批量重写。
-- 分批必须按当前产品或模块可识别的最深标题级别执行，例如一级标题、二级标题、三级标题、四级标题等，哪个标题级别最小就以哪个最小标题作为一个批次。每个已通过批次只能覆盖 1 个最小标题路径，`最小标题路径` 使用 `一级>二级>三级>四级` 形式记录唯一叶子节点；禁止合并多个最小标题，禁止再拆分一个最小标题为多个批次。已通过批次的导入文件路径必须真实存在，并能与归档测试设计逐个匹配校验。
-- 当任务范围超过一个最小标题时，必须建立批次队列并按最小标题路径逐批执行。
+运行期页面事实保存在各自 run-dir 的 `artifacts/discovery/`，不会写入共享 CSV。最终交付默认留在该 run-dir 的 `deliverables/`，确认后再归档。

@@ -33,7 +33,7 @@ if (-not $python) {
   throw "No compatible Python runtime found. Install Python 3.11-3.13 and run: python -m pip install -r `"$repoRoot\requirements.txt`", or set TEST_DESIGN_PYTHON."
 }
 
-& $python (Join-Path $scriptDir "test_design_excel_tools.py") @ToolArgs
+& $python (Join-Path $scriptDir "test_design_cli.py") @ToolArgs
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }

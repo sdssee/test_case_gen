@@ -1,43 +1,45 @@
 # Codex Project Instructions
 
-本仓库是测试设计规范与交付工具包。Codex 只把本文件作为轻量路由入口，不重复加载 `CODEBUDDY.md` 或 `.codebuddy/.rules/test-design-rule.mdc`。
+本仓库用于“页面深探 → 测试规划 → 测试用例 → Excel 交付”。整个任务在一个会话、一个浏览器上下文中顺序执行。
 
-## 读取路由
+## 必读入口
 
-1. 读取 `.codebuddy/skills/test-design/SKILL.md` 和 `.codebuddy/rules/test-design-rule.md`。
-2. 按阶段读取 `docs/test-design/rules/README.md` 指向的专题规则：页面实探读 `page-discovery.md`，大范围批次读 `batch-run.md`，DFX 计划读 `dfx-test-strategy.md`，交付时再读 Excel 与归档规则。
-3. 测试事实读取 `docs/test-assets/catalog/index.json`、相关模块 JSON；`product-map.xlsx` 只是可重建查询视图。
+1. `.codebuddy/skills/test-design/SKILL.md`
+2. `.codebuddy/rules/test-design-rule.md`
+3. 按阶段读取 `docs/test-design/rules/README.md` 指向的专题规则。
 
-<!-- TEST-DESIGN-GENERATED:BEGIN -->
-- [TD-GATE-DELIVERY] 正式测试设计只含 8 个标准 Sheet；测试系统导入文件必须由独立模板副本生成。
-- [TD-GATE-FULL-DISCOVERY] 默认全量深探；按角色和数据状态建独立元素清单，以交互实例 ID 双向对账；实际执行并引用 artifacts 内非空证据文件和定位，静态截图改名不复用；有限集合每项实际选择，观察结果锚点进入预期；数据不足停留 discovery，风险确认不是豁免。
-- [TD-GATE-CRUD-EFFECT] 创建必须成功；修改项逐项验证持久化回显和实际生效；本次创建对象以同一数据 ID、创建 owner 贯穿，各行用其 mutation plan 交互实例 ID。
-- [TD-GATE-DATA-SAFETY] 既有数据只读；变更只作用于本次创建且带 `AI_TEST`、`CODEX_TEST` 或用户明确提供的数据。
-- [TD-GATE-RISK-UNCERTAINTY] 页面可验证内容由模型自行操作验证并在未完成时退回 discovery；仅把模型仍不理解的外部语义交给用户确认；风险只阻塞 risk/cases，不阻塞 plan。
-- [TD-GATE-DFX] 先建立元素与交互骨架，再按 `docs/test-design/rules/dfx-test-strategy.md` 完成 DFX 12×4 评估和扩展；性能规格测试和 DFP性能不进入功能用例。
-- [TD-GATE-LEAF-BATCH] 超过一个最小标题时逐最深标题分批，不合并、不再拆分；每个最小标题使用独立 run-dir，禁止在同一账本和 manifest 混装多个批次。
-- [TD-GATE-PHASES] 按 discovery → plan → risk → cases → delivery 累积门禁执行；discovery 单执行者义务逐项自动留痕、局部修复，不依赖 Agent。
-- [TD-GATE-SHARDS] 新一轮先清旧产物；功能用例按功能点感知且每片 1–10 条，使用从 `function_cases_part_001.json` 开始无断号的三位编号分片，可容纳的同功能点不得跨片，`function_cases_manifest.json` 是唯一读取源。
-- [TD-GATE-ASSEMBLY] 正式 Excel 只能由标准组装器生成，并由 `complete-deliverables` 一站式收口。
-- [TD-GATE-ASSET-FACTS] `catalog/modules/*.json` 是产品事实源，`product-map.xlsx` 是查询投影。
-- [TD-GATE-SENSITIVE-DATA] 不得保留真实 URL/IP、域名/主机名、账号、密钥、Token 或密码。
-- [TD-GATE-PROTECTED-ASSETS] 框架升级必须保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。标识：PROTECTED_ASSET_DIRS。
-- [TD-GATE-CASE-QUALITY] 前置、步骤、预期编号换行并完整导航；标题为“功能点-当前用例标题”；折叠 AI_TEST/CODEX_TEST 实例编号后步骤和预期仍分别唯一、可判定；实探→计划→用例一致，同功能点一连续区块；状态分类计数从用例派生；确定性字段逐行有序一致；交互闭环。
-<!-- TEST-DESIGN-GENERATED:END -->
+## 不可违反的约束
 
-## 执行入口
+- 默认全量深探。扫描从 DOM、可访问性树和实际页面状态开始，但采用开放发现；新出现的控件立即进入当前事务或后续事务。
+- 扫描只读，操作顺序执行。一次事务内完成“扫描、操作、局部重扫、观察差异、恢复”。工具瞬时错误最多重试一次；真实页面结果只记录一次；最终只输出一份未决缺口。
+- 有限下拉选项逐项真实选择。CRUD 和配置项必须验证提交、持久化回显、实际生效、恢复/清理；配置仅做单因素，不做组合。
+- 既有数据只读；变更只作用于本次创建且带 `AI_TEST`、`CODEX_TEST` 或用户明确提供的测试数据。
+- 页面能验证的问题必须自行操作，仅把页面外部且仍不理解的业务语义交给用户确认。
+- DFX 在用例计划阶段展开。每个独立功能先有基线用例，再按适用策略扩展；一个用例归属一个功能，辅助使用其他控件不能替代其独立用例。
+- 每条用例引用 `fact_id`；标题为“功能点-当前用例标题”；步骤和预期一一对应、可执行、可判定且互不重复，不得出现截图要求、内部标识或占位文本。
+- 正式测试设计保持 8 个标准 Sheet；测试系统导入文件必须独立生成。
+- 保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/` 中用户资产。
 
-- 初始化：`scripts/run-test-design.ps1 init-batch-run ...`
-- 实探闭环：`pipeline-status`；逐项运行 `discovery-next`、`discovery-begin`、`discovery-complete`
-- 阶段校验：`scripts/run-test-design.ps1 validate-batch-artifacts --phase discovery|plan|risk|cases ...`
-- 快速自检：`scripts/validate-test-design.ps1 -Mode Fast`
-- 完整自检与交付：`scripts/validate-test-design.ps1 -Mode Full`、`complete-deliverables`
+## 阶段与写入权
 
-## Git
+1. discovery：只写 `artifacts/discovery/events.jsonl`、`facts.json`、`evidence/`。
+2. plan：只读 facts，写 `case-plan.json`。
+3. cases：只读 facts 和 plan，写 `function-cases.json`。
+4. review/delivery：只读上游产物，写 `review.json` 和 `deliverables/`。
 
-- 修改后检查 `git status`；验证通过后默认提交并推送当前分支。
-- GitHub 提交信息必须使用中文。
+阶段边界只校验一次；发现问题仅修复受影响产物，不启动自动返工循环。
 
-<!-- LOCAL-OVERRIDES:BEGIN -->
-<!-- 业务项目可以在本区块追加本地约束；同步脚本不得覆盖。 -->
-<!-- LOCAL-OVERRIDES:END -->
+## 命令
+
+```powershell
+scripts/run-test-design.ps1 init-run --run-dir <run-dir> --module-path "<模块路径>"
+scripts/run-test-design.ps1 record-observation --run-dir <run-dir> --file <event-or-events.json>
+scripts/run-test-design.ps1 pipeline-status --run-dir <run-dir>
+scripts/run-test-design.ps1 validate-stage --run-dir <run-dir> --stage discovery|plan|cases|review
+scripts/run-test-design.ps1 review-run --run-dir <run-dir>
+scripts/run-test-design.ps1 complete-deliverables --run-dir <run-dir> --project-root .
+scripts/validate-test-design.ps1 -Mode Fast
+scripts/validate-test-design.ps1 -Mode Full
+```
+
+修改后检查 `git status`；验证通过后使用中文提交信息并推送当前分支。

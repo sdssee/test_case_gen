@@ -1,16 +1,1 @@
-{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "^(?:Browser|ComputerUse|DeferExecuteTool|mcp__.*)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".codebuddy\\hooks\\run-discovery-recorder.cmd",
-            "timeout": 30
-          }
-        ]
-      }
-    ]
-  }
-}
+{}

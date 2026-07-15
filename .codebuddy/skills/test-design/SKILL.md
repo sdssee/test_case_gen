@@ -1,49 +1,36 @@
 ---
 name: test-design
-description: 测试设计与测试用例生成专家，覆盖页面实探、结构化计划、风险确认、用例分片、Excel 交付和产品资产同步。
+description: 在一个连续会话中完成页面全量深探、事实编译、DFX 左移规划、测试用例编写、审查与 Excel 交付。
 allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 ---
 
 # 测试设计执行 Skill
 
-本 Skill 只负责编排。硬门禁读取当前运行时对应的 Rule；专题规则通过 `docs/test-design/rules/README.md` 延迟加载，避免一次性加载全部文档。
+## 执行顺序
 
-## 阶段编排
+1. 初始化 run-dir，读取需求和产品事实。
+2. 在同一浏览器上下文连续深探。进入页面和结构变化时全量扫描；每次操作后只局部重扫并比较变化；新元素动态加入事务。
+3. 在有意义的观察点追加 event；随后从 `events.jsonl` 重建 `facts.json`。不要为每次点击建立任务或执行一次命令。
+4. 基于 facts 识别独立功能，为每个功能建立基线用例，并在写正文前按 DFX 补充适用场景，写入 `case-plan.json`。
+5. 只依据 facts 与 plan 写 `function-cases.json`。同一功能的用例连续排列；每条用例引用事实。
+6. 执行一次双向审查并局部修复；通过后生成正式 8 Sheet 和独立测试系统导入文件。
 
-1. 读取 catalog 事实、相关模块归档和需求材料，形成模块理解摘要。
-2. 初始化并逐项全量深探。
-3. 生成结构化 `element-case-plan.csv` 与逐修改项 `test-data-lifecycle.csv`，通过 plan 门禁。
-4. 汇总模型不理解项；有问题才请用户确认，无问题运行 `record-risk-none`。
-5. 完成 DFX 评估，准备并按 manifest 分片生成用例。
-6. 组装 8 Sheet 正式设计、独立导入文件，归档并同步产品事实。
+## 深探事务
 
-<!-- TEST-DESIGN-GENERATED:BEGIN -->
-- [TD-GATE-DELIVERY] 正式测试设计只含 8 个标准 Sheet；测试系统导入文件必须由独立模板副本生成。
-- [TD-GATE-FULL-DISCOVERY] 默认全量深探；按角色和数据状态建独立元素清单，以交互实例 ID 双向对账；实际执行并引用 artifacts 内非空证据文件和定位，静态截图改名不复用；有限集合每项实际选择，观察结果锚点进入预期；数据不足停留 discovery，风险确认不是豁免。
-- [TD-GATE-CRUD-EFFECT] 创建必须成功；修改项逐项验证持久化回显和实际生效；本次创建对象以同一数据 ID、创建 owner 贯穿，各行用其 mutation plan 交互实例 ID。
-- [TD-GATE-DATA-SAFETY] 既有数据只读；变更只作用于本次创建且带 `AI_TEST`、`CODEX_TEST` 或用户明确提供的数据。
-- [TD-GATE-RISK-UNCERTAINTY] 页面可验证内容由模型自行操作验证并在未完成时退回 discovery；仅把模型仍不理解的外部语义交给用户确认；风险只阻塞 risk/cases，不阻塞 plan。
-- [TD-GATE-DFX] 先建立元素与交互骨架，再按 `docs/test-design/rules/dfx-test-strategy.md` 完成 DFX 12×4 评估和扩展；性能规格测试和 DFP性能不进入功能用例。
-- [TD-GATE-LEAF-BATCH] 超过一个最小标题时逐最深标题分批，不合并、不再拆分；每个最小标题使用独立 run-dir，禁止在同一账本和 manifest 混装多个批次。
-- [TD-GATE-PHASES] 按 discovery → plan → risk → cases → delivery 累积门禁执行；discovery 单执行者义务逐项自动留痕、局部修复，不依赖 Agent。
-- [TD-GATE-SHARDS] 新一轮先清旧产物；功能用例按功能点感知且每片 1–10 条，使用从 `function_cases_part_001.json` 开始无断号的三位编号分片，可容纳的同功能点不得跨片，`function_cases_manifest.json` 是唯一读取源。
-- [TD-GATE-ASSEMBLY] 正式 Excel 只能由标准组装器生成，并由 `complete-deliverables` 一站式收口。
-- [TD-GATE-ASSET-FACTS] `catalog/modules/*.json` 是产品事实源，`product-map.xlsx` 是查询投影。
-- [TD-GATE-SENSITIVE-DATA] 不得保留真实 URL/IP、域名/主机名、账号、密钥、Token 或密码。
-- [TD-GATE-PROTECTED-ASSETS] 框架升级必须保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。标识：PROTECTED_ASSET_DIRS。
-- [TD-GATE-CASE-QUALITY] 前置、步骤、预期编号换行并完整导航；标题为“功能点-当前用例标题”；折叠 AI_TEST/CODEX_TEST 实例编号后步骤和预期仍分别唯一、可判定；实探→计划→用例一致，同功能点一连续区块；状态分类计数从用例派生；确定性字段逐行有序一致；交互闭环。
-<!-- TEST-DESIGN-GENERATED:END -->
+- 扫描只读，操作串行；扫描与事务交错执行，不是独立阶段。
+- 默认遍历全部可交互元素。有限集合逐项选择，记录精确选项和页面变化。
+- CRUD/配置操作像手工测试一样真实提交。创建成功后验证对象可查询；编辑/单因素配置验证保存、重开回显、实际效果和恢复；删除只操作本轮测试对象。
+- 配置默认值可与 CRUD 基线共用事实；不同单因素值分别观察，不做组合。
+- 页面可以验证的内容自行操作。工具错误最多重试一次；业务失败就是事实；暂不可执行项记为 pending 并继续其他安全项目，结束时只汇总一次。
+
+## 阶段隔离
+
+- discovery 不写计划和用例。
+- plan 不修改 facts。
+- cases 不反向修改 plan 或 facts。
+- review 对上游只读；交付只消费 review 通过的产物。
+- 上下文切换依靠固化文件，不依赖会话记忆。
 
 ## 命令
 
-```powershell
-scripts/run-test-design.ps1 pipeline-status --run-dir <run-dir>
-scripts/run-test-design.ps1 validate-batch-artifacts --run-dir <run-dir> --phase discovery|plan|risk|cases
-scripts/run-test-design.ps1 record-risk-none --run-dir <run-dir>
-scripts/run-test-design.ps1 prepare-function-case-generation --run-dir <run-dir>
-scripts/run-test-design.ps1 complete-deliverables --run-dir <run-dir> --module-path "<模块路径>" --batch-id <批次ID>
-```
-
-<!-- LOCAL-OVERRIDES:BEGIN -->
-<!-- 业务项目可以在本区块追加本地约束；同步脚本不得覆盖。 -->
-<!-- LOCAL-OVERRIDES:END -->
+参见根目录 `AGENTS.md`。写阶段文件前读取 `docs/test-design/rules/artifact-contract.md`，其他详细规则按 `docs/test-design/rules/README.md` 路由读取。

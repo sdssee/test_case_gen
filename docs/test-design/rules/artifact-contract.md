@@ -22,27 +22,26 @@ run-dir/
 
 页面事实必须记录实际观察到的 `menu_path` 数组和页面名称。用例导航由该页面事实生成，不从测试范围文字推断。一个完整业务事务通过校验后才追加为一行；进程中断时只自动丢弃无法解析的最后一个未完整行，中间行损坏仍立即报错。
 
-一个连续分页事务示例：
+一个有限选项功能事务示例（仅说明契约，不代表预置功能）：
 
 ```json
 {
   "kind": "transaction",
-  "local_ref": "pagination_transaction",
+  "local_ref": "filter_transaction",
   "data": {
-    "function_ref": "FN-PAGE",
-    "element_refs": ["EL-PAGE-SIZE", "EL-PAGER"],
-    "transaction_type": "pagination",
+    "function_ref": "FN-FILTER",
+    "element_refs": ["EL-SEVERITY"],
+    "transaction_type": "selection",
     "checks": [
-      {"element_ref": "EL-PAGE-SIZE", "action": "选择10条/页", "option_value": 10, "result": "列表与总页数按10条重新计算"},
-      {"element_ref": "EL-PAGE-SIZE", "action": "选择20条/页", "option_value": 20, "result": "列表与总页数按20条重新计算"},
-      {"element_ref": "EL-PAGER", "action": "进入下一页", "result": "页码增加且列表切换为下一页数据"}
+      {"element_ref": "EL-SEVERITY", "action": "选择严重", "option_value": "严重", "result": "列表只显示严重级别告警"},
+      {"element_ref": "EL-SEVERITY", "action": "选择警告", "option_value": "警告", "result": "列表只显示警告级别告警"}
     ],
-    "recovery_result": "恢复第一页和初始条数"
+    "recovery_result": "恢复全部级别"
   }
 }
 ```
 
-`facts.json` 只有 `scope`、`pages`、`functions`、`elements`、`transactions`、`test_objects`、`open_items` 七类业务事实。关系使用 `page_ref`、`function_ref`、`element_ref`、`test_object_ref`；对外用例不得出现这些内部引用。
+`facts.json` 只有 `scope`、`pages`、`functions`、`elements`、`transactions`、`test_objects`、`open_items` 七类业务事实。运行时不按 `transaction_type` 内置搜索、分页、弹窗等专用 Case 模板；该字段只描述本次实际事务。关系使用 `page_ref`、`function_ref`、`element_ref`、`test_object_ref`；对外用例不得出现这些内部引用。
 
 ## case-plan.json
 
@@ -51,18 +50,18 @@ run-dir/
   "schema_version": "2.0",
   "source": "facts.json",
   "functions": [{
-    "function_ref": "FN-PAGE",
-    "name": "分页",
-    "dfx_decisions": [{"element_ref": "EL-PAGE-SIZE", "code": "finite_options", "disposition": "covered_by_baseline", "case_ids": ["TC-PAGE-001"], "reason": "有限选项在基线用例中逐项验证"}],
+    "function_ref": "FN-FILTER",
+    "name": "告警级别筛选",
+    "dfx_decisions": [{"element_ref": "EL-SEVERITY", "code": "finite_options", "disposition": "covered_by_baseline", "case_ids": ["TC-FILTER-001"], "reason": "有限选项在基线用例中逐项验证"}],
     "cases": [{
-      "case_id": "TC-PAGE-001",
-      "page_ref": "PAGE-LIST",
-      "title": "每页条数切换",
+      "case_id": "TC-FILTER-001",
+      "page_ref": "PAGE-ALARM-LIST",
+      "title": "告警级别逐项筛选",
       "strategy": "baseline",
       "dfx_dimension": "DFT功能",
       "dfx_scenario": "正向流程",
-      "fact_refs": ["FN-PAGE", "EL-PAGE-SIZE", "TX-PAGE"],
-      "covered_checks": {"TX-PAGE": [1, 2]}
+      "fact_refs": ["FN-FILTER", "EL-SEVERITY", "TX-FILTER"],
+      "covered_checks": {"TX-FILTER": [1, 2]}
     }]
   }],
   "non_case_checks": []
@@ -79,17 +78,17 @@ run-dir/
   "schema_version": "2.0",
   "source_plan": "case-plan.json",
   "cases": [{
-    "case_id": "TC-PAGE-001",
-    "function_ref": "FN-PAGE",
-    "title": "分页-每页条数切换",
-    "preconditions": ["告警列表存在超过30条可查看数据"],
-    "test_data": "每页条数：10条、20条",
+    "case_id": "TC-FILTER-001",
+    "function_ref": "FN-FILTER",
+    "title": "告警级别筛选-告警级别逐项筛选",
+    "preconditions": ["告警列表存在严重和警告级别的可查看数据"],
+    "test_data": "告警级别：严重、警告",
     "steps": [
-      {"action": "进入告警管理-告警列表", "expected": "显示告警查询区、列表和分页区域"},
-      {"action": "在每页条数中选择10条/页", "expected": "列表最多显示10条，总页数按10条重新计算", "source_check": {"transaction_ref": "TX-PAGE", "check_index": 1}},
-      {"action": "在每页条数中选择20条/页", "expected": "列表最多显示20条，总页数按20条重新计算", "source_check": {"transaction_ref": "TX-PAGE", "check_index": 2}}
+      {"action": "进入告警管理-告警列表", "expected": "显示告警查询区和告警列表"},
+      {"action": "在告警级别中选择严重", "expected": "列表只显示严重级别告警", "source_check": {"transaction_ref": "TX-FILTER", "check_index": 1}},
+      {"action": "在告警级别中选择警告", "expected": "列表只显示警告级别告警", "source_check": {"transaction_ref": "TX-FILTER", "check_index": 2}}
     ],
-    "fact_refs": ["FN-PAGE", "EL-PAGE-SIZE", "TX-PAGE"]
+    "fact_refs": ["FN-FILTER", "EL-SEVERITY", "TX-FILTER"]
   }]
 }
 ```

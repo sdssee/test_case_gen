@@ -40,25 +40,23 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                 "name": "告警列表", "menu_path": ["告警管理", "告警列表"], "result_anchor": "告警列表",
                 "final_scan_status": "stable", "unhandled_element_refs": []
             }},
-            {"kind": "function", "fact_id": "FN-PAGE", "data": {"name": "分页"}},
-            {"kind": "element", "fact_id": "EL-PAGE-SIZE", "data": {
-                "function_ref": "FN-PAGE", "page_ref": "PAGE-LIST", "name": "每页条数",
-                "type": "下拉框", "interactive": True, "option_set": "finite", "options": [10, 20, 30]
+            {"kind": "function", "fact_id": "FN-VIEW", "data": {"name": "告警视图模式"}},
+            {"kind": "element", "fact_id": "EL-VIEW-MODE", "data": {
+                "function_ref": "FN-VIEW", "page_ref": "PAGE-LIST", "name": "视图模式",
+                "type": "下拉框", "interactive": True, "option_set": "finite",
+                "options": ["精简", "标准", "详细", "仅未确认", "仅已确认", "仅严重", "全部"]
             }},
-            {"kind": "element", "fact_id": "EL-PAGER", "data": {
-                "function_ref": "FN-PAGE", "page_ref": "PAGE-LIST", "name": "翻页控件", "interactive": True
-            }},
-            {"kind": "transaction", "fact_id": "TX-PAGE", "data": {
-                "function_ref": "FN-PAGE", "element_refs": ["EL-PAGE-SIZE", "EL-PAGER"],
-                "transaction_type": "pagination", "recovery_result": "恢复第一页和初始条数",
+            {"kind": "transaction", "fact_id": "TX-VIEW", "data": {
+                "function_ref": "FN-VIEW", "element_refs": ["EL-VIEW-MODE"],
+                "transaction_type": "selection", "recovery_result": "恢复标准视图",
                 "checks": [
-                    {"element_ref": "EL-PAGE-SIZE", "action": "选择10条/页", "option_value": 10, "result": "列表与页数按10条重算"},
-                    {"element_ref": "EL-PAGE-SIZE", "action": "选择20条/页", "option_value": 20, "result": "列表与页数按20条重算"},
-                    {"element_ref": "EL-PAGE-SIZE", "action": "选择30条/页", "option_value": 30, "result": "列表与页数按30条重算"},
-                    {"element_ref": "EL-PAGER", "action": "进入下一页", "result": "页码增加并显示下一页数据"},
-                    {"element_ref": "EL-PAGER", "action": "返回上一页", "result": "页码减少并恢复上一页数据"},
-                    {"element_ref": "EL-PAGER", "action": "观察第一页边界", "result": "上一页按钮禁用"},
-                    {"element_ref": "EL-PAGER", "action": "进入末页并观察边界", "result": "下一页按钮禁用"},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择精简视图", "option_value": "精简", "result": "列表仅显示核心告警字段"},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择标准视图", "option_value": "标准", "result": "列表显示默认告警字段"},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择详细视图", "option_value": "详细", "result": "列表显示全部可见告警字段"},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择仅未确认", "option_value": "仅未确认", "result": "列表只显示未确认告警"},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择仅已确认", "option_value": "仅已确认", "result": "列表只显示已确认告警"},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择仅严重", "option_value": "仅严重", "result": "列表只显示严重告警"},
+                    {"element_ref": "EL-VIEW-MODE", "action": "选择全部", "option_value": "全部", "result": "列表恢复显示全部告警"},
                 ],
             }},
         ])
@@ -68,56 +66,56 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def _write_plan_and_cases(self) -> None:
-        refs = ["FN-PAGE", "EL-PAGE-SIZE", "EL-PAGER", "TX-PAGE"]
+        refs = ["FN-VIEW", "EL-VIEW-MODE", "TX-VIEW"]
         plan = {
             "schema_version": "2.0", "source": "facts.json", "risks": [], "non_case_checks": [],
-            "functions": [{"function_ref": "FN-PAGE", "name": "分页", "dfx_decisions": [
-                {"element_ref": "EL-PAGE-SIZE", "code": "finite_options", "disposition": "covered_by_baseline",
-                 "case_ids": ["TC-PAGE-001"], "reason": "三个实际选项在每页条数基线用例内逐项验证"}
+            "functions": [{"function_ref": "FN-VIEW", "name": "告警视图模式", "dfx_decisions": [
+                {"element_ref": "EL-VIEW-MODE", "code": "finite_options", "disposition": "covered_by_baseline",
+                 "case_ids": ["TC-VIEW-001", "TC-VIEW-002", "TC-VIEW-003"], "reason": "实际发现的有限选项在三个测试意图中逐项验证"}
             ], "cases": [
-                {"case_id": "TC-PAGE-001", "title": "每页条数切换", "strategy": "baseline",
+                {"case_id": "TC-VIEW-001", "title": "显示密度逐项切换", "strategy": "baseline",
                  "page_ref": "PAGE-LIST",
                  "dfx_dimension": "DFT功能", "dfx_scenario": "正向流程", "fact_refs": refs,
-                 "covered_checks": {"TX-PAGE": [1, 2, 3]}},
-                {"case_id": "TC-PAGE-002", "title": "上一页与下一页切换", "strategy": "DFX",
+                 "covered_checks": {"TX-VIEW": [1, 2, 3]}},
+                {"case_id": "TC-VIEW-002", "title": "确认状态逐项筛选", "strategy": "DFX",
                  "page_ref": "PAGE-LIST",
                  "dfx_dimension": "DFR可靠", "dfx_scenario": "状态一致性", "fact_refs": refs,
-                 "covered_checks": {"TX-PAGE": [4, 5]}},
-                {"case_id": "TC-PAGE-003", "title": "首页与末页边界状态", "strategy": "DFX",
+                 "covered_checks": {"TX-VIEW": [4, 5]}},
+                {"case_id": "TC-VIEW-003", "title": "严重与全部范围切换", "strategy": "DFX",
                  "page_ref": "PAGE-LIST",
                  "dfx_dimension": "DFT功能", "dfx_scenario": "边界值", "fact_refs": refs,
-                 "covered_checks": {"TX-PAGE": [6, 7]}},
+                 "covered_checks": {"TX-VIEW": [6, 7]}},
             ]}],
         }
         save_plan(self.run_dir, plan)
-        navigation = {"action": "进入告警管理-告警列表", "expected": "显示告警列表、查询区和分页区域"}
+        navigation = {"action": "进入告警管理-告警列表", "expected": "显示告警列表和查询区"}
         cases = {"schema_version": "2.0", "source_plan": "case-plan.json", "cases": [
-            {"case_id": "TC-PAGE-001", "function_ref": "FN-PAGE", "title": "分页-每页条数切换",
+            {"case_id": "TC-VIEW-001", "function_ref": "FN-VIEW", "title": "告警视图模式-显示密度逐项切换",
              "priority": "P1", "test_type": "功能测试", "dfx_dimension": "DFT功能", "dfx_scenario": "正向流程",
-             "preconditions": ["告警列表存在超过30条可查看数据"], "test_data": "每页条数：10、20、30",
+             "preconditions": ["告警列表存在包含完整字段的可查看数据"], "test_data": "视图模式：精简、标准、详细",
              "steps": [navigation,
-                       {"action": "选择10条/页", "expected": "列表与页数按10条重算", "source_check": {"transaction_ref": "TX-PAGE", "check_index": 1}},
-                       {"action": "选择20条/页", "expected": "列表与页数按20条重算", "source_check": {"transaction_ref": "TX-PAGE", "check_index": 2}},
-                       {"action": "选择30条/页", "expected": "列表与页数按30条重算", "source_check": {"transaction_ref": "TX-PAGE", "check_index": 3}}],
+                       {"action": "选择精简视图", "expected": "列表仅显示核心告警字段", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 1}},
+                       {"action": "选择标准视图", "expected": "列表显示默认告警字段", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 2}},
+                       {"action": "选择详细视图", "expected": "列表显示全部可见告警字段", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 3}}],
              "fact_refs": refs, "automation": True},
-            {"case_id": "TC-PAGE-002", "function_ref": "FN-PAGE", "title": "分页-上一页与下一页切换",
+            {"case_id": "TC-VIEW-002", "function_ref": "FN-VIEW", "title": "告警视图模式-确认状态逐项筛选",
              "priority": "P1", "test_type": "功能测试", "dfx_dimension": "DFR可靠", "dfx_scenario": "状态一致性",
-             "preconditions": ["告警列表至少存在两页可查看数据"], "test_data": "第一页与第二页告警记录",
+             "preconditions": ["告警列表同时存在已确认和未确认数据"], "test_data": "确认状态：仅未确认、仅已确认",
              "steps": [navigation,
-                       {"action": "单击下一页", "expected": "页码增加并显示下一页数据", "source_check": {"transaction_ref": "TX-PAGE", "check_index": 4}},
-                       {"action": "单击上一页", "expected": "页码减少并恢复上一页数据", "source_check": {"transaction_ref": "TX-PAGE", "check_index": 5}}],
+                       {"action": "选择仅未确认", "expected": "列表只显示未确认告警", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 4}},
+                       {"action": "选择仅已确认", "expected": "列表只显示已确认告警", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 5}}],
              "fact_refs": refs, "automation": True},
-            {"case_id": "TC-PAGE-003", "function_ref": "FN-PAGE", "title": "分页-首页与末页边界状态",
+            {"case_id": "TC-VIEW-003", "function_ref": "FN-VIEW", "title": "告警视图模式-严重与全部范围切换",
              "priority": "P1", "test_type": "功能测试", "dfx_dimension": "DFT功能", "dfx_scenario": "边界值",
-             "preconditions": ["告警列表存在多页可查看数据"], "test_data": "第一页和末页",
+             "preconditions": ["告警列表同时存在严重和其他级别数据"], "test_data": "告警范围：仅严重、全部",
              "steps": [navigation,
-                       {"action": "停留在第一页观察上一页按钮", "expected": "上一页按钮禁用", "source_check": {"transaction_ref": "TX-PAGE", "check_index": 6}},
-                       {"action": "进入末页观察下一页按钮", "expected": "下一页按钮禁用", "source_check": {"transaction_ref": "TX-PAGE", "check_index": 7}}],
+                       {"action": "选择仅严重", "expected": "列表只显示严重告警", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 6}},
+                       {"action": "选择全部", "expected": "列表恢复显示全部告警", "source_check": {"transaction_ref": "TX-VIEW", "check_index": 7}}],
              "fact_refs": refs, "automation": True},
         ]}
         save_cases(self.run_dir, cases)
 
-    def test_one_pagination_transaction_dynamically_forms_three_cases_not_seven(self) -> None:
+    def test_one_transaction_can_assign_seven_checks_to_three_test_intents(self) -> None:
         self.assertEqual([], validate_discovery(self.run_dir))
         facts = compile_facts(self.run_dir)
         self.assertEqual(1, len(facts["transactions"]))
@@ -181,20 +179,20 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self._write_plan_and_cases()
         append_events(self.run_dir, [{"kind": "open_item", "fact_id": "OPEN-RISK", "data": {
             "category": "observed_risk", "description": "末页返回响应较慢", "material": False,
-            "affected_function_refs": ["FN-PAGE"]
+            "affected_function_refs": ["FN-VIEW"]
         }}])
         compile_facts(self.run_dir)
         review = review_run(self.run_dir)
         self.assertEqual("ready_with_notes", review["status"])
         append_events(self.run_dir, [{"kind": "open_item", "fact_id": "OPEN-QUESTION", "data": {
             "category": "external_question", "description": "告警确认后的外部处置语义待确认", "material": True,
-            "affected_function_refs": ["FN-PAGE"]
+            "affected_function_refs": ["FN-VIEW"]
         }}])
         compile_facts(self.run_dir)
         self.assertEqual("blocked_by_fact", review_run(self.run_dir)["status"])
         append_events(self.run_dir, [{"kind": "open_item", "fact_id": "OPEN-QUESTION", "status": "resolved", "data": {
             "category": "external_question", "description": "用户已确认外部处置语义", "material": True,
-            "affected_function_refs": ["FN-PAGE"]
+            "affected_function_refs": ["FN-VIEW"]
         }}])
         compile_facts(self.run_dir)
         self.assertEqual("ready_with_notes", review_run(self.run_dir)["status"])
@@ -204,7 +202,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertEqual("ready", review_run(self.run_dir)["status"])
         append_events(self.run_dir, [{"kind": "open_item", "fact_id": "OPEN-NOTE", "data": {
             "category": "observed_risk", "description": "非阻塞提示", "material": False,
-            "affected_function_refs": ["FN-PAGE"]
+            "affected_function_refs": ["FN-VIEW"]
         }}])
         compile_facts(self.run_dir)
         with self.assertRaisesRegex(ValueError, "stale"):
@@ -257,18 +255,18 @@ class SingleSessionRuntimeTests(unittest.TestCase):
             )
             self.assertEqual(set(formal_template[name].tables), set(workbook[name].tables))
         ws = workbook["功能测试用例"]
-        self.assertEqual("TC-PAGE-001", ws.cell(2, 1).value)
-        self.assertEqual("TC-PAGE-003", ws.cell(4, 1).value)
+        self.assertEqual("TC-VIEW-001", ws.cell(2, 1).value)
+        self.assertEqual("TC-VIEW-003", ws.cell(4, 1).value)
         self.assertIsNone(ws.cell(5, 1).value)
         self.assertGreaterEqual(ws.row_dimensions[2].height, 40)
         matrix = workbook["测试场景矩阵"]
         matrix_text = "\n".join(str(matrix.cell(row, column).value or "") for row in range(2, matrix.max_row + 1) for column in range(1, matrix.max_column + 1))
-        self.assertNotIn("TX-PAGE", matrix_text)
-        self.assertNotIn("EL-PAGE", matrix_text)
+        self.assertNotIn("TX-VIEW", matrix_text)
+        self.assertNotIn("EL-VIEW", matrix_text)
         coverage = workbook["页面元素覆盖清单"]
         coverage_text = "\n".join(str(coverage.cell(row, column).value or "") for row in range(2, coverage.max_row + 1) for column in range(1, coverage.max_column + 1))
         self.assertNotIn("DOM", coverage_text)
-        self.assertNotIn("EL-PAGE", coverage_text)
+        self.assertNotIn("EL-VIEW", coverage_text)
         import_book = load_workbook(import_file, data_only=False)
         import_template = load_workbook(ROOT / "docs" / "test-design" / "测试用例模板.xlsx", data_only=False)
         import_ws = import_book[import_book.sheetnames[0]]

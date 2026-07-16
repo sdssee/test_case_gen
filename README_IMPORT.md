@@ -8,4 +8,4 @@
 scripts/run-test-design.ps1 deliver --run-dir <run-dir> --project-root .
 ```
 
-输出固定为 `deliverables/正式测试设计.xlsx` 和 `deliverables/测试系统导入.xlsx`。
+新运行固定在 `docs/test-design/current/<run-id>/`，输出固定为该运行目录下的 `deliverables/正式测试设计.xlsx` 和 `deliverables/测试系统导入.xlsx`。交付回执返回两个文件的完整路径。

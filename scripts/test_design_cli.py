@@ -37,9 +37,17 @@ def _print(value: object) -> None:
 
 def _project_scoped_run_dir(value: Path) -> Path:
     project_root = Path.cwd().resolve()
-    resolved = value.resolve()
+    canonical_root = (project_root / "docs" / "test-design" / "current").resolve()
+    if not value.is_absolute() and len(value.parts) == 1:
+        resolved = (canonical_root / value).resolve()
+    else:
+        resolved = value.resolve()
     if resolved != project_root and project_root not in resolved.parents:
         raise ValueError(f"run-dir must stay inside the current project root: {project_root}")
+    is_canonical = canonical_root in resolved.parents
+    is_existing_legacy = (resolved / "events.jsonl").is_file() or (resolved / "facts.json").is_file()
+    if not is_canonical and not is_existing_legacy:
+        raise ValueError(f"new run-dir must be under the canonical root: {canonical_root}")
     return resolved
 
 

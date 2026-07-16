@@ -16,6 +16,43 @@ from test_design.session_runtime import (
 
 
 class QualityRuleTests(unittest.TestCase):
+    def test_each_valid_input_equivalence_class_requires_an_independent_baseline_case(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "valid-classes"
+            ensure_run(run_dir, "工具>诊断")
+            append_events(run_dir, [
+                {"kind": "page", "fact_id": "PAGE", "data": {"name": "诊断", "menu_path": ["工具", "诊断"], "final_scan_status": "stable", "unhandled_element_refs": []}},
+                {"kind": "function", "fact_id": "FN", "data": {"name": "目标诊断"}},
+                {"kind": "element", "fact_id": "EL", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "目标", "type": "文本输入框", "interactive": True}},
+                {"kind": "element", "fact_id": "RUN", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "执行", "type": "按钮", "interactive": True}},
+                {"kind": "transaction", "fact_id": "TX", "data": {"function_ref": "FN", "element_refs": ["EL", "RUN"], "checks": [
+                    {"element_ref": "EL", "used_element_refs": ["EL", "RUN"], "trigger_element_ref": "RUN", "input_class": "valid_domain", "action": "输入有效域名并点击执行", "result": "显示域名诊断结果", "result_anchor": {"assertion": "contains", "value": "域名诊断结果"}},
+                    {"element_ref": "EL", "used_element_refs": ["EL", "RUN"], "trigger_element_ref": "RUN", "input_class": "valid_ip", "action": "输入有效IP并点击执行", "result": "显示IP诊断结果", "result_anchor": {"assertion": "contains", "value": "IP诊断结果"}},
+                ]}},
+            ])
+            self.assertTrue(checkpoint_facts(run_dir)["ready"])
+            combined = {
+                "schema_version": "2.0", "functions": [{"function_ref": "FN", "name": "目标诊断", "cases": [
+                    {"case_id": "TC-COMBINED", "page_ref": "PAGE", "title": "有效目标诊断", "strategy": "baseline"}
+                ]}], "check_assignments": [
+                    {"transaction_ref": "TX", "check_index": 1, "disposition": "case", "case_id": "TC-COMBINED"},
+                    {"transaction_ref": "TX", "check_index": 2, "disposition": "case", "case_id": "TC-COMBINED"},
+                ],
+            }
+            with self.assertRaisesRegex(ValueError, "independent branches"):
+                save_plan(run_dir, combined)
+            separate = {
+                "schema_version": "2.0", "functions": [{"function_ref": "FN", "name": "目标诊断", "cases": [
+                    {"case_id": "TC-DOMAIN", "page_ref": "PAGE", "title": "有效域名诊断", "strategy": "baseline"},
+                    {"case_id": "TC-IP", "page_ref": "PAGE", "title": "有效IP诊断", "strategy": "baseline"},
+                ]}], "check_assignments": [
+                    {"transaction_ref": "TX", "check_index": 1, "disposition": "case", "case_id": "TC-DOMAIN"},
+                    {"transaction_ref": "TX", "check_index": 2, "disposition": "case", "case_id": "TC-IP"},
+                ],
+            }
+            saved = save_plan(run_dir, separate)
+            self.assertEqual(2, len(saved["functions"][0]["cases"]))
+
     def test_persisted_facts_reject_unmasked_url_or_ip(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             run_dir = Path(value) / "sensitive"

@@ -24,6 +24,7 @@ from test_design.session_runtime import (
     ensure_run,
     load_facts,
     load_cases,
+    load_plan,
     pipeline_status,
     review_run,
     save_cases,
@@ -32,6 +33,7 @@ from test_design.session_runtime import (
     validate_discovery,
     validate_plan,
 )
+from test_design_cli import _project_scoped_run_dir
 
 
 class SingleSessionRuntimeTests(unittest.TestCase):
@@ -72,54 +74,39 @@ class SingleSessionRuntimeTests(unittest.TestCase):
 
     def _write_plan_and_cases(self) -> None:
         refs = ["FN-VIEW", "EL-VIEW-MODE", "TX-VIEW"]
+        branches = [
+            ("精简", "列表仅显示核心告警字段", "精简视图显示"),
+            ("标准", "列表显示默认告警字段", "标准视图显示"),
+            ("详细", "列表显示全部可见告警字段", "详细视图显示"),
+            ("仅未确认", "列表只显示未确认告警", "仅未确认告警筛选"),
+            ("仅已确认", "列表只显示已确认告警", "仅已确认告警筛选"),
+            ("仅严重", "列表只显示严重告警", "仅严重告警筛选"),
+            ("全部", "列表恢复显示全部告警", "全部告警显示"),
+        ]
         plan = {
             "schema_version": "2.0", "risks": [],
             "functions": [{"function_ref": "FN-VIEW", "name": "告警视图模式", "cases": [
-                {"case_id": "TC-VIEW-001", "title": "显示密度逐项切换", "strategy": "baseline",
-                 "page_ref": "PAGE-LIST",
-                 "dfx_dimension": "DFT功能", "dfx_scenario": "正向流程"},
-                {"case_id": "TC-VIEW-002", "title": "确认状态逐项筛选", "strategy": "DFX",
-                 "page_ref": "PAGE-LIST",
-                 "dfx_dimension": "DFR可靠", "dfx_scenario": "状态一致性"},
-                {"case_id": "TC-VIEW-003", "title": "严重与全部范围切换", "strategy": "DFX",
-                 "page_ref": "PAGE-LIST",
-                 "dfx_dimension": "DFT功能", "dfx_scenario": "边界值"},
+                {"case_id": f"TC-VIEW-{index:03d}", "title": title, "strategy": "baseline", "page_ref": "PAGE-LIST"}
+                for index, (_, _, title) in enumerate(branches, 1)
             ]}],
             "check_assignments": [
-                *[{"transaction_ref": "TX-VIEW", "check_index": index, "disposition": "case", "case_id": "TC-VIEW-001"} for index in (1, 2, 3)],
-                *[{"transaction_ref": "TX-VIEW", "check_index": index, "disposition": "case", "case_id": "TC-VIEW-002"} for index in (4, 5)],
-                *[{"transaction_ref": "TX-VIEW", "check_index": index, "disposition": "case", "case_id": "TC-VIEW-003"} for index in (6, 7)],
+                {"transaction_ref": "TX-VIEW", "check_index": index, "disposition": "case", "case_id": f"TC-VIEW-{index:03d}"}
+                for index in range(1, len(branches) + 1)
             ],
         }
         save_plan(self.run_dir, plan)
         navigation = {"action": "进入告警管理-告警列表", "expected": "显示告警列表和查询区"}
         cases = {"schema_version": "2.0", "source_plan": "case-plan.json", "cases": [
-            {"case_id": "TC-VIEW-001", "function_ref": "FN-VIEW", "title": "告警视图模式-显示密度逐项切换",
-             "priority": "P1", "test_type": "功能测试", "dfx_dimension": "DFT功能", "dfx_scenario": "正向流程",
-             "preconditions": ["告警列表存在包含完整字段的可查看数据"], "test_data": "视图模式：精简、标准、详细",
-             "steps": [navigation,
-                       {"action": "选择精简视图", "expected": "核心告警字段保持可见"},
-                       {"action": "选择标准视图", "expected": "列表显示默认告警字段"},
-                       {"action": "选择详细视图", "expected": "列表显示全部可见告警字段"}],
-             "fact_refs": refs, "automation": True},
-            {"case_id": "TC-VIEW-002", "function_ref": "FN-VIEW", "title": "告警视图模式-确认状态逐项筛选",
-             "priority": "P1", "test_type": "功能测试", "dfx_dimension": "DFR可靠", "dfx_scenario": "状态一致性",
-             "preconditions": ["告警列表同时存在已确认和未确认数据"], "test_data": "确认状态：仅未确认、仅已确认",
-             "steps": [navigation,
-                       {"action": "选择仅未确认", "expected": "列表只显示未确认告警"},
-                       {"action": "选择仅已确认", "expected": "列表只显示已确认告警"}],
-             "fact_refs": refs, "automation": True},
-            {"case_id": "TC-VIEW-003", "function_ref": "FN-VIEW", "title": "告警视图模式-严重与全部范围切换",
-             "priority": "P2", "test_type": "功能测试", "dfx_dimension": "DFT功能", "dfx_scenario": "边界值",
-             "preconditions": ["告警列表同时存在严重和其他级别数据"], "test_data": "告警范围：仅严重、全部",
-             "steps": [navigation,
-                       {"action": "选择仅严重", "expected": "列表只显示严重告警"},
-                       {"action": "选择全部", "expected": "列表恢复显示全部告警"}],
-             "fact_refs": refs, "automation": True},
+            {"case_id": f"TC-VIEW-{index:03d}", "function_ref": "FN-VIEW", "title": f"告警视图模式-{title}",
+             "priority": "P1" if index < 6 else "P2", "test_type": "功能测试",
+             "preconditions": ["告警列表存在可查看且能够区分当前选项效果的数据"], "test_data": f"视图模式：{option}",
+             "steps": [navigation, {"action": f"选择{option}视图模式", "expected": expected}],
+             "fact_refs": refs, "automation": True}
+            for index, (option, expected, title) in enumerate(branches, 1)
         ]}
         save_cases(self.run_dir, cases)
 
-    def test_one_transaction_can_assign_seven_checks_to_three_test_intents(self) -> None:
+    def test_one_transaction_assigns_each_finite_option_to_its_own_case(self) -> None:
         self.assertEqual([], validate_discovery(self.run_dir))
         facts = load_facts(self.run_dir)
         self.assertEqual(1, len(facts["transactions"]))
@@ -127,7 +114,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         skeleton = build_plan_skeleton(self.run_dir)
         self.assertEqual(7, len(skeleton["functions"][0]["checks"]))
         self._write_plan_and_cases()
-        self.assertEqual(3, sum(len(item["cases"]) for item in json.loads(artifact_paths(self.run_dir)["plan"].read_text(encoding="utf-8"))["functions"]))
+        self.assertEqual(7, sum(len(item["cases"]) for item in json.loads(artifact_paths(self.run_dir)["plan"].read_text(encoding="utf-8"))["functions"]))
         written = load_cases(self.run_dir)
         self.assertEqual({"transaction_ref": "TX-VIEW", "check_index": 1}, written["cases"][0]["steps"][1]["source_check"])
         self.assertIn("EL-VIEW-MODE", written["cases"][0]["fact_refs"])
@@ -157,6 +144,74 @@ class SingleSessionRuntimeTests(unittest.TestCase):
             )
         self.assertNotEqual(0, result.returncode)
         self.assertIn("must stay inside the current project root", result.stderr)
+
+    def test_short_run_id_resolves_to_the_canonical_current_directory(self) -> None:
+        resolved = _project_scoped_run_dir(Path("run-canonical-test"))
+        self.assertEqual((ROOT / "docs" / "test-design" / "current" / "run-canonical-test").resolve(), resolved)
+
+    def test_exact_duplicate_event_is_absorbed_without_another_line(self) -> None:
+        event = {"kind": "open_item", "fact_id": "OPEN-IDEMPOTENT", "data": {
+            "category": "observed_risk", "description": "一次性记录", "material": False,
+            "affected_function_refs": ["FN-VIEW"],
+        }}
+        first = append_events(self.run_dir, [event])[0]
+        before = len(artifact_paths(self.run_dir)["events"].read_text(encoding="utf-8").splitlines())
+        second = append_events(self.run_dir, [event])[0]
+        after = len(artifact_paths(self.run_dir)["events"].read_text(encoding="utf-8").splitlines())
+        self.assertEqual(first["fact_id"], second["fact_id"])
+        self.assertEqual(before, after)
+
+    def test_plan_and_cases_upsert_one_function_without_rewriting_other_functions(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "incremental"
+            ensure_run(run_dir, "工具>双功能")
+            append_events(run_dir, [
+                {"kind": "page", "fact_id": "PAGE", "data": {"name": "双功能", "menu_path": ["工具", "双功能"], "final_scan_status": "stable", "unhandled_element_refs": []}},
+                {"kind": "function", "fact_id": "FN-A", "data": {"name": "功能A"}},
+                {"kind": "function", "fact_id": "FN-B", "data": {"name": "功能B"}},
+                {"kind": "element", "fact_id": "EL-A", "data": {"page_ref": "PAGE", "function_ref": "FN-A", "name": "执行A", "type": "按钮", "interactive": True}},
+                {"kind": "element", "fact_id": "EL-B", "data": {"page_ref": "PAGE", "function_ref": "FN-B", "name": "执行B", "type": "按钮", "interactive": True}},
+                {"kind": "transaction", "fact_id": "TX-A", "data": {"function_ref": "FN-A", "element_refs": ["EL-A"], "checks": [
+                    {"element_ref": "EL-A", "used_element_refs": ["EL-A"], "trigger_element_ref": "EL-A", "action": "点击执行A", "result": "显示A结果", "result_anchor": {"assertion": "contains", "value": "A结果"}}
+                ]}},
+                {"kind": "transaction", "fact_id": "TX-B", "data": {"function_ref": "FN-B", "element_refs": ["EL-B"], "checks": [
+                    {"element_ref": "EL-B", "used_element_refs": ["EL-B"], "trigger_element_ref": "EL-B", "action": "点击执行B", "result": "显示B结果", "result_anchor": {"assertion": "contains", "value": "B结果"}}
+                ]}},
+            ])
+            self.assertTrue(checkpoint_facts(run_dir)["ready"])
+            for suffix in ("A", "B"):
+                save_plan(run_dir, {
+                    "schema_version": "2.0",
+                    "functions": [{"function_ref": f"FN-{suffix}", "name": f"功能{suffix}", "cases": [
+                        {"case_id": f"TC-{suffix}", "page_ref": "PAGE", "title": f"执行{suffix}", "strategy": "baseline"}
+                    ]}],
+                    "check_assignments": [{"transaction_ref": f"TX-{suffix}", "check_index": 1, "disposition": "case", "case_id": f"TC-{suffix}"}],
+                })
+                if suffix == "A":
+                    self.assertEqual("continue", pipeline_status(run_dir)["state"])
+            self.assertEqual(["FN-A", "FN-B"], [row["function_ref"] for row in load_plan(run_dir)["functions"]])
+            with self.assertRaisesRegex(ValueError, "no planned disposition"):
+                save_plan(run_dir, {
+                    "schema_version": "2.0",
+                    "functions": [{"function_ref": "FN-A", "name": "功能A", "cases": [
+                        {"case_id": "TC-A", "page_ref": "PAGE", "title": "执行A", "strategy": "baseline"}
+                    ]}],
+                    "check_assignments": [],
+                })
+            navigation = {"action": "进入工具-双功能", "expected": "显示双功能页面"}
+            for suffix in ("A", "B"):
+                save_cases(run_dir, {"schema_version": "2.0", "cases": [{
+                    "case_id": f"TC-{suffix}", "function_ref": f"FN-{suffix}", "title": f"功能{suffix}-执行{suffix}",
+                    "priority": "P1", "test_type": "功能测试", "preconditions": ["具备页面访问权限"], "test_data": f"功能{suffix}受控数据",
+                    "steps": [navigation, {"action": f"点击执行{suffix}", "expected": f"显示{suffix}结果"}],
+                }]})
+                if suffix == "A":
+                    self.assertEqual("continue", pipeline_status(run_dir)["state"])
+            before = artifact_paths(run_dir)["cases"].read_bytes()
+            current_b = next(row for row in load_cases(run_dir)["cases"] if row["function_ref"] == "FN-B")
+            save_cases(run_dir, {"schema_version": "2.0", "cases": [current_b]})
+            self.assertEqual(before, artifact_paths(run_dir)["cases"].read_bytes())
+            self.assertEqual("ready", review_run(run_dir)["status"])
 
     def test_resume_automatically_rebuilds_a_stale_facts_view(self) -> None:
         append_events(self.run_dir, [{"kind": "open_item", "data": {
@@ -192,7 +247,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         paths["cases"].write_text(json.dumps(cases, ensure_ascii=False), encoding="utf-8")
         self.assertEqual("ready", pipeline_status(self.run_dir)["state"])
         receipt = complete_deliverables(self.run_dir, ROOT)
-        self.assertEqual(3, receipt["import_cases"])
+        self.assertEqual(7, receipt["import_cases"])
 
     def test_crud_lifecycle_dfx_hint_is_transaction_scoped_once(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -323,11 +378,13 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertEqual("ready", review_run(self.run_dir)["status"])
         receipt = complete_deliverables(self.run_dir, ROOT)
         delivery = artifact_paths(self.run_dir)["delivery"]
-        formal = delivery / receipt["formal_workbook"]
-        import_file = delivery / receipt["import_workbook"]
+        formal = Path(receipt["formal_workbook"])
+        import_file = Path(receipt["import_workbook"])
+        self.assertEqual(str(delivery.resolve()), receipt["delivery_dir"])
         self.assertEqual("正式测试设计.xlsx", formal.name)
         self.assertEqual("测试系统导入.xlsx", import_file.name)
         self.assertEqual({"正式测试设计.xlsx", "测试系统导入.xlsx"}, {path.name for path in delivery.iterdir()})
+        self.assertTrue(all(count > 0 for count in receipt["sheet_rows"].values()))
         workbook = load_workbook(formal, data_only=False)
         formal_template = load_workbook(ROOT / "docs" / "test-design" / "codebuddy-test-design-template.xlsx", data_only=False)
         self.assertEqual(SHEETS, workbook.sheetnames)
@@ -340,27 +397,40 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         ws = workbook["功能测试用例"]
         self.assertEqual("TC-VIEW-001", ws.cell(2, 1).value)
         self.assertEqual("TC-VIEW-003", ws.cell(4, 1).value)
-        self.assertIsNone(ws.cell(5, 1).value)
+        self.assertEqual("TC-VIEW-007", ws.cell(8, 1).value)
+        self.assertIsNone(ws.cell(9, 1).value)
         self.assertGreaterEqual(ws.row_dimensions[2].height, 40)
         matrix = workbook["测试场景矩阵"]
         matrix_text = "\n".join(str(matrix.cell(row, column).value or "") for row in range(2, matrix.max_row + 1) for column in range(1, matrix.max_column + 1))
         self.assertNotIn("TX-VIEW", matrix_text)
         self.assertNotIn("EL-VIEW", matrix_text)
         matrix_headers = {cell.value: cell.column for cell in matrix[1]}
-        self.assertEqual("P2", matrix.cell(4, matrix_headers["优先级"]).value)
-        self.assertEqual("告警范围：仅严重、全部", matrix.cell(4, matrix_headers["输入数据/状态条件"]).value)
-        self.assertIn("严重告警", matrix.cell(4, matrix_headers["观察点"]).value)
+        self.assertEqual("P1", matrix.cell(4, matrix_headers["优先级"]).value)
+        self.assertEqual("视图模式：详细", matrix.cell(4, matrix_headers["输入数据/状态条件"]).value)
+        self.assertIn("全部可见告警字段", matrix.cell(4, matrix_headers["观察点"]).value)
         coverage = workbook["页面元素覆盖清单"]
         coverage_text = "\n".join(str(coverage.cell(row, column).value or "") for row in range(2, coverage.max_row + 1) for column in range(1, coverage.max_column + 1))
         self.assertNotIn("DOM", coverage_text)
         self.assertNotIn("EL-VIEW", coverage_text)
+        coverage_headers = {cell.value: cell.column for cell in coverage[1]}
+        self.assertEqual("已覆盖", coverage.cell(2, coverage_headers["覆盖状态"]).value)
+        requirements = workbook["需求用户故事拆解"]
+        requirement_headers = {cell.value: cell.column for cell in requirements[1]}
+        for header in ("Story ID/需求 ID", "用户故事/需求描述", "角色", "业务价值", "验收标准", "业务规则"):
+            self.assertTrue(str(requirements.cell(2, requirement_headers[header]).value or "").strip())
+        performance = workbook["性能测试设计"]
+        self.assertEqual("PERF-N/A", performance.cell(2, 1).value)
+        risk = workbook["风险与待确认问题"]
+        self.assertEqual("RISK-N/A", risk.cell(2, 1).value)
+        automation = workbook["自动化建议"]
+        self.assertEqual(8, automation.max_row)
         import_book = load_workbook(import_file, data_only=False)
         import_template = load_workbook(ROOT / "docs" / "test-design" / "测试用例模板.xlsx", data_only=False)
         import_ws = import_book[import_book.sheetnames[0]]
         import_template_ws = import_template[import_template.sheetnames[0]]
         self.assertEqual(len(import_template_ws.data_validations.dataValidation), len(import_ws.data_validations.dataValidation))
         self.assertEqual(set(import_template_ws.tables), set(import_ws.tables))
-        self.assertEqual(4, import_ws.max_row)
+        self.assertEqual(8, import_ws.max_row)
         self.assertGreaterEqual(import_ws.row_dimensions[2].height, 40)
         validated = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "validate-test-design-deliverable.py"),

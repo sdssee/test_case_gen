@@ -2,6 +2,8 @@
 
 ## 最小运行目录
 
+新运行目录固定为 `docs/test-design/current/<run-id>/`；已存在 `events.jsonl` 或 `facts.json` 的历史运行可以原地恢复。
+
 ```text
 run-dir/
 ├─ events.jsonl
@@ -55,7 +57,14 @@ run-dir/
     "cases": [{
       "case_id": "TC-FILTER-001",
       "page_ref": "PAGE-ALARM-LIST",
-      "title": "告警级别逐项筛选",
+      "title": "严重级别筛选",
+      "strategy": "baseline",
+      "dfx_dimension": "DFT功能",
+      "dfx_scenario": "正向流程"
+    }, {
+      "case_id": "TC-FILTER-002",
+      "page_ref": "PAGE-ALARM-LIST",
+      "title": "警告级别筛选",
       "strategy": "baseline",
       "dfx_dimension": "DFT功能",
       "dfx_scenario": "正向流程"
@@ -63,13 +72,13 @@ run-dir/
   }],
   "check_assignments": [
     {"transaction_ref": "TX-FILTER", "check_index": 1, "disposition": "case", "case_id": "TC-FILTER-001"},
-    {"transaction_ref": "TX-FILTER", "check_index": 2, "disposition": "case", "case_id": "TC-FILTER-001"}
+    {"transaction_ref": "TX-FILTER", "check_index": 2, "disposition": "case", "case_id": "TC-FILTER-002"}
   ]
 }
 ```
 
-计划只写测试意图和唯一检查点分配账本；`fact_refs`、元素覆盖、功能覆盖和DFX关联由系统派生，不要求模型重复维护。
-计划通过内部 `write-plan` 写入；结构或映射错误在本次生成动作中局部修正，不把错误计划留给最终 Review。
+计划只写测试意图和唯一检查点分配账本；`fact_refs`、元素覆盖、功能覆盖和DFX关联由系统派生，不要求模型重复维护。每个有限选项和每个实测有效输入等价类分别对应独立 baseline Case，不合并到一个 Case，也不默认做跨维度组合。
+计划通过内部 `write-plan` 按功能 upsert；结构或映射错误在本次生成动作中局部修正，不把错误计划留给最终 Review。精确重复提交返回成功且不改写文件。
 
 ## function-cases.json
 
@@ -80,13 +89,12 @@ run-dir/
   "cases": [{
     "case_id": "TC-FILTER-001",
     "function_ref": "FN-FILTER",
-    "title": "告警级别筛选-告警级别逐项筛选",
-    "preconditions": ["告警列表存在严重和警告级别的可查看数据"],
-    "test_data": "告警级别：严重、警告",
+    "title": "告警级别筛选-严重级别筛选",
+    "preconditions": ["告警列表存在严重级别的可查看数据"],
+    "test_data": "告警级别：严重",
     "steps": [
       {"action": "进入告警管理-告警列表", "expected": "显示告警查询区和告警列表"},
-      {"action": "在告警级别中选择严重", "expected": "告警列表刷新，所有记录的告警级别均为严重", "source_check": {"transaction_ref": "TX-FILTER", "check_index": 1}},
-      {"action": "在告警级别中选择警告", "expected": "列表只显示警告级别告警", "source_check": {"transaction_ref": "TX-FILTER", "check_index": 2}}
+      {"action": "在告警级别中选择严重", "expected": "告警列表刷新，所有记录的告警级别均为严重", "source_check": {"transaction_ref": "TX-FILTER", "check_index": 1}}
     ],
     "fact_refs": ["FN-FILTER", "EL-SEVERITY", "TX-FILTER"]
   }]
@@ -94,4 +102,4 @@ run-dir/
 ```
 
 模型提交步骤时只写 `action+expected`；写入器按 `check_assignments` 顺序自动注入一个内部 `source_check`，并从主验证和辅助使用控件派生 `fact_refs`。结构化 `result_anchor` 只校验明确的 `tokens` 或结果 `value`，允许目标、字段和观察原句使用更完整的等价表述。内部来源不导出Excel。
-用例通过内部 `write-cases` 写入；标题、菜单路径、配对步骤、具体数据、功能顺序和事实引用在生成时完成约束。
+用例通过内部 `write-cases` 按功能 upsert；标题、菜单路径、配对步骤、具体数据、功能顺序和事实引用在生成时完成约束。同一功能再次提交时只替换该功能块，其他功能保持不变。

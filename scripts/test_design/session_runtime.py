@@ -236,6 +236,7 @@ def _derive_exploration_requirements(element: dict[str, Any]) -> list[dict[str, 
         requirements.append({
             "kind": "input_class", "value": "valid", "strategy": "baseline",
             "reason": "输入元素的有效等价类",
+            "independent_case": True,
         })
         if element.get("required") is True or constraints.get("required") is True:
             requirements.append({
@@ -272,13 +273,10 @@ def _derive_exploration_requirements(element: dict[str, Any]) -> list[dict[str, 
             is_configuration_baseline = element.get("configuration") is True and str(option) == str(element.get("default_value"))
             requirement = {
                 "kind": "option_value", "value": str(option),
-                "strategy": "baseline" if is_configuration_baseline else "DFX",
-                "reason": "单因素配置的默认或未配置基线" if is_configuration_baseline else "页面呈现了有限选项",
+                "strategy": "baseline",
+                "reason": "单因素配置的默认或未配置基线" if is_configuration_baseline else "页面呈现的独立有效选项",
+                "independent_case": True,
             }
-            if not is_configuration_baseline:
-                requirement.update({
-                    "dfx_code": "finite_options", "dfx_dimension": "DFT功能", "dfx_scenario": "有限选项逐项结果",
-                })
             requirements.append(requirement)
     default = element.get("default_value")
     if element.get("configuration") is True and default is not None and not any(
@@ -411,9 +409,13 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
     raw_items = [dict(event) for event in events]
     aliases: dict[str, str] = {}
     items: list[dict[str, Any]] = []
+    generated_ids: set[str] = set()
     for raw in raw_items:
         alias = str(raw.pop("local_ref", "")).strip()
+        provided_id = bool(str(raw.get("fact_id", "")).strip())
         item = _prepare_event(raw)
+        if not provided_id:
+            generated_ids.add(str(item["fact_id"]))
         if alias:
             if alias in aliases:
                 raise ValueError(f"duplicate local_ref: {alias}")
@@ -435,12 +437,61 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
     items = [resolve(item) for item in items]
     if not items:
         return []
-    _validate_new_transactions(run_dir, items)
+
+    # Exact resubmissions are successful no-ops.  This is deliberately strict:
+    # only the same kind/status/data is absorbed; similar business prose is not
+    # fuzzy-matched.  Provisional IDs are rewritten in later batch references so
+    # local_ref remains safe when an earlier item is absorbed.
+    latest: dict[str, dict[str, Any]] = {}
+    for existing in load_events(run_dir):
+        prepared = _prepare_event(existing)
+        latest[str(prepared["fact_id"])] = prepared
+    signatures = {
+        _content_digest({"kind": item.get("kind"), "status": item.get("status", "active"), "data": item.get("data", {})}): fact_id
+        for fact_id, item in latest.items()
+    }
+    replacements: dict[str, str] = {}
+
+    def replace_refs(value: Any) -> Any:
+        if isinstance(value, str):
+            return replacements.get(value, value)
+        if isinstance(value, list):
+            return [replace_refs(item) for item in value]
+        if isinstance(value, dict):
+            return {key: replace_refs(item) for key, item in value.items()}
+        return value
+
+    appended: list[dict[str, Any]] = []
+    returned: list[dict[str, Any]] = []
+    for original in items:
+        item = replace_refs(original)
+        signature = _content_digest({"kind": item.get("kind"), "status": item.get("status", "active"), "data": item.get("data", {})})
+        duplicate_id = (
+            signatures.get(signature)
+            if str(item["fact_id"]) in generated_ids and item.get("kind") not in {"function", "element"}
+            else None
+        )
+        if duplicate_id:
+            replacements[str(item["fact_id"])] = duplicate_id
+            returned.append(latest[duplicate_id])
+            continue
+        same_id = latest.get(str(item["fact_id"]))
+        if same_id and _content_digest({"kind": same_id.get("kind"), "status": same_id.get("status", "active"), "data": same_id.get("data", {})}) == signature:
+            returned.append(same_id)
+            continue
+        appended.append(item)
+        returned.append(item)
+        latest[str(item["fact_id"])] = item
+        signatures[signature] = str(item["fact_id"])
+
+    if not appended:
+        return returned
+    _validate_new_transactions(run_dir, appended)
     paths["events"].parent.mkdir(parents=True, exist_ok=True)
-    payload = "".join(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in items)
+    payload = "".join(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in appended)
     with paths["events"].open("a", encoding="utf-8", newline="\n") as handle:
         handle.write(payload)
-    return items
+    return returned
 
 
 def load_events(run_dir: Path) -> list[dict[str, Any]]:
@@ -779,6 +830,27 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
             for transaction in owned_transactions
             for index, check in enumerate(transaction.get("checks", []), 1)
         ]
+        element_map = {str(row.get("fact_id", "")): row for row in owned_elements}
+        required_case_branches: list[dict[str, Any]] = []
+        for transaction in owned_transactions:
+            transaction_ref = str(transaction["fact_id"])
+            for index, check in enumerate(transaction.get("checks", []), 1):
+                element_ref = str(check.get("element_ref", ""))
+                element = element_map.get(element_ref, {})
+                option_value = str(check.get("option_value", "")).strip()
+                input_class = str(check.get("input_class", "")).strip()
+                if element.get("option_set") == "finite" and option_value:
+                    required_case_branches.append({
+                        "kind": "finite_option", "element_ref": element_ref, "value": option_value,
+                        "strategy": "baseline", "independent_case": True,
+                        "related_check": {"transaction_ref": transaction_ref, "check_index": index},
+                    })
+                elif input_class == "valid" or input_class.startswith("valid_"):
+                    required_case_branches.append({
+                        "kind": "valid_input_class", "element_ref": element_ref, "value": input_class,
+                        "strategy": "baseline", "independent_case": True,
+                        "related_check": {"transaction_ref": transaction_ref, "check_index": index},
+                    })
         unique_hints = _function_dfx_hints(owned_elements, owned_transactions, function_ref)
         for hint in unique_hints:
             related_checks: list[dict[str, Any]] = []
@@ -813,6 +885,7 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
             "elements": [{key: row.get(key) for key in ("fact_id", "name", "type", "constraints", "trigger_condition", "options") if row.get(key) is not None} for row in owned_elements],
             "transactions": [{"transaction_ref": str(row["fact_id"]), "transaction_type": row.get("transaction_type"), "checks": len(row.get("checks", []))} for row in owned_transactions],
             "checks": checks,
+            "required_case_branches": required_case_branches,
             "dfx_hints": unique_hints,
         })
     return {
@@ -836,10 +909,12 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
     fact_ids = _all_fact_ids(facts)
     functions = {str(row["fact_id"]): row for row in facts.get("functions", [])}
     transactions = {str(row["fact_id"]): row for row in facts.get("transactions", [])}
+    elements = {str(row["fact_id"]): row for row in facts.get("elements", [])}
     pages = {str(row["fact_id"]): row for row in facts.get("pages", [])}
     planned_functions: set[str] = set()
     case_ids: set[str] = set()
     titles: set[tuple[str, str]] = set()
+    planned_cases: dict[str, dict[str, Any]] = {}
     for function in plan.get("functions", []):
         function_ref = str(function.get("function_ref", ""))
         if function_ref not in functions:
@@ -855,6 +930,7 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
             if not case_id or case_id in case_ids:
                 issues.append(_issue("invalid_case_id", "repairable", "case-plan.json", f"empty or duplicate case ID {case_id!r}", "assign one stable case ID", function_ref=function_ref, case_id=case_id))
             case_ids.add(case_id)
+            planned_cases[case_id] = case
             page_ref = str(case.get("page_ref", ""))
             if page_ref not in pages:
                 issues.append(_issue("broken_reference", "repairable", "case-plan.json", f"case {case_id} has no valid page_ref", "select the observed page for this intent", function_ref=function_ref, case_id=case_id))
@@ -867,10 +943,8 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
             if title_key in titles:
                 issues.append(_issue("duplicate_title", "repairable", "case-plan.json", f"function {function_ref} repeats planned title {title_key[1]!r}", "merge or differentiate the actual intent", function_ref=function_ref, case_id=case_id))
             titles.add(title_key)
-            if str(case.get("strategy", "")).lower() != "baseline" and (
-                not str(case.get("dfx_dimension", "")).strip() or not str(case.get("dfx_scenario", "")).strip()
-            ):
-                issues.append(_issue("missing_dfx", "repairable", "case-plan.json", f"DFX case {case_id} lacks dimension or scenario", "complete DFX while planning", function_ref=function_ref, case_id=case_id))
+            if not str(case.get("dfx_dimension", "")).strip() or not str(case.get("dfx_scenario", "")).strip():
+                issues.append(_issue("missing_dfx", "repairable", "case-plan.json", f"case {case_id} lacks dimension or scenario", "complete DFX while planning", function_ref=function_ref, case_id=case_id))
     missing_functions = set(functions) - planned_functions
     if missing_functions:
         issues.append(_issue("missing_function", "repairable", "case-plan.json", f"functions missing from plan: {sorted(missing_functions)}", "plan only the missing function blocks"))
@@ -881,6 +955,7 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
     }
     seen_assignments: set[tuple[str, int]] = set()
     assigned_case_ids: set[str] = set()
+    assignment_by_check: dict[tuple[str, int], dict[str, Any]] = {}
     for assignment in plan.get("check_assignments", []):
         try:
             key = (str(assignment.get("transaction_ref", "")), int(assignment.get("check_index", 0)))
@@ -891,6 +966,7 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
         if key in seen_assignments:
             issues.append(_issue("duplicate_assignment", "repairable", "case-plan.json", f"check {key} is assigned more than once", "retain one canonical assignment"))
         seen_assignments.add(key)
+        assignment_by_check[key] = assignment
         if not transaction or key[1] < 1 or key[1] > len(transaction.get("checks", [])):
             issues.append(_issue("broken_reference", "repairable", "case-plan.json", f"assignment references unknown check {key}", "repair this assignment once"))
             continue
@@ -908,16 +984,65 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
         else:
             issues.append(_issue("invalid_assignment", "repairable", "case-plan.json", f"check {key} has unsupported disposition {disposition!r}", "use case/performance/risk/not_applicable"))
     empty_cases = set(case_owners) - assigned_case_ids
-    if empty_cases:
-        issues.append(_issue("unassigned_case", "repairable", "case-plan.json", f"cases have no assigned checks: {sorted(empty_cases)}", "assign observed checks or remove these empty intents"))
+    for case_id in sorted(empty_cases):
+        issues.append(_issue(
+            "unassigned_case", "repairable", "case-plan.json", f"case {case_id} has no assigned checks",
+            "assign observed checks or remove this empty intent",
+            function_ref=case_owners.get(case_id, ""), case_id=case_id,
+        ))
     all_checks = {
         (str(transaction["fact_id"]), index)
         for transaction in facts.get("transactions", [])
         for index, _ in enumerate(transaction.get("checks", []), 1)
     }
     unassigned = all_checks - seen_assignments
-    if unassigned:
-        issues.append(_issue("unassigned_check", "repairable", "case-plan.json", f"transaction checks have no planned disposition: {sorted(unassigned)}", "assign only these checks to a case or explicit non-case disposition"))
+    for transaction_ref, check_index in sorted(unassigned):
+        issues.append(_issue(
+            "unassigned_check", "repairable", "case-plan.json",
+            f"transaction check {(transaction_ref, check_index)} has no planned disposition",
+            "assign only this check to a case or explicit non-case disposition",
+            function_ref=str(transactions.get(transaction_ref, {}).get("function_ref", "")),
+        ))
+
+    independent_by_case: dict[str, list[str]] = {}
+    for transaction_ref, transaction in transactions.items():
+        function_ref = str(transaction.get("function_ref", ""))
+        for index, check in enumerate(transaction.get("checks", []), 1):
+            element_ref = str(check.get("element_ref", ""))
+            element = elements.get(element_ref, {})
+            option_value = str(check.get("option_value", "")).strip()
+            input_class = str(check.get("input_class", "")).strip()
+            if element.get("option_set") == "finite" and option_value:
+                label = f"有限选项 {element.get('name') or element_ref}={option_value}"
+            elif input_class == "valid" or input_class.startswith("valid_"):
+                label = f"有效输入类别 {element.get('name') or element_ref}={input_class}"
+            else:
+                continue
+            assignment = assignment_by_check.get((transaction_ref, index), {})
+            case_id = str(assignment.get("case_id", "")) if assignment.get("disposition") == "case" else ""
+            if not case_id:
+                issues.append(_issue(
+                    "independent_branch_not_case", "repairable", "case-plan.json",
+                    f"{label} must produce its own executable case", "assign this observed branch to one baseline case",
+                    function_ref=function_ref,
+                ))
+                continue
+            independent_by_case.setdefault(case_id, []).append(label)
+            if str(planned_cases.get(case_id, {}).get("strategy", "")).lower() != "baseline":
+                issues.append(_issue(
+                    "independent_branch_not_baseline", "repairable", "case-plan.json",
+                    f"{label} must be a baseline case", "set only this intent to baseline",
+                    function_ref=function_ref, case_id=case_id,
+                ))
+    for case_id, labels in independent_by_case.items():
+        if len(labels) > 1:
+            function_ref = case_owners.get(case_id, "")
+            issues.append(_issue(
+                "combined_independent_branches", "repairable", "case-plan.json",
+                f"case {case_id} combines independent branches: {labels}",
+                "create one baseline case for each finite option or valid input class",
+                function_ref=function_ref, case_id=case_id,
+            ))
     return issues
 
 
@@ -1091,8 +1216,12 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
             if str(case.get(field, "")).strip() != str(planned_case.get(field, "")).strip():
                 issues.append(_issue("plan_mismatch", "repairable", "function-cases.json", f"case {case_id} {field} differs from plan", "restore this planned value", **context))
     missing = set(planned) - actual_ids
-    if missing:
-        issues.append(_issue("missing_case", "repairable", "function-cases.json", f"planned cases were not written: {sorted(missing)}", "generate only the missing cases"))
+    for case_id in sorted(missing):
+        function_ref = planned.get(case_id, ("", {}, ""))[0]
+        issues.append(_issue(
+            "missing_case", "repairable", "function-cases.json", f"planned case {case_id} was not written",
+            "generate only this missing case", function_ref=function_ref, case_id=case_id,
+        ))
     return issues
 
 
@@ -1161,14 +1290,112 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
     for assignment in value.get("check_assignments", []):
         if assignment.get("disposition") == "case":
             by_case.setdefault(str(assignment.get("case_id", "")), []).append(assignment)
+    supplied_requirements = facts.get("scope", {}).get("requirements", [])
+    requirement_ids = {
+        str(function.get("fact_id", "")): str(
+            function.get("requirement_id")
+            or (supplied_requirements[index - 1].get("requirement_id") if index <= len(supplied_requirements) else "")
+            or f"REQ-{index:03d}"
+        )
+        for index, function in enumerate(facts.get("functions", []), 1)
+    }
+    for index, scenario in enumerate(value.get("performance_scenarios", []), 1):
+        function_ref = str(scenario.get("function_ref", ""))
+        scenario.setdefault("scenario_id", f"PERF-{index:03d}")
+        scenario.setdefault("requirement_id", requirement_ids.get(function_ref, "不适用"))
+        scenario.setdefault("dfx_dimension", "DFP性能")
+        scenario.setdefault("dfx_scenario", str(scenario.get("test_type") or "性能专项"))
+        scenario.setdefault("included", "是")
+    for index, risk in enumerate(value.get("risks", []), 1):
+        function_ref = str(risk.get("function_ref", ""))
+        risk.setdefault("risk_id", f"RISK-{index:03d}")
+        risk.setdefault("requirement_id", requirement_ids.get(function_ref, ""))
     for function in value.get("functions", []):
         function_ref = str(function.get("function_ref", ""))
+        function.setdefault("requirement_id", requirement_ids.get(function_ref, ""))
         for case in function.get("cases", []):
             case_id = str(case.get("case_id", ""))
+            case.setdefault("requirement_id", function.get("requirement_id", ""))
+            if str(case.get("strategy", "")).lower() == "baseline":
+                case.setdefault("dfx_dimension", "DFT功能")
+                case.setdefault("dfx_scenario", "正向流程")
             case["fact_refs"] = _derive_case_fact_refs(
                 function_ref, str(case.get("page_ref", "")), by_case.get(case_id, []), transactions,
             )
     return value
+
+
+def _merge_plan_functions(run_dir: Path, incoming: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
+    paths = artifact_paths(run_dir)
+    existing = load_plan(run_dir) if paths["plan"].exists() else {"schema_version": SCHEMA_VERSION, "functions": [], "check_assignments": []}
+    incoming_function_refs = [str(row.get("function_ref", "")) for row in incoming.get("functions", []) if str(row.get("function_ref", "")).strip()]
+    affected = set(incoming_function_refs)
+    if not affected:
+        raise ValueError("plan upsert requires at least one function block")
+    if len(incoming_function_refs) != len(affected):
+        raise ValueError("plan upsert repeats a function block")
+    facts = load_facts(run_dir)
+    fact_function_refs = {str(row.get("fact_id", "")) for row in facts.get("functions", [])}
+    unknown_functions = affected - fact_function_refs
+    if unknown_functions:
+        raise ValueError(f"plan upsert references unknown functions: {sorted(unknown_functions)}")
+    transaction_owner = {str(row.get("fact_id", "")): str(row.get("function_ref", "")) for row in facts.get("transactions", [])}
+    incoming_assignments: list[dict[str, Any]] = []
+    for row in incoming.get("check_assignments", []):
+        owner = transaction_owner.get(str(row.get("transaction_ref", "")))
+        if owner and owner not in affected:
+            raise ValueError("an upsert function block cannot replace another function's check assignment")
+        incoming_assignments.append(row)
+    retained_assignments = [
+        row for row in existing.get("check_assignments", [])
+        if transaction_owner.get(str(row.get("transaction_ref", ""))) not in affected
+    ]
+    by_function = {str(row.get("function_ref", "")): row for row in existing.get("functions", [])}
+    by_function.update({str(row.get("function_ref", "")): row for row in incoming.get("functions", [])})
+    fact_order = [str(row.get("fact_id", "")) for row in facts.get("functions", [])]
+    merged = {
+        key: json.loads(json.dumps(value, ensure_ascii=False))
+        for key, value in existing.items()
+        if key not in {"functions", "check_assignments", "source", "source_digest"}
+    }
+    for key in ("risks", "performance_scenarios"):
+        if key not in incoming:
+            continue
+        incoming_rows = json.loads(json.dumps(incoming.get(key, []), ensure_ascii=False))
+        existing_rows = existing.get(key, []) if isinstance(existing.get(key), list) else []
+        incoming_has_global = any(not str(row.get("function_ref", "")).strip() for row in incoming_rows if isinstance(row, dict))
+        retained_rows = [
+            row for row in existing_rows
+            if str(row.get("function_ref", "")).strip() not in affected
+            and (str(row.get("function_ref", "")).strip() or not incoming_has_global)
+        ]
+        merged[key] = retained_rows + incoming_rows
+    merged["schema_version"] = SCHEMA_VERSION
+    merged["functions"] = [by_function[ref] for ref in fact_order if ref in by_function]
+    merged["check_assignments"] = retained_assignments + incoming_assignments
+    return merged, affected
+
+
+def _save_incremental(path: Path, value: dict[str, Any], inspector: Any, run_dir: Path, affected: set[str], complete: bool) -> dict[str, Any]:
+    old = path.read_bytes() if path.exists() else None
+    unchanged = old is not None and _semantic_content_digest(_read_json(path)) == _semantic_content_digest(value)
+    if not unchanged:
+        _write_json(path, value)
+    issues = inspector(run_dir)
+    if not complete:
+        issues = [
+            issue for issue in issues
+            if issue.get("code") != "missing_function"
+            and (not issue.get("function_ref") or issue.get("function_ref") in affected)
+        ]
+    if issues:
+        if not unchanged:
+            if old is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(old)
+        raise ValueError("construction needs one grouped local correction: " + json.dumps(_group_issues(issues), ensure_ascii=False))
+    return _read_json(path) if unchanged else value
 
 
 def save_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
@@ -1176,8 +1403,14 @@ def save_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
     checkpoint = _current_checkpoint(facts)
     if checkpoint.get("ready") is not True:
         raise ValueError("discovery checkpoint is not ready: " + json.dumps(checkpoint, ensure_ascii=False))
-    value = _normalize_plan(run_dir, plan)
-    return _save_with_construction_check(artifact_paths(run_dir)["plan"], value, inspect_plan, run_dir)
+    merged, affected = _merge_plan_functions(run_dir, plan)
+    value = _normalize_plan(run_dir, merged)
+    fact_functions = {str(row.get("fact_id", "")) for row in facts.get("functions", [])}
+    planned_functions = {str(row.get("function_ref", "")) for row in value.get("functions", [])}
+    return _save_incremental(
+        artifact_paths(run_dir)["plan"], value, inspect_plan, run_dir, affected,
+        complete=fact_functions == planned_functions,
+    )
 
 
 def _assign_case_sources(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]:
@@ -1207,14 +1440,48 @@ def _assign_case_sources(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]
                     "check_index": int(source.get("check_index", 0)),
                 }
         case["fact_refs"] = list(planned.get("fact_refs", []))
+        for field in ("requirement_id", "strategy", "dfx_dimension", "dfx_scenario"):
+            case[field] = planned.get(field, case.get(field, ""))
     value["source_plan"] = "case-plan.json"
     value["source_plan_digest"] = _semantic_content_digest(plan)
     return value
 
 
 def save_cases(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]:
-    value = _assign_case_sources(run_dir, cases)
-    return _save_with_construction_check(artifact_paths(run_dir)["cases"], value, inspect_cases, run_dir)
+    plan = load_plan(run_dir)
+    incoming_rows = cases.get("cases", [])
+    affected = {str(row.get("function_ref", "")) for row in incoming_rows if str(row.get("function_ref", "")).strip()}
+    if not affected:
+        raise ValueError("case upsert requires at least one function block")
+    plan_owners = {
+        str(case.get("case_id", "")): str(function.get("function_ref", ""))
+        for function in plan.get("functions", []) for case in function.get("cases", [])
+    }
+    incoming_ids = [str(row.get("case_id", "")) for row in incoming_rows]
+    if len(incoming_ids) != len(set(incoming_ids)):
+        raise ValueError("case upsert repeats a case ID")
+    for row in incoming_rows:
+        case_id = str(row.get("case_id", ""))
+        function_ref = str(row.get("function_ref", ""))
+        if case_id not in plan_owners or plan_owners[case_id] != function_ref:
+            raise ValueError(f"case upsert contains an unplanned or wrongly-owned case: {case_id!r}")
+    path = artifact_paths(run_dir)["cases"]
+    existing = load_cases(run_dir) if path.exists() else {"schema_version": SCHEMA_VERSION, "cases": []}
+    retained = [row for row in existing.get("cases", []) if str(row.get("function_ref", "")) not in affected]
+    incoming = [row for row in incoming_rows if str(row.get("function_ref", "")) in affected]
+    by_id = {str(row.get("case_id", "")): row for row in retained + incoming}
+    plan_order = [
+        str(case.get("case_id", ""))
+        for function in plan.get("functions", [])
+        for case in function.get("cases", [])
+    ]
+    merged = {key: value for key, value in existing.items() if key not in {"cases", "source_plan", "source_plan_digest"}}
+    merged["schema_version"] = SCHEMA_VERSION
+    merged["cases"] = [by_id[case_id] for case_id in plan_order if case_id in by_id]
+    value = _assign_case_sources(run_dir, merged)
+    planned_ids = set(plan_order)
+    written_ids = {str(row.get("case_id", "")) for row in value.get("cases", [])}
+    return _save_incremental(path, value, inspect_cases, run_dir, affected, complete=planned_ids == written_ids)
 
 
 def inspect_cross_artifacts(run_dir: Path) -> list[dict[str, str]]:
@@ -1262,6 +1529,43 @@ def inspect_cross_artifacts(run_dir: Path) -> list[dict[str, str]]:
             issues.append(_issue("cross_mapping", "repairable", "function-cases.json", f"case {case_id} differs from its function/check plan", "repair only this case", case_id=case_id))
     if set(planned) != written:
         issues.append(_issue("cross_case_set", "repairable", "function-cases.json", "planned and written case sets differ", "add or remove only the differing cases"))
+    element_ids = {str(row.get("fact_id", "")) for row in facts.get("elements", [])}
+    covered_elements = {
+        str(ref)
+        for case in document.get("cases", [])
+        for ref in case.get("fact_refs", [])
+        if str(ref) in element_ids
+    }
+    handled_non_case: set[str] = set()
+    transactions = {str(row.get("fact_id", "")): row for row in facts.get("transactions", [])}
+    for assignment in plan.get("check_assignments", []):
+        if assignment.get("disposition") == "case":
+            continue
+        transaction = transactions.get(str(assignment.get("transaction_ref", "")), {})
+        try:
+            check = transaction.get("checks", [])[int(assignment.get("check_index", 0)) - 1]
+        except (IndexError, TypeError, ValueError):
+            continue
+        handled_non_case.update(str(ref) for ref in check.get("used_element_refs", []) if str(ref).strip())
+        if check.get("element_ref"):
+            handled_non_case.add(str(check.get("element_ref")))
+    blocked_functions = {
+        str(ref)
+        for item in facts.get("open_items", [])
+        if item.get("category") == "blocked_condition" and item.get("status") not in {"resolved", "accepted", "closed"}
+        for ref in item.get("affected_function_refs", [])
+    }
+    for element in facts.get("elements", []):
+        element_ref = str(element.get("fact_id", ""))
+        if element.get("status") in NON_ACTIONABLE_STATUSES or element.get("interactive", True) is False:
+            continue
+        if element_ref not in covered_elements and element_ref not in handled_non_case and str(element.get("function_ref", "")) not in blocked_functions:
+            issues.append(_issue(
+                "uncovered_element", "repairable", "function-cases.json",
+                f"interactive element {element.get('name') or element_ref} has no case or explicit specialist disposition",
+                "add only its missing independent intent or explicit non-case disposition",
+                function_ref=str(element.get("function_ref", "")),
+            ))
     return issues
 
 
@@ -1270,7 +1574,7 @@ def review_run(run_dir: Path) -> dict[str, Any]:
     facts = load_facts(run_dir)
     plan = load_plan(run_dir)
     cases = load_cases(run_dir)
-    issues = inspect_cross_artifacts(run_dir)
+    issues = inspect_plan(run_dir) + inspect_cases(run_dir) + inspect_cross_artifacts(run_dir)
     unresolved = [
         item for item in facts.get("open_items", [])
         if item.get("status") not in {"resolved", "accepted", "closed"}
@@ -1329,11 +1633,39 @@ def pipeline_status(run_dir: Path) -> dict[str, Any]:
     plan = load_plan(run_dir)
     if plan.get("source_digest") != _planning_fact_digest(facts):
         return {"stage": "planning", "state": "needs_local_fix", "next_action": "repair only function plans affected by changed facts"}
+    plan_issues = inspect_plan(run_dir)
+    planned = {str(row.get("function_ref", "")) for row in plan.get("functions", [])}
+    fact_function_refs = {str(row.get("fact_id", "")) for row in facts.get("functions", [])}
+    missing_function_refs = fact_function_refs - planned
+    plan_progress_codes = {"missing_function", "unassigned_check", "independent_branch_not_case"}
+    blocking_plan_issues = [
+        item for item in plan_issues
+        if item.get("code") not in plan_progress_codes
+        or (item.get("code") != "missing_function" and item.get("function_ref") not in missing_function_refs)
+    ]
+    if blocking_plan_issues:
+        return {"stage": "planning", "state": "needs_local_fix", "issues": blocking_plan_issues, "next_action": "repair only the listed function plan"}
+    if plan_issues:
+        remaining = [str(row.get("fact_id", "")) for row in facts.get("functions", []) if str(row.get("fact_id", "")) not in planned]
+        return {"stage": "planning", "state": "continue", "remaining_functions": remaining, "next_action": "upsert only the next unplanned function"}
     if not paths["cases"].exists():
         return {"stage": "planning", "state": "continue", "next_action": "write paired executable cases in plan order"}
     cases = load_cases(run_dir)
     if cases.get("source_plan_digest") != _semantic_content_digest(plan):
         return {"stage": "case_writing", "state": "needs_local_fix", "next_action": "repair only cases affected by the changed plan"}
+    case_issues = inspect_cases(run_dir)
+    missing_case_issues = [item for item in case_issues if item.get("code") == "missing_case"]
+    other_case_issues = [item for item in case_issues if item.get("code") != "missing_case"]
+    if other_case_issues:
+        return {"stage": "case_writing", "state": "needs_local_fix", "issues": other_case_issues, "next_action": "repair only the listed function cases"}
+    if missing_case_issues:
+        written = {str(row.get("case_id", "")) for row in cases.get("cases", [])}
+        remaining = [
+            str(case.get("case_id", ""))
+            for function in plan.get("functions", []) for case in function.get("cases", [])
+            if str(case.get("case_id", "")) not in written
+        ]
+        return {"stage": "case_writing", "state": "continue", "remaining_cases": remaining, "next_action": "upsert only the next function case block"}
     if not paths["review"].exists():
         return {"stage": "case_writing", "state": "continue", "next_action": "run the single cross-artifact review"}
     review = _read_json(paths["review"])

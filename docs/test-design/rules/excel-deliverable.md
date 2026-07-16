@@ -1,9 +1,11 @@
 # Excel 交付规则
 
-每轮必须从同一个 `function-cases.json` 生成两个独立文件：
+新运行固定在 `docs/test-design/current/<run-id>/`。每轮必须从同一个 `function-cases.json` 生成两个独立文件：
 
 - `deliverables/正式测试设计.xlsx`：从正式测试设计模板复制生成，严格保留既有 8 个 Sheet 及顺序，并保留样式、列宽、冻结窗格、合并、校验、公式、下拉、隐藏设置、打印和筛选结构。
 - `deliverables/测试系统导入.xlsx`：从测试系统导入模板复制生成，不从正式 Excel 二次转抄。
+
+交付回执必须返回 `delivery_dir`、`formal_workbook` 和 `import_workbook` 的完整路径。两个文件只能位于当前 run-dir 的 `deliverables/`，不向项目根目录或公共交付目录重复复制。
 
 模型不直接编辑 Excel。确定性组装器把配对步骤分别编号写入操作和预期列，并按功能顺序连续写入有效 Case。每次从干净模板生成，不在旧交付件追加，不预建空行，不保留样例、占位内容或中间空白行。
 

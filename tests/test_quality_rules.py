@@ -15,6 +15,27 @@ from test_design.session_runtime import (
 )
 
 
+def _plan_metadata(goal: str) -> dict[str, object]:
+    return {
+        "design_context": {
+            "user_goal": goal, "role": "具备页面访问权限的用户", "business_value": "保证功能按页面规则工作",
+            "acceptance_criteria": ["每个独立场景产生明确结果"],
+            "business_rules": ["独立等价类分别验证"],
+            "dependencies": ["具备页面访问权限"], "postcondition": "页面恢复稳定状态", "basis": ["页面实探"],
+        },
+        "automation_profile": {
+            "level": "UI", "dependency": "受控数据", "stability_risk": "控件变化", "recommendation": "项目UI框架",
+        },
+    }
+
+
+def _plan_decisions() -> dict[str, object]:
+    return {
+        "performance_scenarios": [], "performance_not_applicable_reason": "无可独立定义的性能指标",
+        "risks": [], "risk_not_applicable_reason": "实探未发现需单独登记的风险",
+    }
+
+
 class QualityRuleTests(unittest.TestCase):
     def test_each_valid_input_equivalence_class_requires_an_independent_baseline_case(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -23,7 +44,7 @@ class QualityRuleTests(unittest.TestCase):
             append_events(run_dir, [
                 {"kind": "page", "fact_id": "PAGE", "data": {"name": "诊断", "menu_path": ["工具", "诊断"], "final_scan_status": "stable", "unhandled_element_refs": []}},
                 {"kind": "function", "fact_id": "FN", "data": {"name": "目标诊断"}},
-                {"kind": "element", "fact_id": "EL", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "目标", "type": "文本输入框", "interactive": True}},
+                {"kind": "element", "fact_id": "EL", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "目标", "type": "文本输入框", "interactive": True, "valid_input_classes": ["domain", "ip"]}},
                 {"kind": "element", "fact_id": "RUN", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "执行", "type": "按钮", "interactive": True}},
                 {"kind": "transaction", "fact_id": "TX", "data": {"function_ref": "FN", "element_refs": ["EL", "RUN"], "checks": [
                     {"element_ref": "EL", "used_element_refs": ["EL", "RUN"], "trigger_element_ref": "RUN", "input_class": "valid_domain", "action": "输入有效域名并点击执行", "result": "显示域名诊断结果", "result_anchor": {"assertion": "contains", "value": "域名诊断结果"}},
@@ -32,7 +53,7 @@ class QualityRuleTests(unittest.TestCase):
             ])
             self.assertTrue(checkpoint_facts(run_dir)["ready"])
             combined = {
-                "schema_version": "2.0", "functions": [{"function_ref": "FN", "name": "目标诊断", "cases": [
+                "schema_version": "2.0", **_plan_decisions(), "functions": [{"function_ref": "FN", "name": "目标诊断", **_plan_metadata("使用不同目标执行诊断"), "cases": [
                     {"case_id": "TC-COMBINED", "page_ref": "PAGE", "title": "有效目标诊断", "strategy": "baseline"}
                 ]}], "check_assignments": [
                     {"transaction_ref": "TX", "check_index": 1, "disposition": "case", "case_id": "TC-COMBINED"},
@@ -42,7 +63,7 @@ class QualityRuleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "independent branches"):
                 save_plan(run_dir, combined)
             separate = {
-                "schema_version": "2.0", "functions": [{"function_ref": "FN", "name": "目标诊断", "cases": [
+                "schema_version": "2.0", **_plan_decisions(), "functions": [{"function_ref": "FN", "name": "目标诊断", **_plan_metadata("使用不同目标执行诊断"), "cases": [
                     {"case_id": "TC-DOMAIN", "page_ref": "PAGE", "title": "有效域名诊断", "strategy": "baseline"},
                     {"case_id": "TC-IP", "page_ref": "PAGE", "title": "有效IP诊断", "strategy": "baseline"},
                 ]}], "check_assignments": [
@@ -78,6 +99,36 @@ class QualityRuleTests(unittest.TestCase):
             self.assertNotIn("empty", [item["value"] for item in requirements])
             self.assertEqual("baseline", requirements[0]["strategy"])
             self.assertTrue(all(item["strategy"] == "DFX" for item in requirements[1:]))
+
+    def test_declared_valid_input_classes_are_known_before_interaction(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "valid-input-plan"
+            ensure_run(run_dir, "工具>诊断")
+            element = append_events(run_dir, [{"kind": "element", "fact_id": "EL", "data": {
+                "name": "目标", "type": "input", "valid_input_classes": ["domain", "ip"]
+            }}])[0]
+            self.assertEqual(
+                ["valid_domain", "valid_ip"],
+                [row["value"] for row in element["data"]["exploration_requirements"]],
+            )
+            self.assertTrue(all(row["independent_case"] for row in element["data"]["exploration_requirements"]))
+
+    def test_auxiliary_use_does_not_complete_an_elements_primary_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "primary-coverage"
+            ensure_run(run_dir, "工具>筛选")
+            append_events(run_dir, [
+                {"kind": "page", "fact_id": "PAGE", "data": {"name": "筛选", "menu_path": ["工具", "筛选"], "final_scan_status": "stable", "unhandled_element_refs": []}},
+                {"kind": "function", "fact_id": "FN", "data": {"name": "联动筛选"}},
+                {"kind": "element", "fact_id": "EL-A", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "主筛选", "type": "下拉框", "option_set": "finite", "options": ["全部"]}},
+                {"kind": "element", "fact_id": "EL-B", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "辅助筛选", "type": "下拉框", "option_set": "finite", "options": ["全部"]}},
+                {"kind": "transaction", "fact_id": "TX", "data": {"function_ref": "FN", "element_refs": ["EL-A", "EL-B"], "checks": [{
+                    "element_ref": "EL-A", "used_element_refs": ["EL-A", "EL-B"], "option_value": "全部",
+                    "action": "主筛选和辅助筛选均选择全部", "result": "显示全部记录", "result_anchor": {"assertion": "contains", "value": "全部记录"},
+                }]}}
+            ])
+            pending = pending_exploration_requirements(run_dir)
+            self.assertEqual(["EL-B"], [row["element_ref"] for row in pending])
 
     def test_dfx_input_branches_are_declared_before_interaction_without_rejecting_progress(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -116,7 +167,7 @@ class QualityRuleTests(unittest.TestCase):
             empty = next(item for item in hints if item["code"] == "empty")
             self.assertEqual([{"transaction_ref": "TX-EMPTY", "check_index": 1}], empty["related_checks"])
             save_plan(run_dir, {
-                "schema_version": "2.0", "functions": [{"function_ref": "FN", "name": "Traceroute", "cases": [
+                "schema_version": "2.0", **_plan_decisions(), "functions": [{"function_ref": "FN", "name": "Traceroute", **_plan_metadata("执行路由追踪"), "cases": [
                     {"case_id": "TC-VALID", "page_ref": "PAGE", "title": "正常域名追踪", "strategy": "baseline"},
                     {"case_id": "TC-EMPTY", "page_ref": "PAGE", "title": "空地址校验", "strategy": "DFX", "dfx_dimension": "DFT功能", "dfx_scenario": "必填项为空"},
                 ]}], "check_assignments": [
@@ -178,10 +229,10 @@ class QualityRuleTests(unittest.TestCase):
                 ]}},
             ])
             self.assertTrue(checkpoint_facts(run_dir)["ready"])
-            plan = {"schema_version": "2.0", "functions": [
-                {"function_ref": "FN", "name": "查询", "cases": [
-                    {"case_id": "TC-1", "page_ref": "PAGE", "title": "正常查询", "strategy": "baseline"},
-                    {"case_id": "TC-2", "page_ref": "PAGE", "title": "空条件查询", "strategy": "DFX", "dfx_dimension": "DFT功能", "dfx_scenario": "边界值"},
+            plan = {"schema_version": "2.0", **_plan_decisions(), "functions": [
+                {"function_ref": "FN", "name": "查询", **_plan_metadata("按条件筛选列表"), "cases": [
+                    {"case_id": "TC-1", "page_ref": "PAGE", "title": "有效条件", "strategy": "baseline"},
+                    {"case_id": "TC-2", "page_ref": "PAGE", "title": "空条件", "strategy": "DFX", "dfx_dimension": "DFT功能", "dfx_scenario": "边界值"},
                 ]}
             ], "check_assignments": [
                 {"transaction_ref": "TX", "check_index": 1, "disposition": "case", "case_id": "TC-1"},

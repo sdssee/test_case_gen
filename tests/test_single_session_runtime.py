@@ -33,7 +33,37 @@ from test_design.session_runtime import (
     validate_discovery,
     validate_plan,
 )
-from test_design_cli import _project_scoped_run_dir
+from test_design_cli import _payload, _project_scoped_run_dir
+
+
+def _plan_metadata(goal: str = "验证页面功能") -> dict[str, object]:
+    return {
+        "design_context": {
+            "user_goal": goal,
+            "role": "具备页面访问权限的用户",
+            "business_value": "保证用户操作得到明确且正确的页面反馈",
+            "acceptance_criteria": ["各独立场景产生与实探一致的稳定结果"],
+            "business_rules": ["有限选项分别验证，不进行默认组合"],
+            "dependencies": ["具备页面访问权限和受控测试数据"],
+            "postcondition": "页面保持在可继续验证的稳定状态",
+            "basis": ["页面实探"],
+        },
+        "automation_profile": {
+            "level": "UI", "dependency": "受控测试数据",
+            "stability_risk": "页面控件定位变化", "recommendation": "沿用项目UI自动化框架",
+        },
+    }
+
+
+def _semantic_review(run_dir: Path) -> dict[str, object]:
+    return {
+        "reviewed_case_ids": [str(row.get("case_id", "")) for row in load_cases(run_dir).get("cases", [])],
+        "checks": {name: "pass" for name in (
+            "design_context", "scenario_diversity", "action_expected", "dfx_fit",
+            "performance_risk", "automation", "source_claims", "internal_prose",
+        )},
+        "issues": [], "local_fixes": [],
+    }
 
 
 class SingleSessionRuntimeTests(unittest.TestCase):
@@ -85,7 +115,9 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         ]
         plan = {
             "schema_version": "2.0", "risks": [],
-            "functions": [{"function_ref": "FN-VIEW", "name": "告警视图模式", "cases": [
+            "risk_not_applicable_reason": "实探未发现需要单独登记的风险",
+            "performance_scenarios": [], "performance_not_applicable_reason": "本功能不包含可独立定义指标的性能链路",
+            "functions": [{"function_ref": "FN-VIEW", "name": "告警视图模式", **_plan_metadata("选择不同视图并查看对应告警字段"), "cases": [
                 {"case_id": f"TC-VIEW-{index:03d}", "title": title, "strategy": "baseline", "page_ref": "PAGE-LIST"}
                 for index, (_, _, title) in enumerate(branches, 1)
             ]}],
@@ -101,7 +133,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
              "priority": "P1" if index < 6 else "P2", "test_type": "功能测试",
              "preconditions": ["告警列表存在可查看且能够区分当前选项效果的数据"], "test_data": f"视图模式：{option}",
              "steps": [navigation, {"action": f"选择{option}视图模式", "expected": expected}],
-             "fact_refs": refs, "automation": True}
+             "fact_refs": refs, "automation": True, "automation_value": "高频稳定回归", "automation_priority": "P1" if index < 6 else "P2"}
             for index, (option, expected, title) in enumerate(branches, 1)
         ]}
         save_cases(self.run_dir, cases)
@@ -124,10 +156,18 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertEqual([], validate_plan(self.run_dir))
         self.assertEqual([], validate_cases(self.run_dir))
         facts_before = artifact_paths(self.run_dir)["facts"].read_bytes()
-        self.assertEqual("ready", review_run(self.run_dir)["status"])
+        self.assertEqual("ready", review_run(self.run_dir, _semantic_review(self.run_dir))["status"])
         self.assertEqual(facts_before, artifact_paths(self.run_dir)["facts"].read_bytes())
         self.assertFalse(artifact_paths(self.run_dir)["diagnostics"].exists())
         self.assertEqual("ready", pipeline_status(self.run_dir)["state"])
+
+    def test_review_without_model_semantics_cannot_be_delivered(self) -> None:
+        self._write_plan_and_cases()
+        review = review_run(self.run_dir)
+        self.assertEqual("needs_local_fix", review["status"])
+        self.assertEqual("missing", review["semantic"]["status"])
+        with self.assertRaisesRegex(ValueError, "delivery requires"):
+            complete_deliverables(self.run_dir, ROOT)
 
     def test_scope_binding_resumes_same_target_and_rejects_a_different_target(self) -> None:
         resumed = ensure_run(self.run_dir, "告警管理>告警列表")
@@ -135,6 +175,30 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertNotIn("menu_path", resumed)
         with self.assertRaisesRegex(ValueError, "choose a new run directory"):
             ensure_run(self.run_dir, "告警管理>告警详情")
+
+    def test_scope_updates_merge_and_keep_run_identity(self) -> None:
+        before = load_facts(self.run_dir)["scope"]
+        append_events(self.run_dir, [{"kind": "scope", "fact_id": "SCOPE", "data": {
+            "owner": "测试负责人", "version": "迭代一"
+        }}])
+        after = compile_facts(self.run_dir)["scope"]
+        self.assertEqual(before["run_id"], after["run_id"])
+        self.assertEqual(before["created_at"], after["created_at"])
+        self.assertEqual(before["module_path"], after["module_path"])
+        self.assertEqual("测试负责人", after["owner"])
+
+    def test_fact_compilation_keeps_first_discovery_order(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "order"
+            ensure_run(run_dir, "工具>顺序")
+            append_events(run_dir, [
+                {"kind": "function", "fact_id": "FN-Z", "data": {"name": "先发现"}},
+                {"kind": "function", "fact_id": "FN-A", "data": {"name": "后发现"}},
+                {"kind": "function", "fact_id": "FN-Z", "data": {"name": "先发现-已更新"}},
+            ])
+            facts = compile_facts(run_dir)
+            self.assertEqual(["FN-Z", "FN-A"], [row["fact_id"] for row in facts["functions"]])
+            self.assertEqual("先发现-已更新", facts["functions"][0]["name"])
 
     def test_cli_rejects_a_run_directory_outside_the_project(self) -> None:
         with tempfile.TemporaryDirectory() as outside:
@@ -148,6 +212,12 @@ class SingleSessionRuntimeTests(unittest.TestCase):
     def test_short_run_id_resolves_to_the_canonical_current_directory(self) -> None:
         resolved = _project_scoped_run_dir(Path("run-canonical-test"))
         self.assertEqual((ROOT / "docs" / "test-design" / "current" / "run-canonical-test").resolve(), resolved)
+
+    def test_temporary_cli_payload_is_removed_after_read(self) -> None:
+        path = Path(tempfile.gettempdir()) / "test-design-payload-cleanup.json"
+        path.write_text('{"ok": true}', encoding="utf-8")
+        self.assertEqual({"ok": True}, _payload(path))
+        self.assertFalse(path.exists())
 
     def test_exact_duplicate_event_is_absorbed_without_another_line(self) -> None:
         event = {"kind": "open_item", "fact_id": "OPEN-IDEMPOTENT", "data": {
@@ -182,7 +252,9 @@ class SingleSessionRuntimeTests(unittest.TestCase):
             for suffix in ("A", "B"):
                 save_plan(run_dir, {
                     "schema_version": "2.0",
-                    "functions": [{"function_ref": f"FN-{suffix}", "name": f"功能{suffix}", "cases": [
+                    "performance_scenarios": [], "performance_not_applicable_reason": "无独立性能指标",
+                    "risks": [], "risk_not_applicable_reason": "未发现风险",
+                    "functions": [{"function_ref": f"FN-{suffix}", "name": f"功能{suffix}", **_plan_metadata(f"执行功能{suffix}"), "cases": [
                         {"case_id": f"TC-{suffix}", "page_ref": "PAGE", "title": f"执行{suffix}", "strategy": "baseline"}
                     ]}],
                     "check_assignments": [{"transaction_ref": f"TX-{suffix}", "check_index": 1, "disposition": "case", "case_id": f"TC-{suffix}"}],
@@ -193,7 +265,9 @@ class SingleSessionRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no planned disposition"):
                 save_plan(run_dir, {
                     "schema_version": "2.0",
-                    "functions": [{"function_ref": "FN-A", "name": "功能A", "cases": [
+                    "performance_scenarios": [], "performance_not_applicable_reason": "无独立性能指标",
+                    "risks": [], "risk_not_applicable_reason": "未发现风险",
+                    "functions": [{"function_ref": "FN-A", "name": "功能A", **_plan_metadata("执行功能A"), "cases": [
                         {"case_id": "TC-A", "page_ref": "PAGE", "title": "执行A", "strategy": "baseline"}
                     ]}],
                     "check_assignments": [],
@@ -203,6 +277,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                 save_cases(run_dir, {"schema_version": "2.0", "cases": [{
                     "case_id": f"TC-{suffix}", "function_ref": f"FN-{suffix}", "title": f"功能{suffix}-执行{suffix}",
                     "priority": "P1", "test_type": "功能测试", "preconditions": ["具备页面访问权限"], "test_data": f"功能{suffix}受控数据",
+                    "automation_value": "稳定回归", "automation_priority": "P1",
                     "steps": [navigation, {"action": f"点击执行{suffix}", "expected": f"显示{suffix}结果"}],
                 }]})
                 if suffix == "A":
@@ -211,7 +286,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
             current_b = next(row for row in load_cases(run_dir)["cases"] if row["function_ref"] == "FN-B")
             save_cases(run_dir, {"schema_version": "2.0", "cases": [current_b]})
             self.assertEqual(before, artifact_paths(run_dir)["cases"].read_bytes())
-            self.assertEqual("ready", review_run(run_dir)["status"])
+            self.assertEqual("ready", review_run(run_dir, _semantic_review(run_dir))["status"])
 
     def test_resume_automatically_rebuilds_a_stale_facts_view(self) -> None:
         append_events(self.run_dir, [{"kind": "open_item", "data": {
@@ -235,7 +310,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
 
     def test_recompile_without_business_changes_keeps_review_valid(self) -> None:
         self._write_plan_and_cases()
-        self.assertEqual("ready", review_run(self.run_dir)["status"])
+        self.assertEqual("ready", review_run(self.run_dir, _semantic_review(self.run_dir))["status"])
         time.sleep(1.1)
         compile_facts(self.run_dir)
         paths = artifact_paths(self.run_dir)
@@ -320,24 +395,24 @@ class SingleSessionRuntimeTests(unittest.TestCase):
             "affected_function_refs": ["FN-VIEW"]
         }}])
         compile_facts(self.run_dir)
-        review = review_run(self.run_dir)
+        review = review_run(self.run_dir, _semantic_review(self.run_dir))
         self.assertEqual("ready_with_notes", review["status"])
         append_events(self.run_dir, [{"kind": "open_item", "fact_id": "OPEN-QUESTION", "data": {
             "category": "external_question", "description": "告警确认后的外部处置语义待确认", "material": True,
             "affected_function_refs": ["FN-VIEW"]
         }}])
         compile_facts(self.run_dir)
-        self.assertEqual("blocked_by_fact", review_run(self.run_dir)["status"])
+        self.assertEqual("blocked_by_fact", review_run(self.run_dir, _semantic_review(self.run_dir))["status"])
         append_events(self.run_dir, [{"kind": "open_item", "fact_id": "OPEN-QUESTION", "status": "resolved", "data": {
             "category": "external_question", "description": "用户已确认外部处置语义", "material": True,
             "affected_function_refs": ["FN-VIEW"]
         }}])
         compile_facts(self.run_dir)
-        self.assertEqual("ready_with_notes", review_run(self.run_dir)["status"])
+        self.assertEqual("ready_with_notes", review_run(self.run_dir, _semantic_review(self.run_dir))["status"])
 
     def test_delivery_detects_a_stale_review_without_returning_to_discovery(self) -> None:
         self._write_plan_and_cases()
-        self.assertEqual("ready", review_run(self.run_dir)["status"])
+        self.assertEqual("ready", review_run(self.run_dir, _semantic_review(self.run_dir))["status"])
         append_events(self.run_dir, [{"kind": "open_item", "fact_id": "OPEN-NOTE", "data": {
             "category": "observed_risk", "description": "非阻塞提示", "material": False,
             "affected_function_refs": ["FN-VIEW"]
@@ -375,7 +450,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
 
     def test_delivery_has_two_independent_workbooks_and_no_blank_case_rows(self) -> None:
         self._write_plan_and_cases()
-        self.assertEqual("ready", review_run(self.run_dir)["status"])
+        self.assertEqual("ready", review_run(self.run_dir, _semantic_review(self.run_dir))["status"])
         receipt = complete_deliverables(self.run_dir, ROOT)
         delivery = artifact_paths(self.run_dir)["delivery"]
         formal = Path(receipt["formal_workbook"])
@@ -418,12 +493,20 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         requirement_headers = {cell.value: cell.column for cell in requirements[1]}
         for header in ("Story ID/需求 ID", "用户故事/需求描述", "角色", "业务价值", "验收标准", "业务规则"):
             self.assertTrue(str(requirements.cell(2, requirement_headers[header]).value or "").strip())
+        self.assertEqual("选择不同视图并查看对应告警字段", requirements.cell(2, requirement_headers["用户故事/需求描述"]).value)
+        overview_text = "\n".join(str(cell.value or "") for cell in workbook["测试设计总览"][2])
+        self.assertNotIn("跨产物", overview_text)
+        self.assertNotIn("结构化用例", overview_text)
         performance = workbook["性能测试设计"]
         self.assertEqual("PERF-N/A", performance.cell(2, 1).value)
+        self.assertIn("不包含可独立定义指标", "\n".join(str(cell.value or "") for cell in performance[2]))
         risk = workbook["风险与待确认问题"]
         self.assertEqual("RISK-N/A", risk.cell(2, 1).value)
+        self.assertIn("未发现需要单独登记", "\n".join(str(cell.value or "") for cell in risk[2]))
         automation = workbook["自动化建议"]
         self.assertEqual(8, automation.max_row)
+        automation_headers = {cell.value: cell.column for cell in automation[1]}
+        self.assertEqual("高频稳定回归", automation.cell(2, automation_headers["自动化价值"]).value)
         import_book = load_workbook(import_file, data_only=False)
         import_template = load_workbook(ROOT / "docs" / "test-design" / "测试用例模板.xlsx", data_only=False)
         import_ws = import_book[import_book.sheetnames[0]]
@@ -438,6 +521,9 @@ class SingleSessionRuntimeTests(unittest.TestCase):
             cwd=ROOT, capture_output=True, text=True, check=False,
         )
         self.assertEqual(0, validated.returncode, validated.stderr)
+        status = pipeline_status(self.run_dir)
+        self.assertEqual("completed", status["state"])
+        self.assertEqual(str(formal.resolve()), status["deliverables"]["formal_workbook"])
 
 
 if __name__ == "__main__":

@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
+import unicodedata
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -23,7 +25,16 @@ SHEETS = [
     "性能测试设计", "风险与待确认问题", "自动化建议", "页面元素覆盖清单",
 ]
 FUNCTION_SHEET = "功能测试用例"
-MULTILINE_HEADERS = {"前置条件", "测试数据", "操作步骤", "预期结果", "备注", "描述", "影响范围", "建议处理方式"}
+MULTILINE_HEADERS = {
+    "测试范围", "不测范围", "主要风险", "准入条件", "准出条件", "待确认问题",
+    "用户故事/需求描述", "业务价值", "验收标准", "业务规则", "前置条件", "后置影响", "依赖系统",
+    "输入数据/状态条件", "观察点", "测试数据", "操作步骤", "预期结果", "备注", "描述", "影响范围",
+    "建议处理方式", "业务链路", "监控指标", "通过标准", "造数策略", "风险说明", "依赖数据",
+    "稳定性风险", "页面 URL/菜单路径", "交互方式", "适用DFX场景", "前置状态/权限", "预期行为", "业务依据/规则来源",
+    "测试步骤描述", "测试步骤预期结果", "测试用例说明",
+}
+INTERNAL_EXPORT_PATTERN = re.compile(r"(?:\b(?:UID|UUID|DOM|ARIA|XPATH)\b|\b(?:EL|TX|FN|PAGE|EVT)-[A-Z0-9_-]+\b)", re.IGNORECASE)
+EXCEL_ERRORS = {"#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA"}
 
 
 def _text(value: Any) -> str:
@@ -48,11 +59,15 @@ def _paired_columns(steps: Any) -> tuple[str, str]:
     return _numbered(actions), _numbered(expected)
 
 
+def _display_width(value: Any) -> int:
+    return sum(2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1 for character in str(value or ""))
+
+
 def _visual_line_count(value: Any, characters_per_line: int = 36) -> int:
     text = str(value or "")
     if not text:
         return 1
-    return sum(max(1, math.ceil(len(line) / characters_per_line)) for line in text.splitlines())
+    return sum(max(1, math.ceil(_display_width(line) / characters_per_line)) for line in text.splitlines())
 
 
 def _mapped_row_height(worksheet, headers: dict[str, int], row: dict[str, Any], multiline_headers: Iterable[str]) -> float:
@@ -64,7 +79,47 @@ def _mapped_row_height(worksheet, headers: dict[str, int], row: dict[str, Any], 
         dimension = worksheet.column_dimensions.get(get_column_letter(column))
         width = (dimension.width if dimension else worksheet.sheet_format.defaultColWidth) or 10
         lines = max(lines, _visual_line_count(row.get(header, ""), max(4, int(width))))
-    return float(max(36, min(360, 8 + lines * 16)))
+    return float(max(36, min(409, 8 + lines * 16)))
+
+
+def _format_data_row(worksheet, headers: dict[str, int], row_index: int, row: dict[str, Any]) -> None:
+    wrapped_headers: set[str] = set()
+    for header, value in row.items():
+        if header not in headers:
+            continue
+        column = headers[header]
+        dimension = worksheet.column_dimensions.get(get_column_letter(column))
+        width = (dimension.width if dimension else worksheet.sheet_format.defaultColWidth) or 10
+        if header in MULTILINE_HEADERS or "\n" in str(value or "") or _display_width(value) > width:
+            worksheet.cell(row_index, column).alignment = Alignment(vertical="top", wrap_text=True)
+            wrapped_headers.add(header)
+    worksheet.row_dimensions[row_index].height = _mapped_row_height(worksheet, headers, row, wrapped_headers)
+
+
+def _assert_rows_fit(worksheet, row_numbers: Iterable[int], label: str) -> None:
+    headers = header_map(worksheet)
+    reverse_headers = {column: header for header, column in headers.items()}
+    for row_index in row_numbers:
+        values = {reverse_headers[column]: worksheet.cell(row_index, column).value for column in reverse_headers}
+        wrapped = {
+            header for header, column in headers.items()
+            if worksheet.cell(row_index, column).alignment.wrap_text
+        }
+        required = _mapped_row_height(worksheet, headers, values, wrapped)
+        actual = worksheet.row_dimensions[row_index].height or worksheet.sheet_format.defaultRowHeight or 15
+        if actual + 0.1 < required:
+            raise ValueError(f"{label} row {row_index} may clip wrapped text")
+
+
+def _assert_visible_content_clean(workbook, label: str) -> None:
+    for worksheet in workbook.worksheets:
+        for row in worksheet.iter_rows():
+            for cell in row:
+                value = cell.value
+                if isinstance(value, str) and INTERNAL_EXPORT_PATTERN.search(value):
+                    raise ValueError(f"{label} exposes an internal identifier at {worksheet.title}!{cell.coordinate}")
+                if cell.data_type == "e" or value in EXCEL_ERRORS:
+                    raise ValueError(f"{label} contains an Excel error at {worksheet.title}!{cell.coordinate}")
 
 
 def _workbook_structure(workbook) -> dict[str, Any]:
@@ -136,6 +191,7 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
     case_document = load_cases(run_dir)
     scope = facts.get("scope", {})
     functions = _function_names(facts, plan)
+    plan_functions = {str(row.get("function_ref", "")): row for row in plan.get("functions", [])}
     function_facts = {str(row.get("fact_id", "")): row for row in facts.get("functions", [])}
     function_order = [str(row.get("fact_id", "")) for row in facts.get("functions", [])]
     supplied_requirements = list(scope.get("requirements", []))
@@ -156,9 +212,32 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         for row in facts.get(collection, [])
     }
     written_cases = {str(case.get("case_id", "")): case for case in case_document.get("cases", [])}
+    transaction_map = {str(row.get("fact_id", "")): row for row in facts.get("transactions", [])}
+    primary_elements_by_case: dict[str, list[str]] = {}
+    for assignment in plan.get("check_assignments", []):
+        if assignment.get("disposition") != "case":
+            continue
+        transaction = transaction_map.get(str(assignment.get("transaction_ref", "")), {})
+        try:
+            check = transaction.get("checks", [])[int(assignment.get("check_index", 0)) - 1]
+        except (IndexError, TypeError, ValueError):
+            continue
+        element_ref = str(check.get("element_ref", "")).strip()
+        if element_ref:
+            primary_elements_by_case.setdefault(str(assignment.get("case_id", "")), []).append(element_ref)
     open_items = facts.get("open_items", [])
     pending = [row for row in open_items if row.get("category") in {"external_question", "blocked_condition"}]
     risks = [row for row in open_items if row.get("category") == "observed_risk"] + plan.get("risks", [])
+    function_contexts = [
+        row.get("design_context", {}) for row in plan.get("functions", [])
+        if isinstance(row.get("design_context"), dict)
+    ]
+    acceptance_summary = list(dict.fromkeys(
+        _text(value) for context in function_contexts for value in context.get("acceptance_criteria", []) if _text(value)
+    ))
+    dependency_summary = list(dict.fromkeys(
+        _text(value) for context in function_contexts for value in context.get("dependencies", []) if _text(value)
+    ))
     rows: dict[str, list[dict[str, str]]] = {name: [] for name in SHEETS}
     rows["测试设计总览"].append({
         "项目/模块": _text(scope.get("module_path")),
@@ -166,21 +245,18 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         "版本/迭代": _text(scope.get("version")),
         "测试负责人": _text(scope.get("owner")),
         "需求来源": _text(scope.get("source")),
-        "测试范围": _text(scope.get("test_scope") or scope.get("module_path")),
+        "测试范围": _text(scope.get("test_scope") or "；".join(functions.get(ref, ref) for ref in function_order)),
         "不测范围": _text(scope.get("out_of_scope")),
-        "测试类型": "功能测试；适用DFX扩展",
+        "测试类型": "功能测试；适用的DFX专项设计",
         "测试环境": _text(scope.get("environment")),
         "主要风险": "；".join(_text(row.get("description")) for row in risks if row.get("description")),
-        "准入条件": "页面实探事实已固化，测试数据满足安全约束",
-        "准出条件": "结构化用例完成一次跨产物审计，两个交付文件技术校验通过",
+        "准入条件": "；".join(dependency_summary),
+        "准出条件": "；".join(acceptance_summary),
         "待确认问题": "；".join(_text(row.get("description") or row.get("reason")) for row in pending),
     })
     supplied_by_id = {
         _text(row.get("requirement_id")): row for row in supplied_requirements if _text(row.get("requirement_id"))
     }
-    transactions_by_function: dict[str, list[dict[str, Any]]] = {}
-    for transaction in facts.get("transactions", []):
-        transactions_by_function.setdefault(str(transaction.get("function_ref", "")), []).append(transaction)
     elements_by_function: dict[str, list[dict[str, Any]]] = {}
     for element in facts.get("elements", []):
         elements_by_function.setdefault(str(element.get("function_ref", "")), []).append(element)
@@ -188,21 +264,15 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
     used_supplied: set[int] = set()
     for function_index, function_ref in enumerate(function_order):
         function = function_facts.get(function_ref, {})
+        context = plan_functions.get(function_ref, {}).get("design_context", {})
+        if not isinstance(context, dict):
+            context = {}
         requirement_id = requirement_by_function[function_ref]
         supplied = supplied_by_id.get(requirement_id, {})
         if not supplied and function_index < len(supplied_requirements):
             supplied = supplied_requirements[function_index]
         if supplied:
             used_supplied.add(id(supplied))
-        observed_results = list(dict.fromkeys(
-            _text(check.get("result"))
-            for transaction in transactions_by_function.get(function_ref, [])
-            for check in transaction.get("checks", [])
-            if _text(check.get("result"))
-        ))
-        element_names = list(dict.fromkeys(
-            _text(element.get("name")) for element in elements_by_function.get(function_ref, []) if _text(element.get("name"))
-        ))
         pages_for_function = [
             pages.get(str(element.get("page_ref", "")), {}) for element in elements_by_function.get(function_ref, [])
         ]
@@ -213,14 +283,14 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         ]
         derived_requirements.append({
             "requirement_id": requirement_id,
-            "description": supplied.get("description") or function.get("description") or f"用户能够使用{functions.get(function_ref, function_ref)}并获得页面实际反馈",
-            "role": supplied.get("role") or function.get("role") or "具备页面访问权限的用户",
-            "business_value": supplied.get("business_value") or function.get("business_value") or f"确保{functions.get(function_ref, function_ref)}按页面规则正确工作",
-            "acceptance_criteria": supplied.get("acceptance_criteria") or "；".join(observed_results) or "操作后页面给出可观察且与功能一致的结果",
-            "business_rules": supplied.get("business_rules") or ("涉及控件：" + "、".join(element_names) if element_names else "以页面实际呈现和交互结果为准"),
-            "preconditions": supplied.get("preconditions") or ("可进入" + "-".join(str(value) for value in menu_path) if menu_path else "具备当前功能访问条件"),
-            "postconditions": supplied.get("postconditions") or "页面状态与本次操作结果保持一致",
-            "dependencies": supplied.get("dependencies") or "当前被测系统页面及其业务数据",
+            "description": supplied.get("description") or context.get("user_goal") or function.get("description"),
+            "role": supplied.get("role") or context.get("role") or function.get("role"),
+            "business_value": supplied.get("business_value") or context.get("business_value"),
+            "acceptance_criteria": supplied.get("acceptance_criteria") or context.get("acceptance_criteria"),
+            "business_rules": supplied.get("business_rules") or context.get("business_rules"),
+            "preconditions": supplied.get("preconditions") or ("可进入" + "-".join(str(value) for value in menu_path) if menu_path else context.get("dependencies")),
+            "postconditions": supplied.get("postconditions") or context.get("postcondition"),
+            "dependencies": supplied.get("dependencies") or context.get("dependencies"),
             "unresolved": supplied.get("unresolved") or "；".join(value for value in related_open if value),
         })
     derived_requirements.extend(row for row in supplied_requirements if id(row) not in used_supplied)
@@ -228,14 +298,14 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         requirement_id = _text(requirement.get("requirement_id") or f"REQ-{index:03d}")
         rows["需求用户故事拆解"].append({
             "Story ID/需求 ID": requirement_id,
-            "用户故事/需求描述": _text(requirement.get("description") or f"参考需求{requirement_id}描述的页面能力"),
-            "角色": _text(requirement.get("role") or "具备页面访问权限的用户"),
-            "业务价值": _text(requirement.get("business_value") or "确保需求对应功能按预期工作"),
-            "验收标准": _text(requirement.get("acceptance_criteria") or "页面操作产生明确且符合功能语义的结果"),
-            "业务规则": _text(requirement.get("business_rules") or "以页面实探事实为主，需求资料作为理解参考"),
-            "前置条件": _text(requirement.get("preconditions") or "具备当前功能访问条件"),
-            "后置影响": _text(requirement.get("postconditions") or "页面状态与操作结果保持一致"),
-            "依赖系统": _text(requirement.get("dependencies") or "当前被测系统页面及其业务数据"),
+            "用户故事/需求描述": _text(requirement.get("description")),
+            "角色": _text(requirement.get("role")),
+            "业务价值": _text(requirement.get("business_value")),
+            "验收标准": _text(requirement.get("acceptance_criteria")),
+            "业务规则": _text(requirement.get("business_rules")),
+            "前置条件": _text(requirement.get("preconditions")),
+            "后置影响": _text(requirement.get("postconditions")),
+            "依赖系统": _text(requirement.get("dependencies")),
             "待确认问题": _text(requirement.get("unresolved")),
         })
     for function in plan.get("functions", []):
@@ -256,11 +326,11 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
                 "DFX维度": _text(case.get("dfx_dimension")),
                 "DFX场景": _text(case.get("dfx_scenario")),
                 "测试对象/页面元素": "；".join(dict.fromkeys(
-                    fact_names.get(str(ref), "") for ref in case.get("fact_refs", []) if fact_names.get(str(ref), "")
+                    fact_names.get(str(ref), "") for ref in primary_elements_by_case.get(str(case.get("case_id", "")), []) if fact_names.get(str(ref), "")
                 )),
                 "输入数据/状态条件": _text(written.get("test_data") or case.get("test_data")),
                 "观察点": "；".join(expected_points) or _text(case.get("observation")),
-                "风险等级": _text(written.get("risk_level") or case.get("risk_level") or "中"),
+                "风险等级": _text(written.get("risk_level") or case.get("risk_level") or ({"P0": "高", "P1": "高", "P2": "中", "P3": "低"}.get(str(written.get("priority") or case.get("priority") or "P1"), "中"))),
                 "优先级": _text(written.get("priority") or case.get("priority") or "P1"),
                 "是否生成用例": "是",
                 "备注": _text(case.get("notes")),
@@ -298,12 +368,15 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         }
         rows["性能测试设计"].append({header: _text(item.get(key)) for header, key in mapping.items()})
     if not rows["性能测试设计"]:
+        reason = _text(plan.get("performance_not_applicable_reason"))
+        if not reason:
+            raise ValueError("case-plan.json must state why performance design is not applicable")
         rows["性能测试设计"].append({
             "性能场景 ID": "PERF-N/A", "Story ID/需求 ID": "不适用", "业务链路": _text(scope.get("module_path")),
-            "性能测试类型": "不适用", "DFX维度": "DFP性能", "DFX场景": "当前页面实探未发现需要独立性能设计的能力",
+            "性能测试类型": "不适用", "DFX维度": "DFP性能", "DFX场景": reason,
             "目标用户量/并发数": "不适用", "TPS/QPS 目标": "不适用", "响应时间目标": "不适用",
             "数据量级": "不适用", "测试时长": "不适用", "监控指标": "不适用", "通过标准": "不适用",
-            "造数策略": "不适用", "风险说明": "本轮仅形成页面可验证的功能测试设计", "是否纳入本轮测试": "否",
+            "造数策略": "不适用", "风险说明": reason, "是否纳入本轮测试": "否",
         })
     for index, risk in enumerate(risks + pending, 1):
         affected_names = [functions.get(str(ref), str(ref)) for ref in risk.get("affected_function_refs", []) if str(ref)]
@@ -321,30 +394,51 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
             "状态": _text(risk.get("status") or "待确认"),
         })
     if not rows["风险与待确认问题"]:
+        reason = _text(plan.get("risk_not_applicable_reason"))
+        if not reason:
+            raise ValueError("case-plan.json must state why risk design is not applicable")
         rows["风险与待确认问题"].append({
             "编号": "RISK-N/A", "类型": "不适用", "关联DFX维度": "不适用", "关联DFX场景": "不适用",
-            "描述": "本轮页面实探未发现需要登记的风险或待确认问题", "影响范围": _text(scope.get("module_path")),
+            "描述": reason, "影响范围": _text(scope.get("module_path")),
             "风险等级": "无", "建议处理方式": "无需额外处理", "负责人": "不适用", "状态": "已确认",
         })
     for case in case_document.get("cases", []):
         automation = case.get("automation")
         suitable = "是" if automation is True else ("否" if automation is False else "待评估")
+        profile = plan_functions.get(str(case.get("function_ref", "")), {}).get("automation_profile", {})
+        if not isinstance(profile, dict):
+            profile = {}
+        override = case.get("automation_override") if isinstance(case.get("automation_override"), dict) else {}
         rows["自动化建议"].append({
             "用例 ID/场景 ID": _text(case.get("case_id")),
-            "自动化层级": _text(case.get("automation_level") or ("UI" if automation is not False else "不适用")),
-            "自动化价值": _text(case.get("automation_value") or ("稳定回归验证" if automation is True else suitable)),
-            "自动化优先级": _text(case.get("priority") or "P1"),
-            "依赖数据": _text(case.get("test_data") or "无特殊测试数据"),
-            "Mock 需求": _text(case.get("mock_requirement") or "无"),
-            "稳定性风险": _text(case.get("automation_risk") or ("需评估页面元素稳定性" if automation is None else "未发现额外稳定性风险")),
-            "建议框架/工具": _text(case.get("automation_tool") or ("按项目现有UI自动化框架" if automation is not False else "不适用")),
+            "自动化层级": _text(override.get("level") or profile.get("level")),
+            "自动化价值": _text(case.get("automation_value")),
+            "自动化优先级": _text(case.get("automation_priority")),
+            "依赖数据": _text(override.get("dependency") or profile.get("dependency")),
+            "Mock 需求": _text(override.get("mock_requirement") or profile.get("mock_requirement") or "无"),
+            "稳定性风险": _text(override.get("stability_risk") or profile.get("stability_risk")),
+            "建议框架/工具": _text(override.get("recommendation") or profile.get("recommendation")),
             "备注": _text(case.get("automation_reason") or case.get("notes") or f"自动化适用性：{suitable}"),
         })
     case_by_fact: dict[str, list[str]] = {}
+    auxiliary_case_by_fact: dict[str, list[str]] = {}
     case_by_id = {str(case.get("case_id", "")): case for case in case_document.get("cases", [])}
-    for case in case_document.get("cases", []):
-        for fact_id in case.get("fact_refs", []):
-            case_by_fact.setdefault(str(fact_id), []).append(str(case.get("case_id")))
+    for assignment in plan.get("check_assignments", []):
+        if assignment.get("disposition") != "case":
+            continue
+        transaction = transaction_map.get(str(assignment.get("transaction_ref", "")), {})
+        try:
+            check = transaction.get("checks", [])[int(assignment.get("check_index", 0)) - 1]
+        except (IndexError, TypeError, ValueError):
+            continue
+        case_id = str(assignment.get("case_id", ""))
+        primary_ref = str(check.get("element_ref", "")).strip()
+        if primary_ref:
+            case_by_fact.setdefault(primary_ref, []).append(case_id)
+        for ref in check.get("used_element_refs", []):
+            ref = str(ref).strip()
+            if ref and ref != primary_ref:
+                auxiliary_case_by_fact.setdefault(ref, []).append(case_id)
     non_case_by_element: dict[str, list[str]] = {}
     non_case_status_by_element: dict[str, list[str]] = {}
     transactions = {str(row.get("fact_id", "")): row for row in facts.get("transactions", [])}
@@ -360,10 +454,10 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         except (IndexError, TypeError, ValueError):
             continue
         reason = str(assignment.get("reason") or assignment.get("disposition") or "").strip()
-        for ref in check.get("used_element_refs", []):
-            if str(ref).strip() and reason:
-                non_case_by_element.setdefault(str(ref), []).append(reason)
-                non_case_status_by_element.setdefault(str(ref), []).append(str(assignment.get("disposition", "")))
+        ref = str(check.get("element_ref", "")).strip()
+        if ref and reason:
+            non_case_by_element.setdefault(ref, []).append(reason)
+            non_case_status_by_element.setdefault(ref, []).append(str(assignment.get("disposition", "")))
     actions_by_element: dict[str, list[str]] = {}
     results_by_element: dict[str, list[str]] = {}
     for transaction in transactions.values():
@@ -389,6 +483,8 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         menu_path = element.get("menu_path") or page.get("menu_path") or []
         element_label = "-".join(filter(None, [page_name, str(element.get("name", "")).strip()]))
         covered_case_ids = list(dict.fromkeys(case_by_fact.get(element_id, [])))
+        if not element.get("exploration_requirements"):
+            covered_case_ids = list(dict.fromkeys(covered_case_ids + auxiliary_case_by_fact.get(element_id, [])))
         non_case_reasons = list(dict.fromkeys(non_case_by_element.get(element_id, [])))
         related_cases = [case_by_id[case_id] for case_id in covered_case_ids if case_id in case_by_id]
         function_ref = str(element.get("function_ref", ""))
@@ -425,7 +521,7 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
             "适用DFX场景": _text(element.get("dfx_scenarios") or "；".join(dfx_scenarios) or "正向流程"),
             "前置状态/权限": _text(element.get("precondition") or "；".join(preconditions) or "具备当前页面访问权限"),
             "预期行为": _text(element.get("expected_behavior") or "；".join(results) or "按页面实际规则反馈操作结果"),
-            "业务依据/规则来源": _text(element.get("rule_source") or ("页面实探；需求资料参考" if scope.get("source") else "页面实探")),
+            "业务依据/规则来源": _text(element.get("rule_source") or "；".join(plan_functions.get(function_ref, {}).get("design_context", {}).get("basis", [])) or "页面实探"),
             "覆盖用例 ID": "；".join(covered_case_ids),
             "覆盖状态": coverage_status,
             "发现方式": "页面实探",
@@ -470,11 +566,7 @@ def assemble_formal_workbook(run_dir: Path, template: Path, output: Path) -> dic
                 raise ValueError(f"{sheet_name} row uses unknown headers: {sorted(unknown)}")
             write_mapped_row(worksheet, headers, row_index, row)
             _apply_sample_formulas(worksheet, formulas, row_index)
-            for header in MULTILINE_HEADERS:
-                if header in headers:
-                    cell = worksheet.cell(row_index, headers[header])
-                    cell.alignment = Alignment(vertical="top", wrap_text=True)
-            worksheet.row_dimensions[row_index].height = _mapped_row_height(worksheet, headers, row, MULTILINE_HEADERS)
+            _format_data_row(worksheet, headers, row_index, row)
         counts[sheet_name] = len(rows_by_sheet[sheet_name])
     resize_workbook_structures(workbook)
     _assert_structure_preserved(structure, workbook, "formal workbook")
@@ -526,13 +618,7 @@ def generate_import_workbook(run_dir: Path, template: Path, output: Path, module
         }
         write_mapped_row(target, target_headers, count + 1, row)
         _apply_sample_formulas(target, formulas, count + 1)
-        for header in ("测试步骤描述", "测试步骤预期结果", "测试用例说明", "前置条件", "备注"):
-            if header in target_headers:
-                target.cell(count + 1, target_headers[header]).alignment = Alignment(vertical="top", wrap_text=True)
-        target.row_dimensions[count + 1].height = _mapped_row_height(
-            target, target_headers, row,
-            ("测试步骤描述", "测试步骤预期结果", "前置条件", "测试用例说明", "备注"),
-        )
+        _format_data_row(target, target_headers, count + 1, row)
     if count == 0:
         raise ValueError("no function cases were available for the import workbook")
     resize_workbook_structures(target_book)
@@ -587,6 +673,7 @@ def _verify_generated_deliverables(
             for row in data_rows:
                 if worksheet.cell(row, headers[header]).value in (None, ""):
                     raise ValueError(f"generated formal workbook has empty core field {sheet_name}.{header} at row {row}")
+        _assert_rows_fit(worksheet, data_rows, f"generated formal workbook {sheet_name}")
     function_ws = formal[FUNCTION_SHEET]
     function_headers = header_map(function_ws)
     formal_rows = [
@@ -606,6 +693,7 @@ def _verify_generated_deliverables(
     ]
     if import_rows != list(range(2, 2 + expected_count)):
         raise ValueError("generated import workbook has a missing, blank, or extra case row")
+    _assert_rows_fit(import_ws, import_rows, "generated import workbook")
     for name in SHEETS:
         generated_rows = [
             row for row in range(2, formal[name].max_row + 1)
@@ -636,6 +724,8 @@ def _verify_generated_deliverables(
     for index, case in enumerate(source_cases, 2):
         if str(function_ws.cell(index, function_headers["用例标题"]).value or "").strip() != str(case.get("title", "")).strip():
             raise ValueError(f"formal workbook row {index} differs from function-cases.json")
+    _assert_visible_content_clean(formal, "generated formal workbook")
+    _assert_visible_content_clean(imported, "generated import workbook")
 
 
 def complete_deliverables(run_dir: Path, project_root: Path) -> dict[str, Any]:
@@ -646,23 +736,26 @@ def complete_deliverables(run_dir: Path, project_root: Path) -> dict[str, Any]:
     import_file = paths["delivery"] / "测试系统导入.xlsx"
     formal_candidate = paths["delivery"] / ".正式测试设计.candidate.xlsx"
     import_candidate = paths["delivery"] / ".测试系统导入.candidate.xlsx"
+    counts: dict[str, int] = {}
+    import_count = 0
     try:
         formal_template = project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
         import_template = project_root / "docs" / "test-design" / "测试用例模板.xlsx"
-        counts = assemble_formal_workbook(
-            run_dir,
-            formal_template,
-            formal_candidate,
-        )
-        import_count = generate_import_workbook(
-            run_dir,
-            import_template,
-            import_candidate,
-            str(scope.get("module_path", "")),
-        )
-        _verify_generated_deliverables(
-            run_dir, formal_candidate, import_candidate, import_count, formal_template, import_template,
-        )
+        for attempt in range(2):
+            formal_candidate.unlink(missing_ok=True)
+            import_candidate.unlink(missing_ok=True)
+            try:
+                counts = assemble_formal_workbook(run_dir, formal_template, formal_candidate)
+                import_count = generate_import_workbook(
+                    run_dir, import_template, import_candidate, str(scope.get("module_path", "")),
+                )
+                _verify_generated_deliverables(
+                    run_dir, formal_candidate, import_candidate, import_count, formal_template, import_template,
+                )
+                break
+            except Exception:
+                if attempt == 1:
+                    raise
         os.replace(formal_candidate, formal)
         os.replace(import_candidate, import_file)
     finally:

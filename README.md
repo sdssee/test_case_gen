@@ -35,13 +35,13 @@
   → 自动形成事实计划骨架，识别独立功能并在 case-plan.json 中左移展开 DFX
   → 每个有限选项和实测有效输入类别形成独立baseline意图，按功能upsert计划
   → 按计划和功能upsert配对步骤 function-cases.json
-  → 执行一次轻量跨产物 Review
+  → 合并确定性检查与一次模型语义 Review
   → 独立生成正式测试设计.xlsx和测试系统导入.xlsx
 ```
 
 扫描和事务不是两个割裂阶段。进入页面先扫描，发现元素后立即执行相关功能事务，页面变化后局部重扫；新元素动态加入当前或后续事务。最终全量扫描稳定且没有未处理元素时结束深探。
 
-一个功能事务可以连续验证多个相关检查点，避免重复扫描页面；但每个有限选项和每个实测有效输入等价类分别形成独立 baseline Case，不相互合并，也不默认做笛卡尔积。必填输入同时验证空值；页面明确格式/边界时验证对应DFX分支。需要按钮产生结果的检查必须包含完整触发动作，并记录主验证和辅助使用的全部控件。所有页面能力都使用同一套事实与计划规则；CRUD 和配置采用完整业务闭环，配置暂按单因素验证，不做组合爆炸。
+一个功能事务可以连续验证多个相关检查点，避免重复扫描页面；但每个有限选项和每个有效输入等价类分别形成独立 baseline Case，不相互合并，也不默认做笛卡尔积。有效输入类在元素登记时由模型结合页面语义、需求参考和功能推断声明；必填输入同时验证空值，页面明确格式/边界时验证对应DFX分支。需要按钮产生结果的检查必须包含完整触发动作，并区分主验证控件与辅助使用控件，辅助使用不能替代独立覆盖。所有页面能力都使用同一套事实与计划规则；CRUD 和配置采用完整业务闭环，配置暂按单因素验证，不做组合爆炸。
 
 框架不内置分页、搜索、弹窗或某个业务模块的专用 Case 模板。功能名称、元素类型和事务类型都来自当前页面事实；相同控件在不同产品中产生的效果不同，计划和用例也随实际观察结果变化。
 
@@ -66,9 +66,10 @@
 - 标准CLI是唯一内部入口，JSON使用 `--file` 传入；不生成临时Python编排脚本，run-dir不能逃逸项目根目录。
 - Excel组装从最终用例派生场景优先级和观察点，按实际列宽计算行高，并校验跨Sheet一致性及无阻塞未覆盖元素。
 - 计划和用例通过内部原子写入接口在生成当下完成结构约束，错误产物不会先落盘等待 Review 拒绝。
-- Review 只检查 facts→plan→cases 的跨产物语义一致性。
+- 计划骨架在首次生成前提供实测动作、具体选项/输入类、稳定结果锚点、设计上下文和专项结论字段；Excel只组合这些上游内容，不自行补业务结论。
+- Review 合并确定性检查与一次模型语义审计；语义审计缺失时不能交付，也不会自动循环返工。
 - Review和状态使用业务语义指纹，时间戳、重新编译和JSON格式变化不会触发重复Review。
-- 状态只有 `ready`、`ready_with_notes`、`needs_local_fix`、`blocked_by_fact`。
+- 双Excel存在且Review仍有效时状态直接为 `completed`，恢复不会重复交付。
 - 问题只修当前 Case、当前功能或一个缺失事务，不全量回退、不自动循环。
 
 ## 用例规范
@@ -107,7 +108,7 @@
 scripts/run-test-design.ps1 status --run-dir <run-dir>
 scripts/run-test-design.ps1 checkpoint --run-dir <run-dir>
 scripts/run-test-design.ps1 plan-skeleton --run-dir <run-dir>
-scripts/run-test-design.ps1 review --run-dir <run-dir>
+scripts/run-test-design.ps1 review --run-dir <run-dir> --file <semantic-review.json>
 scripts/run-test-design.ps1 deliver --run-dir <run-dir> --project-root .
 ```
 

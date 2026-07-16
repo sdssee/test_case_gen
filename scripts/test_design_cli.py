@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 from test_design.formal_assembler import complete_deliverables
@@ -25,7 +26,13 @@ from test_design.session_runtime import (
 
 def _payload(path: Path | None) -> object:
     if path:
-        return json.loads(path.read_text(encoding="utf-8-sig"))
+        try:
+            return json.loads(path.read_text(encoding="utf-8-sig"))
+        finally:
+            resolved = path.resolve()
+            temp_root = Path(tempfile.gettempdir()).resolve()
+            if resolved.parent == temp_root and resolved.name.startswith("test-design-"):
+                resolved.unlink(missing_ok=True)
     if sys.stdin.isatty():
         raise ValueError("provide --file or pipe JSON through stdin")
     return json.load(sys.stdin)
@@ -84,6 +91,7 @@ def main() -> int:
 
     review = sub.add_parser("review", help="Run the single cross-artifact audit")
     review.add_argument("--run-dir", required=True, type=Path)
+    review.add_argument("--file", type=Path, help="One compact model semantic-review JSON payload")
 
     deliver = sub.add_parser("deliver", help="Generate both independent Excel deliverables")
     deliver.add_argument("--run-dir", required=True, type=Path)
@@ -147,7 +155,10 @@ def main() -> int:
     elif args.command == "status":
         _print(pipeline_status(args.run_dir))
     elif args.command == "review":
-        _print(review_run(args.run_dir))
+        semantic = _payload(args.file) if args.file else None
+        if semantic is not None and not isinstance(semantic, dict):
+            raise ValueError("semantic review payload must be an object")
+        _print(review_run(args.run_dir, semantic))
     elif args.command == "deliver":
         _print(complete_deliverables(args.run_dir, args.project_root.resolve()))
     return 0

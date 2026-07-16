@@ -46,6 +46,10 @@ FACT_ID_PREFIXES = {
     "open_item": "OPEN",
 }
 OPEN_ITEM_CATEGORIES = {"external_question", "blocked_condition", "observed_risk"}
+SEMANTIC_REVIEW_AREAS = (
+    "design_context", "scenario_diversity", "action_expected", "dfx_fit",
+    "performance_risk", "automation", "source_claims", "internal_prose",
+)
 
 
 def _now() -> str:
@@ -121,6 +125,8 @@ def artifact_paths(run_dir: Path) -> dict[str, Path]:
         "cases": run_dir / "function-cases.json",
         "review": run_dir / "review.json",
         "delivery": run_dir / "deliverables",
+        "formal_workbook": run_dir / "deliverables" / "正式测试设计.xlsx",
+        "import_workbook": run_dir / "deliverables" / "测试系统导入.xlsx",
         "diagnostics": run_dir / "diagnostics",
     }
 
@@ -233,11 +239,17 @@ def _derive_exploration_requirements(element: dict[str, Any]) -> list[dict[str, 
     requirements: list[dict[str, Any]] = []
     constraints = element.get("constraints") if isinstance(element.get("constraints"), dict) else {}
     if _is_input_element(element):
-        requirements.append({
-            "kind": "input_class", "value": "valid", "strategy": "baseline",
-            "reason": "输入元素的有效等价类",
-            "independent_case": True,
-        })
+        configured_classes = element.get("valid_input_classes", constraints.get("valid_input_classes", []))
+        if isinstance(configured_classes, str):
+            configured_classes = [configured_classes]
+        valid_classes = list(dict.fromkeys(str(value).strip() for value in configured_classes if str(value).strip()))
+        for valid_class in valid_classes or ["valid"]:
+            normalized = valid_class if valid_class == "valid" or valid_class.startswith("valid_") else f"valid_{valid_class}"
+            requirements.append({
+                "kind": "input_class", "value": normalized, "strategy": "baseline",
+                "reason": "页面语义、需求参考或模型推断得到的独立有效输入等价类",
+                "independent_case": True,
+            })
         if element.get("required") is True or constraints.get("required") is True:
             requirements.append({
                 "kind": "input_class", "value": "empty", "strategy": "DFX",
@@ -465,6 +477,13 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
     returned: list[dict[str, Any]] = []
     for original in items:
         item = replace_refs(original)
+        same_id = latest.get(str(item["fact_id"]))
+        if item.get("kind") == "scope" and same_id and same_id.get("kind") == "scope":
+            merged_data = {**same_id.get("data", {}), **item.get("data", {})}
+            for stable_field in ("run_id", "created_at"):
+                if same_id.get("data", {}).get(stable_field) not in (None, ""):
+                    merged_data[stable_field] = same_id["data"][stable_field]
+            item["data"] = merged_data
         signature = _content_digest({"kind": item.get("kind"), "status": item.get("status", "active"), "data": item.get("data", {})})
         duplicate_id = (
             signatures.get(signature)
@@ -475,7 +494,6 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
             replacements[str(item["fact_id"])] = duplicate_id
             returned.append(latest[duplicate_id])
             continue
-        same_id = latest.get(str(item["fact_id"]))
         if same_id and _content_digest({"kind": same_id.get("kind"), "status": same_id.get("status", "active"), "data": same_id.get("data", {})}) == signature:
             returned.append(same_id)
             continue
@@ -562,8 +580,8 @@ def compile_facts(run_dir: Path) -> dict[str, Any]:
             **event["data"],
         }
         facts[FACT_COLLECTIONS[kind]].append(record)
-    for key in FACT_COLLECTIONS.values():
-        facts[key].sort(key=lambda row: str(row.get("fact_id", "")))
+    # Dict replacement keeps the first discovery position of a fact while
+    # allowing later events to update its content in place.
     _write_json(artifact_paths(run_dir)["facts"], facts)
     return facts
 
@@ -628,10 +646,11 @@ def _pending_exploration(
     checks_by_element: dict[str, list[dict[str, Any]]] = {}
     for transaction in transactions:
         for check in transaction.get("checks", []):
-            refs = {str(value) for value in check.get("used_element_refs", []) if str(value).strip()}
-            if check.get("element_ref"):
-                refs.add(str(check["element_ref"]))
-            for ref in refs:
+            # An element's independent branch can only be completed when that
+            # element is the primary verification target. Auxiliary use never
+            # consumes another control's own exploration requirement.
+            ref = str(check.get("element_ref", "")).strip()
+            if ref:
                 checks_by_element.setdefault(ref, []).append(check)
     pending: list[dict[str, Any]] = []
     for element in elements:
@@ -826,6 +845,12 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
                 "action": str(check.get("action", "")),
                 "observed_result": str(check.get("result", "")),
                 "element_ref": str(check.get("element_ref", "")),
+                "used_element_refs": list(check.get("used_element_refs", [])),
+                "input_class": str(check.get("input_class", "")),
+                "option_value": str(check.get("option_value", "")),
+                "result_anchor": check.get("result_anchor", {}),
+                "intermediate_states": check.get("intermediate_states", []),
+                "completion_state": check.get("completion_state", ""),
             }
             for transaction in owned_transactions
             for index, check in enumerate(transaction.get("checks", []), 1)
@@ -859,10 +884,8 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
                 if hint.get("scope") == "transaction" and hint.get("scope_ref") != transaction_ref:
                     continue
                 for index, check in enumerate(transaction.get("checks", []), 1):
-                    used_refs = {str(value) for value in check.get("used_element_refs", [])}
-                    if check.get("element_ref"):
-                        used_refs.add(str(check.get("element_ref")))
-                    if hint.get("scope") == "element" and str(hint.get("scope_ref", "")) not in used_refs:
+                    primary_ref = str(check.get("element_ref", ""))
+                    if hint.get("scope") == "element" and str(hint.get("scope_ref", "")) != primary_ref:
                         continue
                     tags = {str(tag) for tag in check.get("dfx_tags", [])}
                     hint_code = str(hint.get("code", ""))
@@ -887,13 +910,41 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
             "checks": checks,
             "required_case_branches": required_case_branches,
             "dfx_hints": unique_hints,
+            "design_context_fields": [
+                "user_goal", "role", "business_value", "acceptance_criteria", "business_rules",
+                "dependencies", "postcondition", "basis",
+            ],
+            "automation_profile_fields": [
+                "level", "dependency", "stability_risk", "recommendation",
+            ],
         })
     return {
         "schema_version": SCHEMA_VERSION,
         "source": "facts.json",
         "checkpoint": _current_checkpoint(facts),
+        "specialist_decisions": {
+            "performance": "填写 performance_scenarios；不适用时填写 performance_not_applicable_reason",
+            "risk": "填写 risks；无风险时填写 risk_not_applicable_reason",
+        },
+        "dfx_evaluation": {
+            "candidate_dimensions": ["DFT功能", "DFB业务", "DFS安全", "DFR可靠", "DFU可用", "DFI接口", "DFC兼容", "DFP性能", "DFM维护", "DFD部署", "DFO运维", "DFX极端"],
+            "rule": "结合事实和功能语义只选择适用维度；页面可执行项进入用例，专项进入性能或风险，不生成固定矩阵",
+        },
         "functions": functions,
     }
+
+
+def _nonempty_text_list(value: Any) -> bool:
+    return isinstance(value, list) and bool(value) and all(str(item).strip() for item in value)
+
+
+def _has_requirement_reference(facts: dict[str, Any]) -> bool:
+    scope = facts.get("scope", {})
+    source = str(scope.get("source", ""))
+    return bool(
+        scope.get("requirements") or scope.get("requirement_name") or scope.get("requirement_document")
+        or "需求" in source or "文档" in source
+    )
 
 
 def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
@@ -922,6 +973,20 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
         if function_ref in planned_functions:
             issues.append(_issue("duplicate_mapping", "repairable", "case-plan.json", f"function {function_ref} appears more than once", "merge this function block", function_ref=function_ref))
         planned_functions.add(function_ref)
+        context = function.get("design_context") if isinstance(function.get("design_context"), dict) else {}
+        for field in ("user_goal", "role", "business_value", "postcondition"):
+            if not str(context.get(field, "")).strip():
+                issues.append(_issue("missing_design_context", "repairable", "case-plan.json", f"function {function_ref} lacks design_context.{field}", "complete this function's compact design context", function_ref=function_ref))
+        for field in ("acceptance_criteria", "business_rules", "dependencies", "basis"):
+            if not _nonempty_text_list(context.get(field)):
+                issues.append(_issue("missing_design_context", "repairable", "case-plan.json", f"function {function_ref} lacks design_context.{field}", "complete this function's compact design context", function_ref=function_ref))
+        if not _has_requirement_reference(facts) and any(
+            "需求" in str(item) or "文档" in str(item) for item in context.get("basis", [])
+        ):
+            issues.append(_issue("unsupported_basis", "repairable", "case-plan.json", f"function {function_ref} claims a requirement document that was not supplied", "retain only actual page exploration or supplied sources", function_ref=function_ref))
+        profile = function.get("automation_profile") if isinstance(function.get("automation_profile"), dict) else {}
+        if any(not str(profile.get(field, "")).strip() for field in ("level", "dependency", "stability_risk", "recommendation")):
+            issues.append(_issue("missing_automation_profile", "repairable", "case-plan.json", f"function {function_ref} lacks a compact automation profile", "complete the four function-level automation fields", function_ref=function_ref))
         cases = function.get("cases", [])
         if not cases or not any(str(case.get("strategy", "")).lower() == "baseline" for case in cases):
             issues.append(_issue("missing_baseline", "repairable", "case-plan.json", f"function {function_ref} lacks a baseline intent", "add its observed baseline intent", function_ref=function_ref))
@@ -943,11 +1008,30 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
             if title_key in titles:
                 issues.append(_issue("duplicate_title", "repairable", "case-plan.json", f"function {function_ref} repeats planned title {title_key[1]!r}", "merge or differentiate the actual intent", function_ref=function_ref, case_id=case_id))
             titles.add(title_key)
+            function_name = str(functions.get(function_ref, {}).get("name", "")).strip()
+            if function_name and function_name in str(case.get("title", "")):
+                issues.append(_issue("redundant_title", "repairable", "case-plan.json", f"case {case_id} repeats its function name inside the scenario title", "retain only the concrete scenario in the plan title", function_ref=function_ref, case_id=case_id))
             if not str(case.get("dfx_dimension", "")).strip() or not str(case.get("dfx_scenario", "")).strip():
                 issues.append(_issue("missing_dfx", "repairable", "case-plan.json", f"case {case_id} lacks dimension or scenario", "complete DFX while planning", function_ref=function_ref, case_id=case_id))
     missing_functions = set(functions) - planned_functions
     if missing_functions:
         issues.append(_issue("missing_function", "repairable", "case-plan.json", f"functions missing from plan: {sorted(missing_functions)}", "plan only the missing function blocks"))
+    if not plan.get("performance_scenarios") and not str(plan.get("performance_not_applicable_reason", "")).strip():
+        issues.append(_issue("missing_performance_decision", "repairable", "case-plan.json", "performance design is empty without an explicit applicability reason", "record the specialist decision during planning", function_ref="__global__"))
+    if not plan.get("risks") and not str(plan.get("risk_not_applicable_reason", "")).strip():
+        issues.append(_issue("missing_risk_decision", "repairable", "case-plan.json", "risk design is empty without an explicit applicability reason", "record the specialist decision during planning", function_ref="__global__"))
+    for scenario in plan.get("performance_scenarios", []):
+        scenario_id = str(scenario.get("scenario_id", ""))
+        required = ("flow", "test_type", "concurrency", "throughput", "response_time", "data_scale", "duration", "metrics", "pass_criteria", "data_strategy", "risk", "included")
+        missing = [field for field in required if not str(scenario.get(field, "")).strip()]
+        if missing:
+            issues.append(_issue("incomplete_performance_scenario", "repairable", "case-plan.json", f"performance scenario {scenario_id} lacks {missing}", "complete this specialist scenario during planning", function_ref=str(scenario.get("function_ref", "__global__"))))
+    for risk in plan.get("risks", []):
+        risk_id = str(risk.get("risk_id", ""))
+        required = ("description", "impact", "level", "recommendation", "status")
+        missing = [field for field in required if not str(risk.get(field, "")).strip()]
+        if missing:
+            issues.append(_issue("incomplete_risk", "repairable", "case-plan.json", f"risk {risk_id} lacks {missing}", "complete this risk during planning", function_ref=str(risk.get("function_ref", "__global__"))))
     case_owners = {
         str(case.get("case_id", "")): str(function.get("function_ref", ""))
         for function in plan.get("functions", [])
@@ -1068,7 +1152,7 @@ def _expected_satisfies_anchor(expected: str, check: dict[str, Any]) -> bool:
     if assertion == "observed_text" or not assertion:
         value = str(anchor.get("value") or check.get("result", "")).strip()
         return not value or value in expected
-    raw_tokens = anchor.get("tokens")
+    raw_tokens = anchor.get("stable_tokens", anchor.get("tokens"))
     if raw_tokens not in (None, "", []):
         values = raw_tokens if isinstance(raw_tokens, list) else [raw_tokens]
     else:
@@ -1076,6 +1160,18 @@ def _expected_satisfies_anchor(expected: str, check: dict[str, Any]) -> bool:
         values = value if isinstance(value, list) else [value]
     tokens = [str(item).strip() for item in values if item not in (None, "") and str(item).strip()]
     return all(token in expected for token in tokens)
+
+
+def _action_satisfies_check(action: str, check: dict[str, Any]) -> bool:
+    tokens = check.get("action_tokens", [])
+    if isinstance(tokens, str):
+        tokens = [tokens]
+    tokens = [str(item).strip() for item in tokens if str(item).strip()]
+    for field in ("option_value", "input_value", "test_value"):
+        value = str(check.get(field, "")).strip()
+        if value:
+            tokens.append(value)
+    return all(token in action for token in dict.fromkeys(tokens))
 
 
 def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
@@ -1136,6 +1232,9 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
         for field in ("priority", "test_type", "test_data"):
             if not str(case.get(field, "")).strip():
                 issues.append(_issue("empty_field", "repairable", "function-cases.json", f"case {case_id} has empty {field}", "complete this field with concrete content", **context))
+        for field in ("automation_value", "automation_priority"):
+            if not str(case.get(field, "")).strip():
+                issues.append(_issue("missing_automation_decision", "repairable", "function-cases.json", f"case {case_id} has empty {field}", "write the lightweight case-level automation decision", **context))
         preconditions = case.get("preconditions")
         if not isinstance(preconditions, list) or not preconditions or any(not str(value).strip() for value in preconditions):
             issues.append(_issue("empty_field", "repairable", "function-cases.json", f"case {case_id} has no explicit preconditions", "write concrete conditions or '无特殊前置条件'", **context))
@@ -1185,6 +1284,8 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
             trigger_ref = str(check.get("trigger_element_ref", ""))
             if trigger_ref and trigger_ref in elements and not _action_has_trigger(str(step.get("action", ""))):
                 issues.append(_issue("missing_trigger", "blocker", "function-cases.json", f"case {case_id} step {index} omits the observed submit/execute trigger", "restore the complete observed action", **context))
+            if not _action_satisfies_check(str(step.get("action", "")), check):
+                issues.append(_issue("action_fact_mismatch", "blocker", "function-cases.json", f"case {case_id} step {index} omits the observed option or input value", "restore the concrete action from the transaction fact", **context))
             if not _expected_satisfies_anchor(str(step.get("expected", "")), check):
                 issues.append(_issue("ungrounded_expected", "blocker", "function-cases.json", f"case {case_id} step {index} does not preserve its observed result", "rewrite this expected result from the transaction fact", **context))
         if planned_checks != actual_checks or actual_check_list != planned_check_list or len(steps[1:]) != len(planned_check_list):
@@ -1339,6 +1440,8 @@ def _merge_plan_functions(run_dir: Path, incoming: dict[str, Any]) -> tuple[dict
     unknown_functions = affected - fact_function_refs
     if unknown_functions:
         raise ValueError(f"plan upsert references unknown functions: {sorted(unknown_functions)}")
+    if any(key in incoming for key in ("risks", "risk_not_applicable_reason", "performance_scenarios", "performance_not_applicable_reason")):
+        affected.add("__global__")
     transaction_owner = {str(row.get("fact_id", "")): str(row.get("function_ref", "")) for row in facts.get("transactions", [])}
     incoming_assignments: list[dict[str, Any]] = []
     for row in incoming.get("check_assignments", []):
@@ -1358,6 +1461,9 @@ def _merge_plan_functions(run_dir: Path, incoming: dict[str, Any]) -> tuple[dict
         for key, value in existing.items()
         if key not in {"functions", "check_assignments", "source", "source_digest"}
     }
+    for key, incoming_value in incoming.items():
+        if key not in {"functions", "check_assignments", "source", "source_digest", "risks", "performance_scenarios"}:
+            merged[key] = json.loads(json.dumps(incoming_value, ensure_ascii=False))
     for key in ("risks", "performance_scenarios"):
         if key not in incoming:
             continue
@@ -1529,15 +1635,23 @@ def inspect_cross_artifacts(run_dir: Path) -> list[dict[str, str]]:
             issues.append(_issue("cross_mapping", "repairable", "function-cases.json", f"case {case_id} differs from its function/check plan", "repair only this case", case_id=case_id))
     if set(planned) != written:
         issues.append(_issue("cross_case_set", "repairable", "function-cases.json", "planned and written case sets differ", "add or remove only the differing cases"))
-    element_ids = {str(row.get("fact_id", "")) for row in facts.get("elements", [])}
-    covered_elements = {
-        str(ref)
-        for case in document.get("cases", [])
-        for ref in case.get("fact_refs", [])
-        if str(ref) in element_ids
-    }
-    handled_non_case: set[str] = set()
+    primary_covered_elements: set[str] = set()
+    auxiliary_covered_elements: set[str] = set()
     transactions = {str(row.get("fact_id", "")): row for row in facts.get("transactions", [])}
+    for assignment in plan.get("check_assignments", []):
+        transaction = transactions.get(str(assignment.get("transaction_ref", "")), {})
+        try:
+            check = transaction.get("checks", [])[int(assignment.get("check_index", 0)) - 1]
+        except (IndexError, TypeError, ValueError):
+            continue
+        primary_ref = str(check.get("element_ref", "")).strip()
+        if assignment.get("disposition") == "case":
+            if primary_ref:
+                primary_covered_elements.add(primary_ref)
+            auxiliary_covered_elements.update(
+                str(ref) for ref in check.get("used_element_refs", []) if str(ref).strip() and str(ref) != primary_ref
+            )
+    handled_non_case: set[str] = set()
     for assignment in plan.get("check_assignments", []):
         if assignment.get("disposition") == "case":
             continue
@@ -1546,7 +1660,6 @@ def inspect_cross_artifacts(run_dir: Path) -> list[dict[str, str]]:
             check = transaction.get("checks", [])[int(assignment.get("check_index", 0)) - 1]
         except (IndexError, TypeError, ValueError):
             continue
-        handled_non_case.update(str(ref) for ref in check.get("used_element_refs", []) if str(ref).strip())
         if check.get("element_ref"):
             handled_non_case.add(str(check.get("element_ref")))
     blocked_functions = {
@@ -1559,7 +1672,10 @@ def inspect_cross_artifacts(run_dir: Path) -> list[dict[str, str]]:
         element_ref = str(element.get("fact_id", ""))
         if element.get("status") in NON_ACTIONABLE_STATUSES or element.get("interactive", True) is False:
             continue
-        if element_ref not in covered_elements and element_ref not in handled_non_case and str(element.get("function_ref", "")) not in blocked_functions:
+        covered = element_ref in primary_covered_elements or (
+            not element.get("exploration_requirements") and element_ref in auxiliary_covered_elements
+        )
+        if not covered and element_ref not in handled_non_case and str(element.get("function_ref", "")) not in blocked_functions:
             issues.append(_issue(
                 "uncovered_element", "repairable", "function-cases.json",
                 f"interactive element {element.get('name') or element_ref} has no case or explicit specialist disposition",
@@ -1569,12 +1685,13 @@ def inspect_cross_artifacts(run_dir: Path) -> list[dict[str, str]]:
     return issues
 
 
-def review_run(run_dir: Path) -> dict[str, Any]:
-    """Run one read-only semantic audit and write its compact result."""
+def review_run(run_dir: Path, semantic_review: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Combine deterministic checks with one explicit model semantic audit."""
     facts = load_facts(run_dir)
     plan = load_plan(run_dir)
     cases = load_cases(run_dir)
-    issues = inspect_plan(run_dir) + inspect_cases(run_dir) + inspect_cross_artifacts(run_dir)
+    deterministic_issues = inspect_plan(run_dir) + inspect_cases(run_dir) + inspect_cross_artifacts(run_dir)
+    issues = list(deterministic_issues)
     unresolved = [
         item for item in facts.get("open_items", [])
         if item.get("status") not in {"resolved", "accepted", "closed"}
@@ -1587,6 +1704,36 @@ def review_run(run_dir: Path) -> dict[str, Any]:
             issues.append(_issue("open_material_fact", "blocker", "facts.json", str(item.get("description") or item.get("fact_id")), "resolve this external fact once", function_ref=",".join(affected)))
         else:
             issues.append(_issue("open_note", "warning", "facts.json", str(item.get("description") or item.get("fact_id")), "retain as a scoped delivery note", function_ref=",".join(affected)))
+    semantic = semantic_review if isinstance(semantic_review, dict) else {}
+    semantic_issues: list[dict[str, str]] = []
+    expected_case_ids = [str(case.get("case_id", "")) for case in cases.get("cases", [])]
+    reviewed_case_ids = [str(value) for value in semantic.get("reviewed_case_ids", [])]
+    semantic_checks = semantic.get("checks") if isinstance(semantic.get("checks"), dict) else {}
+    if not semantic:
+        semantic_issues.append(_issue("semantic_review_missing", "repairable", "review.json", "the one model semantic review has not been supplied", "review the compact facts/plan/case projection once"))
+    else:
+        if reviewed_case_ids != expected_case_ids:
+            semantic_issues.append(_issue("semantic_review_scope", "repairable", "review.json", "semantic review case order/set differs from function-cases.json", "review the current case set once in its existing order"))
+        missing_areas = [area for area in SEMANTIC_REVIEW_AREAS if semantic_checks.get(area) != "pass"]
+        if missing_areas:
+            semantic_issues.append(_issue("semantic_review_incomplete", "repairable", "review.json", f"semantic review did not pass areas: {missing_areas}", "complete only the missing semantic judgments"))
+        for index, item in enumerate(semantic.get("issues", []), 1):
+            if not isinstance(item, dict) or not str(item.get("message", "")).strip():
+                semantic_issues.append(_issue("invalid_semantic_issue", "repairable", "review.json", f"semantic issue {index} is malformed", "record a concrete message and local repair"))
+                continue
+            severity = str(item.get("severity") or "repairable")
+            if severity not in {"blocker", "repairable", "warning"}:
+                severity = "repairable"
+            semantic_issues.append(_issue(
+                str(item.get("code") or "semantic_issue"),
+                severity,
+                str(item.get("artifact") or "function-cases.json"),
+                str(item.get("message")),
+                str(item.get("local_repair") or "apply one explicit local correction"),
+                function_ref=str(item.get("function_ref", "")),
+                case_id=str(item.get("case_id", "")),
+            ))
+    issues.extend(semantic_issues)
     issues = list({json.dumps(item, ensure_ascii=False, sort_keys=True): item for item in issues}.values())
     if any(item["severity"] == "blocker" for item in issues):
         status = "blocked_by_fact"
@@ -1609,6 +1756,19 @@ def review_run(run_dir: Path) -> dict[str, Any]:
         },
         "sources": {
             **semantic_source_digests(run_dir)
+        },
+        "deterministic": {"status": "pass" if not deterministic_issues else "fail", "issues": deterministic_issues},
+        "semantic": {
+            "status": (
+                "missing" if not semantic
+                else "needs_local_fix" if any(item.get("severity") in {"blocker", "repairable"} for item in semantic_issues)
+                else "pass_with_notes" if semantic_issues
+                else "pass"
+            ),
+            "reviewed_case_ids": reviewed_case_ids,
+            "checks": semantic_checks,
+            "issues": semantic_issues,
+            "local_fixes": semantic.get("local_fixes", []),
         },
         "issues": issues,
     }
@@ -1675,6 +1835,15 @@ def pipeline_status(run_dir: Path) -> dict[str, Any]:
             "stage": "review", "state": "needs_local_fix",
             "issues": [_issue("stale_review", "repairable", "review.json", "upstream business content changed", "review the changed chain once")],
             "next_action": "run the single semantic review once",
+        }
+    if review.get("status") in {"ready", "ready_with_notes"} and paths["formal_workbook"].is_file() and paths["import_workbook"].is_file():
+        return {
+            "stage": "completed", "state": "completed", "issues": review.get("issues", []),
+            "deliverables": {
+                "formal_workbook": str(paths["formal_workbook"].resolve()),
+                "import_workbook": str(paths["import_workbook"].resolve()),
+            },
+            "next_action": "none",
         }
     return {"stage": "review", "state": review.get("status"), "issues": review.get("issues", []), "next_action": "deliver" if review.get("status") in {"ready", "ready_with_notes"} else "apply only the listed local repair"}
 

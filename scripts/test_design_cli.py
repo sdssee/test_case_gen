@@ -58,6 +58,73 @@ def _project_scoped_run_dir(value: Path) -> Path:
     return resolved
 
 
+def execute_request(
+    command: str,
+    run_dir: Path,
+    payload: object | None = None,
+    *,
+    module_path: str = "",
+    product_name: str = "",
+    source: str = "",
+    project_root: Path = Path("."),
+) -> object:
+    """Canonical in-process adapter used by both the CLI and its single fallback."""
+    run_dir = _project_scoped_run_dir(run_dir)
+    if command == "record":
+        paths = artifact_paths(run_dir)
+        if not paths["facts"].exists():
+            if not module_path:
+                raise ValueError("the first record requires module_path for transparent scope binding")
+            ensure_run(run_dir, module_path, product_name, source)
+        events = payload if isinstance(payload, list) else [payload]
+        if not events or not all(isinstance(item, dict) for item in events):
+            raise ValueError("record payload must be an object or an array of objects")
+        recorded = append_events(run_dir, events)
+        should_checkpoint = any(
+            item.get("kind") == "page" and item.get("data", {}).get("final_scan_status") == "stable"
+            for item in recorded
+        )
+        result: dict[str, object] = {
+            "recorded": len(recorded), "facts": [item["fact_id"] for item in recorded],
+            "checkpointed": should_checkpoint,
+        }
+        element_plans = [
+            {"element_ref": item["fact_id"], "element_name": str(item.get("data", {}).get("name", "")),
+             "requirements": item.get("data", {}).get("exploration_requirements", [])}
+            for item in recorded
+            if item.get("kind") == "element" and item.get("data", {}).get("exploration_requirements")
+        ]
+        if element_plans:
+            result["exploration_plan"] = element_plans
+        result["remaining_exploration"] = pending_exploration_requirements(run_dir)
+        if should_checkpoint:
+            result["checkpoint"] = checkpoint_facts(run_dir)
+        return result
+    if command == "compile":
+        return compile_facts(run_dir)
+    if command == "checkpoint":
+        return checkpoint_facts(run_dir)
+    if command == "plan-skeleton":
+        return build_plan_skeleton(run_dir)
+    if command == "write-plan":
+        if not isinstance(payload, dict):
+            raise ValueError("plan payload must be an object")
+        return save_plan(run_dir, payload)
+    if command == "write-cases":
+        if not isinstance(payload, dict):
+            raise ValueError("cases payload must be an object")
+        return save_cases(run_dir, payload)
+    if command == "status":
+        return pipeline_status(run_dir)
+    if command == "review":
+        if payload is not None and not isinstance(payload, dict):
+            raise ValueError("semantic review payload must be an object")
+        return review_run(run_dir, payload)
+    if command == "deliver":
+        return complete_deliverables(run_dir, project_root.resolve())
+    raise ValueError(f"unsupported command: {command}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Internal helpers for one-session test design")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -98,69 +165,17 @@ def main() -> int:
     deliver.add_argument("--project-root", type=Path, default=Path("."))
 
     args = parser.parse_args()
-    if hasattr(args, "run_dir"):
-        args.run_dir = _project_scoped_run_dir(args.run_dir)
-    if args.command == "record":
-        paths = artifact_paths(args.run_dir)
-        if not paths["facts"].exists():
-            if not args.module_path:
-                raise ValueError("the first record requires --module-path for transparent scope binding")
-            ensure_run(
-                args.run_dir,
-                args.module_path,
-                args.product_name,
-                args.source,
-            )
-        payload = _payload(args.file)
-        events = payload if isinstance(payload, list) else [payload]
-        if not all(isinstance(item, dict) for item in events):
-            raise ValueError("record payload must be an object or an array of objects")
-        recorded = append_events(args.run_dir, events)
-        should_checkpoint = any(
-            item.get("kind") == "page" and item.get("data", {}).get("final_scan_status") == "stable"
-            for item in recorded
-        )
-        result = {"recorded": len(recorded), "facts": [item["fact_id"] for item in recorded], "checkpointed": should_checkpoint}
-        element_plans = [
-            {
-                "element_ref": item["fact_id"],
-                "element_name": str(item.get("data", {}).get("name", "")),
-                "requirements": item.get("data", {}).get("exploration_requirements", []),
-            }
-            for item in recorded
-            if item.get("kind") == "element" and item.get("data", {}).get("exploration_requirements")
-        ]
-        if element_plans:
-            result["exploration_plan"] = element_plans
-        result["remaining_exploration"] = pending_exploration_requirements(args.run_dir)
-        if should_checkpoint:
-            result["checkpoint"] = checkpoint_facts(args.run_dir)
-        _print(result)
-    elif args.command == "compile":
-        _print(compile_facts(args.run_dir))
-    elif args.command == "checkpoint":
-        _print(checkpoint_facts(args.run_dir))
-    elif args.command == "plan-skeleton":
-        _print(build_plan_skeleton(args.run_dir))
-    elif args.command == "write-plan":
-        payload = _payload(args.file)
-        if not isinstance(payload, dict):
-            raise ValueError("plan payload must be an object")
-        _print(save_plan(args.run_dir, payload))
-    elif args.command == "write-cases":
-        payload = _payload(args.file)
-        if not isinstance(payload, dict):
-            raise ValueError("cases payload must be an object")
-        _print(save_cases(args.run_dir, payload))
-    elif args.command == "status":
-        _print(pipeline_status(args.run_dir))
-    elif args.command == "review":
-        semantic = _payload(args.file) if args.file else None
-        if semantic is not None and not isinstance(semantic, dict):
-            raise ValueError("semantic review payload must be an object")
-        _print(review_run(args.run_dir, semantic))
-    elif args.command == "deliver":
-        _print(complete_deliverables(args.run_dir, args.project_root.resolve()))
+    payload_commands = {"record", "write-plan", "write-cases"}
+    payload = _payload(args.file) if args.command in payload_commands or (args.command == "review" and args.file) else None
+    _print(execute_request(
+        args.command,
+        args.run_dir,
+        payload,
+        module_path=getattr(args, "module_path", ""),
+        product_name=getattr(args, "product_name", ""),
+        source=getattr(args, "source", ""),
+        project_root=getattr(args, "project_root", Path(".")),
+    ))
     return 0
 
 

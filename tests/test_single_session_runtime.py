@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -33,7 +34,7 @@ from test_design.session_runtime import (
     validate_discovery,
     validate_plan,
 )
-from test_design_cli import _payload, _project_scoped_run_dir
+from test_design_cli import _payload, _project_scoped_run_dir, execute_request
 
 
 def _plan_metadata(goal: str = "验证页面功能") -> dict[str, object]:
@@ -58,10 +59,7 @@ def _plan_metadata(goal: str = "验证页面功能") -> dict[str, object]:
 def _semantic_review(run_dir: Path) -> dict[str, object]:
     return {
         "reviewed_case_ids": [str(row.get("case_id", "")) for row in load_cases(run_dir).get("cases", [])],
-        "checks": {name: "pass" for name in (
-            "design_context", "scenario_diversity", "action_expected", "dfx_fit",
-            "performance_risk", "automation", "source_claims", "internal_prose",
-        )},
+        "summary": "逐条复核当前用例，未发现需要局部修正的语义问题。",
         "issues": [], "local_fixes": [],
     }
 
@@ -133,7 +131,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
              "priority": "P1" if index < 6 else "P2", "test_type": "功能测试",
              "preconditions": ["告警列表存在可查看且能够区分当前选项效果的数据"], "test_data": f"视图模式：{option}",
              "steps": [navigation, {"action": f"选择{option}视图模式", "expected": expected}],
-             "fact_refs": refs, "automation": True, "automation_value": "高频稳定回归", "automation_priority": "P1" if index < 6 else "P2"}
+             "fact_refs": refs, "automation_value": "高频稳定回归", "automation_priority": "P1" if index < 6 else "P2"}
             for index, (option, expected, title) in enumerate(branches, 1)
         ]}
         save_cases(self.run_dir, cases)
@@ -310,6 +308,8 @@ class SingleSessionRuntimeTests(unittest.TestCase):
 
     def test_recompile_without_business_changes_keeps_review_valid(self) -> None:
         self._write_plan_and_cases()
+        self.assertEqual(["FN-VIEW"], load_plan(self.run_dir)["performance_basis_refs"])
+        self.assertEqual(["FN-VIEW"], load_plan(self.run_dir)["risk_basis_refs"])
         self.assertEqual("ready", review_run(self.run_dir, _semantic_review(self.run_dir))["status"])
         time.sleep(1.1)
         compile_facts(self.run_dir)
@@ -332,14 +332,14 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                 {"kind": "page", "fact_id": "PAGE", "data": {"name": "告警规则", "menu_path": ["告警管理", "告警规则"], "final_scan_status": "stable", "unhandled_element_refs": []}},
                 {"kind": "function", "fact_id": "FN", "data": {"name": "新建规则"}},
                 {"kind": "test_object", "fact_id": "OBJ", "data": {"name": "AI_TEST_RULE_001", "owner": "current_run", "state": "cleaned"}},
-                {"kind": "element", "fact_id": "EL-NAME", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "规则名称", "interactive": True}},
-                {"kind": "element", "fact_id": "EL-SAVE", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "保存", "interactive": True}},
+                {"kind": "element", "fact_id": "EL-NAME", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "规则名称", "type": "文本框", "interactive": True}},
+                {"kind": "element", "fact_id": "EL-SAVE", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "保存", "type": "按钮", "interactive": True}},
                 {"kind": "transaction", "fact_id": "TX-CREATE", "data": {
                     "function_ref": "FN", "element_refs": ["EL-NAME", "EL-SAVE"], "transaction_type": "create",
                     "test_object_ref": "OBJ", "outcome": "success", "commit_result": "保存成功",
                     "persistence_result": "重新打开后规则名称一致", "effect_result": "规则出现在列表中",
                     "checks": [
-                        {"element_ref": "EL-NAME", "action": "输入AI_TEST_RULE_001", "result": "名称字段显示AI_TEST_RULE_001", "result_anchor": {"assertion": "field_equals", "field": "规则名称", "value": "AI_TEST_RULE_001"}},
+                        {"element_ref": "EL-NAME", "input_class": "valid", "action": "输入AI_TEST_RULE_001", "result": "名称字段显示AI_TEST_RULE_001", "result_anchor": {"assertion": "field_equals", "field": "规则名称", "value": "AI_TEST_RULE_001"}},
                         {"element_ref": "EL-SAVE", "action": "单击保存", "result": "页面提示保存成功", "result_anchor": {"assertion": "contains", "value": "保存成功"}},
                     ],
                 }},
@@ -366,7 +366,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                 }},
                 {"kind": "function", "local_ref": "function", "data": {"name": "刷新"}},
                 {"kind": "element", "local_ref": "element", "data": {
-                    "page_ref": "@page", "function_ref": "@function", "name": "刷新", "interactive": True,
+                    "page_ref": "@page", "function_ref": "@function", "name": "刷新", "type": "按钮", "interactive": True,
                 }},
                 {"kind": "transaction", "data": {
                     "function_ref": "@function", "element_refs": ["@element"], "checks": [
@@ -378,6 +378,66 @@ class SingleSessionRuntimeTests(unittest.TestCase):
             facts = compile_facts(run_dir)
             self.assertEqual(facts["pages"][0]["fact_id"], facts["elements"][0]["page_ref"])
             self.assertEqual(facts["functions"][0]["fact_id"], facts["transactions"][0]["function_ref"])
+
+    def test_persistent_client_ref_merges_exact_updates_across_batches(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "persistent-ref"
+            ensure_run(run_dir, "工具>通用页面")
+            first = append_events(run_dir, [{
+                "kind": "page", "client_ref": "page:main",
+                "data": {"name": "通用页面", "menu_path": ["工具", "通用页面"]},
+            }])[0]
+            second = append_events(run_dir, [{
+                "kind": "page", "client_ref": "page:main",
+                "data": {"final_scan_status": "stable", "unhandled_element_refs": []},
+            }])[0]
+            self.assertEqual(first["fact_id"], second["fact_id"])
+            append_events(run_dir, [{
+                "kind": "function", "client_ref": "function:primary",
+                "data": {"name": "主功能", "page_ref": "@page:main"},
+            }])
+            facts = compile_facts(run_dir)
+            self.assertEqual(1, len(facts["pages"]))
+            self.assertEqual("stable", facts["pages"][0]["final_scan_status"])
+            self.assertEqual(facts["pages"][0]["fact_id"], facts["functions"][0]["page_ref"])
+
+    def test_model_shaped_controls_are_normalized_without_product_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "normalization"
+            ensure_run(run_dir, "工具>通用页面")
+            recorded = append_events(run_dir, [
+                {"kind": "element", "data": {
+                    "name": "目标", "type": "textbox", "required": True,
+                    "valid_input_classes": [
+                        {"class": "textual", "description": "有效文本"},
+                        {"class": "numeric", "description": "有效数字"},
+                    ],
+                }},
+                {"kind": "element", "data": {
+                    "name": "模式", "type": "combobox",
+                    "options": [{"value": "A", "label": "模式A"}, {"value": "B", "label": "模式B"}],
+                }},
+            ])
+            input_element, select_element = [item["data"] for item in recorded]
+            self.assertEqual("input", input_element["type"])
+            self.assertEqual(["valid_textual", "valid_numeric", "empty"], [row["value"] for row in input_element["exploration_requirements"]])
+            self.assertEqual("select", select_element["type"])
+            self.assertEqual("finite", select_element["option_set"])
+            self.assertEqual(["A", "B"], [row["value"] for row in select_element["exploration_requirements"]])
+
+    def test_cli_and_fallback_share_the_same_execution_adapter(self) -> None:
+        canonical_root = ROOT / "docs" / "test-design" / "current"
+        canonical_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=canonical_root) as value:
+            run_dir = Path(value) / "adapter"
+            result = execute_request("record", run_dir, {
+                "kind": "page", "data": {
+                    "name": "通用页面", "menu_path": ["工具", "通用页面"],
+                    "final_scan_status": "stable", "unhandled_element_refs": [],
+                },
+            }, module_path="工具>通用页面")
+            self.assertEqual(1, result["recorded"])
+            self.assertEqual(execute_request("status", run_dir)["state"], pipeline_status(run_dir)["state"])
 
     def test_resume_drops_only_a_truncated_final_event_line(self) -> None:
         path = artifact_paths(self.run_dir)["events"]
@@ -421,6 +481,17 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "stale"):
             complete_deliverables(self.run_dir, ROOT)
 
+    def test_review_recomputes_discovery_instead_of_trusting_semantic_claims(self) -> None:
+        self._write_plan_and_cases()
+        append_events(self.run_dir, [{
+            "kind": "element", "fact_id": "EL-VIEW-MODE",
+            "data": {"type": "unclassified-widget"},
+        }])
+        compile_facts(self.run_dir)
+        review = review_run(self.run_dir, _semantic_review(self.run_dir))
+        self.assertEqual("blocked_by_fact", review["status"])
+        self.assertIn("unclassified_interactive_element", [row["code"] for row in review["deterministic"]["issues"]])
+
     def test_configuration_covers_default_and_each_single_factor_value(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             run_dir = Path(value) / "config-run"
@@ -463,6 +534,15 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         workbook = load_workbook(formal, data_only=False)
         formal_template = load_workbook(ROOT / "docs" / "test-design" / "codebuddy-test-design-template.xlsx", data_only=False)
         self.assertEqual(SHEETS, workbook.sheetnames)
+        function_headers = {cell.value: cell.column for cell in workbook["功能测试用例"][1]}
+        self.assertGreaterEqual(workbook["功能测试用例"].column_dimensions[get_column_letter(function_headers["操作步骤"])].width, 44)
+        self.assertEqual(
+            {"是"},
+            {workbook["功能测试用例"].cell(row, function_headers["是否适合自动化"]).value for row in range(2, 9)},
+        )
+        imported_book = load_workbook(import_file, data_only=False)
+        import_headers = {cell.value: cell.column for cell in imported_book[imported_book.sheetnames[0]][1]}
+        self.assertGreaterEqual(imported_book[imported_book.sheetnames[0]].column_dimensions[get_column_letter(import_headers["测试步骤预期结果"])].width, 44)
         for name in SHEETS:
             self.assertEqual(
                 len(formal_template[name].data_validations.dataValidation),

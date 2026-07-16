@@ -46,10 +46,16 @@ FACT_ID_PREFIXES = {
     "open_item": "OPEN",
 }
 OPEN_ITEM_CATEGORIES = {"external_question", "blocked_condition", "observed_risk"}
-SEMANTIC_REVIEW_AREAS = (
-    "design_context", "scenario_diversity", "action_expected", "dfx_fit",
-    "performance_risk", "automation", "source_claims", "internal_prose",
-)
+ELEMENT_TYPE_ALIASES = {
+    "input": {"input", "textbox", "text", "textarea", "number", "password", "输入", "输入框", "文本框", "文本输入框", "数字框", "密码框"},
+    "select": {"select", "combobox", "dropdown", "listbox", "下拉框", "选择器", "下拉选择"},
+    "trigger": {"button", "submit", "action", "按钮", "操作按钮", "提交按钮"},
+    "toggle": {"switch", "checkbox", "radio", "开关", "复选框", "单选框"},
+    "container": {"tab", "drawer", "dialog", "accordion", "页签", "抽屉", "弹窗", "折叠面板"},
+}
+NEGATIVE_INPUT_CLASSES = {"empty", "invalid", "invalid_format", "duplicate", "boundary_min", "boundary_max"}
+ANGLE_PLACEHOLDER = re.compile(r"<[^<>\r\n]{1,80}>")
+PRIORITY_ALIASES = {"最高": "P0", "高": "P1", "中": "P2", "低": "P3", "high": "P1", "medium": "P2", "low": "P3"}
 
 
 def _now() -> str:
@@ -147,6 +153,7 @@ def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("event.data must be an object")
     data = dict(data)
     if kind == "element":
+        data = _normalize_element(data)
         # Exploration branches are a deterministic DFX decision made when the
         # element is discovered. Callers cannot supply or weaken this list.
         data["exploration_requirements"] = _derive_exploration_requirements(data)
@@ -160,6 +167,10 @@ def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
         for index, check in enumerate(checks, 1):
             if not isinstance(check, dict):
                 raise ValueError(f"transaction check {index} must be an object")
+            check = dict(check)
+            if str(check.get("input_class", "")).strip():
+                check["input_class"] = _normalize_input_class(check["input_class"])
+            checks[index - 1] = check
             if not str(check.get("action", "")).strip() or not str(check.get("result", "")).strip():
                 raise ValueError(f"transaction check {index} requires action and result")
             anchor = check.get("result_anchor")
@@ -220,14 +231,91 @@ def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+def _canonical_element_type(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    for canonical, aliases in ELEMENT_TYPE_ALIASES.items():
+        if raw in aliases:
+            return canonical
+    return raw
+
+
+def _normalize_input_class(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if not normalized or normalized in NEGATIVE_INPUT_CLASSES or normalized.startswith("valid_"):
+        return normalized
+    return "valid" if normalized == "valid" else f"valid_{normalized}"
+
+
+def _value_from_descriptor(value: Any) -> tuple[str, str]:
+    if isinstance(value, dict):
+        raw = next((value.get(key) for key in ("class", "value", "name", "id", "label") if value.get(key) not in (None, "")), "")
+        description = str(value.get("description") or value.get("label") or "").strip()
+        return str(raw).strip(), description
+    return str(value).strip(), ""
+
+
+def _normalize_element(element: dict[str, Any]) -> dict[str, Any]:
+    data = dict(element)
+    source_type = str(data.get("type", "")).strip()
+    canonical = _canonical_element_type(source_type)
+    if not canonical and (
+        data.get("configuration") is True or data.get("option_set") == "finite" or bool(data.get("options"))
+    ):
+        canonical = "select"
+    if canonical:
+        data["type"] = canonical
+    if source_type and canonical != source_type.lower():
+        data.setdefault("source_type", source_type)
+
+    options = data.get("options", [])
+    if isinstance(options, (str, dict)):
+        options = [options]
+    normalized_options = []
+    for option in options if isinstance(options, list) else []:
+        value, _ = _value_from_descriptor(option)
+        if value and value not in normalized_options:
+            normalized_options.append(value)
+    if normalized_options:
+        data["options"] = normalized_options
+        if not str(data.get("option_set", "")).strip():
+            data["option_set"] = "finite"
+
+    constraints = dict(data.get("constraints", {})) if isinstance(data.get("constraints"), dict) else {}
+    configured = data.get("valid_input_classes", constraints.get("valid_input_classes", []))
+    if isinstance(configured, (str, dict)):
+        configured = [configured]
+    normalized_classes: list[str] = []
+    descriptions: dict[str, str] = {}
+    for descriptor in configured if isinstance(configured, list) else []:
+        value, description = _value_from_descriptor(descriptor)
+        normalized = _normalize_input_class(value)
+        if normalized and normalized not in normalized_classes:
+            normalized_classes.append(normalized)
+        if normalized and description:
+            descriptions[normalized] = description
+    if normalized_classes:
+        data["valid_input_classes"] = normalized_classes
+    if descriptions:
+        data["valid_input_class_descriptions"] = descriptions
+
+    known = canonical in ELEMENT_TYPE_ALIASES
+    if data.get("interactive", True) is False:
+        data["classification_status"] = "not_interactive"
+    elif not known:
+        data["classification_status"] = "unknown"
+    elif canonical == "select" and not normalized_options and data.get("dynamic_options") is not True:
+        data["classification_status"] = "incomplete"
+    else:
+        data["classification_status"] = "classified"
+    return data
+
+
 def _is_input_element(element: dict[str, Any]) -> bool:
-    kind = str(element.get("type", "")).strip().lower()
-    return any(marker in kind for marker in ("输入", "input", "textarea", "文本框", "数字框", "密码框"))
+    return _canonical_element_type(element.get("type")) == "input"
 
 
 def _is_trigger_element(element: dict[str, Any]) -> bool:
-    kind = str(element.get("type", "")).strip().lower()
-    return any(marker in kind for marker in ("按钮", "button", "submit"))
+    return _canonical_element_type(element.get("type")) == "trigger"
 
 
 def _action_has_trigger(action: str) -> bool:
@@ -242,9 +330,9 @@ def _derive_exploration_requirements(element: dict[str, Any]) -> list[dict[str, 
         configured_classes = element.get("valid_input_classes", constraints.get("valid_input_classes", []))
         if isinstance(configured_classes, str):
             configured_classes = [configured_classes]
-        valid_classes = list(dict.fromkeys(str(value).strip() for value in configured_classes if str(value).strip()))
+        valid_classes = list(dict.fromkeys(_normalize_input_class(value) for value in configured_classes if str(value).strip()))
         for valid_class in valid_classes or ["valid"]:
-            normalized = valid_class if valid_class == "valid" or valid_class.startswith("valid_") else f"valid_{valid_class}"
+            normalized = valid_class
             requirements.append({
                 "kind": "input_class", "value": normalized, "strategy": "baseline",
                 "reason": "页面语义、需求参考或模型推断得到的独立有效输入等价类",
@@ -255,30 +343,35 @@ def _derive_exploration_requirements(element: dict[str, Any]) -> list[dict[str, 
                 "kind": "input_class", "value": "empty", "strategy": "DFX",
                 "dfx_code": "empty", "dfx_dimension": "DFT功能", "dfx_scenario": "必填项为空",
                 "reason": "页面声明该输入为必填",
+                "independent_case": True,
             })
         if element.get("input_format") or constraints.get("format") or constraints.get("pattern"):
             requirements.append({
                 "kind": "input_class", "value": "invalid_format", "strategy": "DFX",
                 "dfx_code": "invalid_format", "dfx_dimension": "DFT功能", "dfx_scenario": "无效输入格式",
                 "reason": "页面声明了输入格式",
+                "independent_case": True,
             })
         if element.get("unique") is True or constraints.get("unique") is True:
             requirements.append({
                 "kind": "input_class", "value": "duplicate", "strategy": "DFX",
                 "dfx_code": "duplicate", "dfx_dimension": "DFR可靠", "dfx_scenario": "重复值",
                 "reason": "页面声明了唯一性约束",
+                "independent_case": True,
             })
         if element.get("min_value") is not None or element.get("min_length") is not None or constraints.get("min") is not None or constraints.get("min_length") is not None:
             requirements.append({
                 "kind": "input_class", "value": "boundary_min", "strategy": "DFX",
                 "dfx_code": "boundary", "dfx_dimension": "DFT功能", "dfx_scenario": "输入下边界",
                 "reason": "页面声明了最小值或最小长度",
+                "independent_case": True,
             })
         if element.get("max_value") is not None or element.get("max_length") is not None or constraints.get("max") is not None or constraints.get("max_length") is not None:
             requirements.append({
                 "kind": "input_class", "value": "boundary_max", "strategy": "DFX",
                 "dfx_code": "boundary", "dfx_dimension": "DFT功能", "dfx_scenario": "输入上边界",
                 "reason": "页面声明了最大值或最大长度",
+                "independent_case": True,
             })
     if element.get("option_set") == "finite":
         for option in element.get("options", []):
@@ -318,6 +411,13 @@ def _requirement_is_observed(requirement: dict[str, Any], checks: list[dict[str,
     if kind == "option_value":
         return value in {str(check.get("option_value")) for check in checks if check.get("option_value") is not None}
     return False
+
+
+def _matching_requirements(element: dict[str, Any], check: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        requirement for requirement in element.get("exploration_requirements", [])
+        if _requirement_is_observed(requirement, [check])
+    ]
 
 
 def _validate_new_transactions(run_dir: Path, items: list[dict[str, Any]]) -> None:
@@ -413,17 +513,34 @@ def append_event(run_dir: Path, event: dict[str, Any]) -> dict[str, Any]:
 def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Validate a complete batch, resolve local aliases, then append it once.
 
-    New facts receive runtime IDs.  A batch may give an event ``local_ref`` and use
-    ``@local_ref`` in later event data; aliases are removed before persistence.
-    Existing facts are updated by passing their returned ``fact_id``.
+    New facts receive runtime IDs. ``local_ref`` is batch-local; ``client_ref`` is
+    a persistent exact key that is safe across interrupted batches. Existing facts
+    are merged by fact_id/client_ref and are never fuzzy-matched.
     """
     paths = artifact_paths(run_dir)
     raw_items = [dict(event) for event in events]
-    aliases: dict[str, str] = {}
+    existing_events = load_events(run_dir)
+    client_refs: dict[str, tuple[str, str]] = {}
+    for existing in existing_events:
+        client_ref = str(existing.get("client_ref", "")).strip()
+        if client_ref:
+            client_refs[client_ref] = (str(existing.get("fact_id", "")), str(existing.get("kind", "")))
+    aliases: dict[str, str] = {key: value[0] for key, value in client_refs.items()}
     items: list[dict[str, Any]] = []
     generated_ids: set[str] = set()
     for raw in raw_items:
         alias = str(raw.pop("local_ref", "")).strip()
+        client_ref = str(raw.get("client_ref", "")).strip()
+        if "client_ref" in raw and not client_ref:
+            raise ValueError("client_ref must be a non-empty exact key")
+        existing_ref = client_refs.get(client_ref) if client_ref else None
+        if existing_ref:
+            if str(raw.get("kind", "")).strip() != existing_ref[1]:
+                raise ValueError(f"client_ref {client_ref!r} is already bound to kind {existing_ref[1]!r}")
+            provided = str(raw.get("fact_id", "")).strip()
+            if provided and provided != existing_ref[0]:
+                raise ValueError(f"client_ref {client_ref!r} is already bound to fact_id {existing_ref[0]!r}")
+            raw["fact_id"] = existing_ref[0]
         provided_id = bool(str(raw.get("fact_id", "")).strip())
         item = _prepare_event(raw)
         if not provided_id:
@@ -432,6 +549,11 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
             if alias in aliases:
                 raise ValueError(f"duplicate local_ref: {alias}")
             aliases[alias] = item["fact_id"]
+        if client_ref:
+            if client_ref in aliases and aliases[client_ref] != item["fact_id"]:
+                raise ValueError(f"duplicate client_ref: {client_ref}")
+            aliases[client_ref] = item["fact_id"]
+            client_refs[client_ref] = (str(item["fact_id"]), str(item["kind"]))
         items.append(item)
 
     def resolve(value: Any) -> Any:
@@ -455,7 +577,7 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
     # fuzzy-matched.  Provisional IDs are rewritten in later batch references so
     # local_ref remains safe when an earlier item is absorbed.
     latest: dict[str, dict[str, Any]] = {}
-    for existing in load_events(run_dir):
+    for existing in existing_events:
         prepared = _prepare_event(existing)
         latest[str(prepared["fact_id"])] = prepared
     signatures = {
@@ -478,12 +600,15 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
     for original in items:
         item = replace_refs(original)
         same_id = latest.get(str(item["fact_id"]))
-        if item.get("kind") == "scope" and same_id and same_id.get("kind") == "scope":
+        if same_id:
+            if same_id.get("kind") != item.get("kind"):
+                raise ValueError(f"fact_id {item['fact_id']!r} cannot change kind")
             merged_data = {**same_id.get("data", {}), **item.get("data", {})}
-            for stable_field in ("run_id", "created_at"):
-                if same_id.get("data", {}).get(stable_field) not in (None, ""):
-                    merged_data[stable_field] = same_id["data"][stable_field]
-            item["data"] = merged_data
+            if item.get("kind") == "scope":
+                for stable_field in ("run_id", "created_at"):
+                    if same_id.get("data", {}).get(stable_field) not in (None, ""):
+                        merged_data[stable_field] = same_id["data"][stable_field]
+            item = _prepare_event({**item, "data": merged_data})
         signature = _content_digest({"kind": item.get("kind"), "status": item.get("status", "active"), "data": item.get("data", {})})
         duplicate_id = (
             signatures.get(signature)
@@ -721,6 +846,26 @@ def inspect_discovery(run_dir: Path, facts: dict[str, Any] | None = None) -> lis
         function_ref = str(element.get("function_ref", ""))
         if function_ref and function_ref not in function_refs:
             issues.append(_issue("broken_reference", "blocker", "facts.json", f"element {ref} references unknown function {function_ref}", "correct this element relation"))
+        classification = str(element.get("classification_status", ""))
+        if element.get("interactive", True) and classification in {"unknown", "incomplete", ""}:
+            repair = "record the control's actual semantic type"
+            if _canonical_element_type(element.get("type")) == "select":
+                repair = "expand the control and record its finite options, or explicitly mark dynamic_options"
+            issues.append(_issue(
+                "unclassified_interactive_element", "blocker", "facts.json",
+                f"interactive element {ref} is not completely classified",
+                repair,
+            ))
+        if (
+            element.get("interactive", True)
+            and (_is_input_element(element) or element.get("option_set") == "finite")
+            and not element.get("exploration_requirements")
+        ):
+            issues.append(_issue(
+                "missing_exploration_plan", "blocker", "facts.json",
+                f"interactive element {ref} has no predeclared exploration branches",
+                "repair this element registration before continuing interaction",
+            ))
         if (
             element.get("interactive", True)
             and element.get("status") not in NON_ACTIONABLE_STATUSES
@@ -862,18 +1007,15 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
             for index, check in enumerate(transaction.get("checks", []), 1):
                 element_ref = str(check.get("element_ref", ""))
                 element = element_map.get(element_ref, {})
-                option_value = str(check.get("option_value", "")).strip()
-                input_class = str(check.get("input_class", "")).strip()
-                if element.get("option_set") == "finite" and option_value:
+                for requirement in _matching_requirements(element, check):
                     required_case_branches.append({
-                        "kind": "finite_option", "element_ref": element_ref, "value": option_value,
-                        "strategy": "baseline", "independent_case": True,
-                        "related_check": {"transaction_ref": transaction_ref, "check_index": index},
-                    })
-                elif input_class == "valid" or input_class.startswith("valid_"):
-                    required_case_branches.append({
-                        "kind": "valid_input_class", "element_ref": element_ref, "value": input_class,
-                        "strategy": "baseline", "independent_case": True,
+                        "kind": str(requirement.get("kind", "")),
+                        "element_ref": element_ref,
+                        "value": str(requirement.get("value", "")),
+                        "strategy": str(requirement.get("strategy", "baseline")).lower(),
+                        "dfx_dimension": str(requirement.get("dfx_dimension", "DFT功能")),
+                        "dfx_scenario": str(requirement.get("dfx_scenario", "正向流程")),
+                        "independent_case": bool(requirement.get("independent_case")),
                         "related_check": {"transaction_ref": transaction_ref, "check_index": index},
                     })
         unique_hints = _function_dfx_hints(owned_elements, owned_transactions, function_ref)
@@ -923,8 +1065,8 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
         "source": "facts.json",
         "checkpoint": _current_checkpoint(facts),
         "specialist_decisions": {
-            "performance": "填写 performance_scenarios；不适用时填写 performance_not_applicable_reason",
-            "risk": "填写 risks；无风险时填写 risk_not_applicable_reason",
+            "performance": "填写 performance_scenarios；不适用时只填写真实理由，事实引用由运行时派生",
+            "risk": "填写 risks；无风险时只填写真实理由，事实引用由运行时派生",
         },
         "dfx_evaluation": {
             "candidate_dimensions": ["DFT功能", "DFB业务", "DFS安全", "DFR可靠", "DFU可用", "DFI接口", "DFC兼容", "DFP性能", "DFM维护", "DFD部署", "DFO运维", "DFX极端"],
@@ -1018,8 +1160,16 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
         issues.append(_issue("missing_function", "repairable", "case-plan.json", f"functions missing from plan: {sorted(missing_functions)}", "plan only the missing function blocks"))
     if not plan.get("performance_scenarios") and not str(plan.get("performance_not_applicable_reason", "")).strip():
         issues.append(_issue("missing_performance_decision", "repairable", "case-plan.json", "performance design is empty without an explicit applicability reason", "record the specialist decision during planning", function_ref="__global__"))
+    if not plan.get("performance_scenarios"):
+        refs = plan.get("performance_basis_refs", [])
+        if not isinstance(refs, list) or not refs or any(str(ref) not in fact_ids for ref in refs):
+            issues.append(_issue("unsupported_performance_decision", "repairable", "case-plan.json", "performance not-applicable decision lacks valid fact basis", "reference the observed facts used for this decision", function_ref="__global__"))
     if not plan.get("risks") and not str(plan.get("risk_not_applicable_reason", "")).strip():
         issues.append(_issue("missing_risk_decision", "repairable", "case-plan.json", "risk design is empty without an explicit applicability reason", "record the specialist decision during planning", function_ref="__global__"))
+    if not plan.get("risks"):
+        refs = plan.get("risk_basis_refs", [])
+        if not isinstance(refs, list) or not refs or any(str(ref) not in fact_ids for ref in refs):
+            issues.append(_issue("unsupported_risk_decision", "repairable", "case-plan.json", "risk not-applicable decision lacks valid fact basis", "reference the observed facts used for this decision", function_ref="__global__"))
     for scenario in plan.get("performance_scenarios", []):
         scenario_id = str(scenario.get("scenario_id", ""))
         required = ("flow", "test_type", "concurrency", "throughput", "response_time", "data_scale", "duration", "metrics", "pass_criteria", "data_strategy", "risk", "included")
@@ -1094,28 +1244,44 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
         for index, check in enumerate(transaction.get("checks", []), 1):
             element_ref = str(check.get("element_ref", ""))
             element = elements.get(element_ref, {})
-            option_value = str(check.get("option_value", "")).strip()
-            input_class = str(check.get("input_class", "")).strip()
-            if element.get("option_set") == "finite" and option_value:
-                label = f"有限选项 {element.get('name') or element_ref}={option_value}"
-            elif input_class == "valid" or input_class.startswith("valid_"):
-                label = f"有效输入类别 {element.get('name') or element_ref}={input_class}"
-            else:
+            requirements = [row for row in _matching_requirements(element, check) if row.get("independent_case")]
+            if not requirements:
                 continue
+            if len(requirements) > 1:
+                issues.append(_issue(
+                    "ambiguous_exploration_branch", "repairable", "case-plan.json",
+                    f"check {(transaction_ref, index)} matches multiple independent requirements",
+                    "split the observed branches before planning", function_ref=function_ref,
+                ))
+                continue
+            requirement = requirements[0]
+            label = f"{requirement.get('kind')} {element.get('name') or element_ref}={requirement.get('value')}"
             assignment = assignment_by_check.get((transaction_ref, index), {})
             case_id = str(assignment.get("case_id", "")) if assignment.get("disposition") == "case" else ""
             if not case_id:
                 issues.append(_issue(
                     "independent_branch_not_case", "repairable", "case-plan.json",
-                    f"{label} must produce its own executable case", "assign this observed branch to one baseline case",
+                    f"{label} must produce its own executable case", "assign this observed branch to one case",
                     function_ref=function_ref,
                 ))
                 continue
             independent_by_case.setdefault(case_id, []).append(label)
-            if str(planned_cases.get(case_id, {}).get("strategy", "")).lower() != "baseline":
+            expected_strategy = str(requirement.get("strategy", "baseline")).lower()
+            if str(planned_cases.get(case_id, {}).get("strategy", "")).lower() != expected_strategy:
                 issues.append(_issue(
-                    "independent_branch_not_baseline", "repairable", "case-plan.json",
-                    f"{label} must be a baseline case", "set only this intent to baseline",
+                    "branch_strategy_mismatch", "repairable", "case-plan.json",
+                    f"{label} must use {expected_strategy} strategy", "align this intent with its predeclared exploration strategy",
+                    function_ref=function_ref, case_id=case_id,
+                ))
+            planned_case = planned_cases.get(case_id, {})
+            if expected_strategy == "dfx" and (
+                str(planned_case.get("dfx_dimension", "")) != str(requirement.get("dfx_dimension", ""))
+                or str(planned_case.get("dfx_scenario", "")) != str(requirement.get("dfx_scenario", ""))
+            ):
+                issues.append(_issue(
+                    "branch_dfx_mismatch", "repairable", "case-plan.json",
+                    f"{label} DFX metadata differs from the predeclared requirement",
+                    "copy the requirement's DFX dimension and scenario into this intent",
                     function_ref=function_ref, case_id=case_id,
                 ))
     for case_id, labels in independent_by_case.items():
@@ -1124,7 +1290,7 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
             issues.append(_issue(
                 "combined_independent_branches", "repairable", "case-plan.json",
                 f"case {case_id} combines independent branches: {labels}",
-                "create one baseline case for each finite option or valid input class",
+                "create one case for each independent exploration branch",
                 function_ref=function_ref, case_id=case_id,
             ))
     return issues
@@ -1148,15 +1314,11 @@ def _normalize_core_prose(steps: list[dict[str, Any]]) -> tuple[tuple[str, str],
 
 def _expected_satisfies_anchor(expected: str, check: dict[str, Any]) -> bool:
     anchor = check.get("result_anchor") if isinstance(check.get("result_anchor"), dict) else {}
-    assertion = str(anchor.get("assertion", ""))
-    if assertion == "observed_text" or not assertion:
-        value = str(anchor.get("value") or check.get("result", "")).strip()
-        return not value or value in expected
     raw_tokens = anchor.get("stable_tokens", anchor.get("tokens"))
     if raw_tokens not in (None, "", []):
         values = raw_tokens if isinstance(raw_tokens, list) else [raw_tokens]
     else:
-        value = anchor.get("value")
+        value = anchor.get("value") or check.get("result", "")
         values = value if isinstance(value, list) else [value]
     tokens = [str(item).strip() for item in values if item not in (None, "") and str(item).strip()]
     return all(token in expected for token in tokens)
@@ -1232,9 +1394,13 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
         for field in ("priority", "test_type", "test_data"):
             if not str(case.get(field, "")).strip():
                 issues.append(_issue("empty_field", "repairable", "function-cases.json", f"case {case_id} has empty {field}", "complete this field with concrete content", **context))
+        if str(case.get("priority", "")) not in {"P0", "P1", "P2", "P3"}:
+            issues.append(_issue("invalid_priority", "repairable", "function-cases.json", f"case {case_id} has unsupported priority", "use P0/P1/P2/P3", **context))
         for field in ("automation_value", "automation_priority"):
             if not str(case.get(field, "")).strip():
                 issues.append(_issue("missing_automation_decision", "repairable", "function-cases.json", f"case {case_id} has empty {field}", "write the lightweight case-level automation decision", **context))
+        if str(case.get("automation_priority", "")) not in {"P0", "P1", "P2", "P3"}:
+            issues.append(_issue("invalid_priority", "repairable", "function-cases.json", f"case {case_id} has unsupported automation priority", "use P0/P1/P2/P3", **context))
         preconditions = case.get("preconditions")
         if not isinstance(preconditions, list) or not preconditions or any(not str(value).strip() for value in preconditions):
             issues.append(_issue("empty_field", "repairable", "function-cases.json", f"case {case_id} has no explicit preconditions", "write concrete conditions or '无特殊前置条件'", **context))
@@ -1301,6 +1467,8 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
             issues.append(_issue("screenshot_step", "repairable", "function-cases.json", f"case {case_id} asks the tester to take a screenshot", "replace it with an observable assertion", **context))
         if any(marker.lower() in prose.lower() for marker in PLACEHOLDER_MARKERS):
             issues.append(_issue("placeholder", "repairable", "function-cases.json", f"case {case_id} contains placeholder prose", "supply concrete masked data", **context))
+        if ANGLE_PLACEHOLDER.search(prose):
+            issues.append(_issue("placeholder", "repairable", "function-cases.json", f"case {case_id} contains unresolved angle-bracket data", "replace it with concrete controlled test data", **context))
         if URL_PATTERN.search(prose) or IPV4_PATTERN.search(prose):
             issues.append(_issue("sensitive_network", "blocker", "function-cases.json", f"case {case_id} exposes a URL or IP address", "replace it with a controlled masked test-data reference", **context))
         refs = {str(value) for value in case.get("fact_refs", [])}
@@ -1386,6 +1554,11 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("deprecated parallel coverage ledgers are not accepted; use check_assignments only")
     value["source"] = "facts.json"
     value["source_digest"] = _planning_fact_digest(facts)
+    function_basis = [str(row.get("fact_id", "")) for row in facts.get("functions", []) if str(row.get("fact_id", ""))]
+    if not value.get("performance_scenarios") and str(value.get("performance_not_applicable_reason", "")).strip() and "performance_basis_refs" not in value:
+        value["performance_basis_refs"] = function_basis
+    if not value.get("risks") and str(value.get("risk_not_applicable_reason", "")).strip() and "risk_basis_refs" not in value:
+        value["risk_basis_refs"] = function_basis
     transactions = {str(row["fact_id"]): row for row in facts.get("transactions", [])}
     by_case: dict[str, list[dict[str, Any]]] = {}
     for assignment in value.get("check_assignments", []):
@@ -1440,7 +1613,10 @@ def _merge_plan_functions(run_dir: Path, incoming: dict[str, Any]) -> tuple[dict
     unknown_functions = affected - fact_function_refs
     if unknown_functions:
         raise ValueError(f"plan upsert references unknown functions: {sorted(unknown_functions)}")
-    if any(key in incoming for key in ("risks", "risk_not_applicable_reason", "performance_scenarios", "performance_not_applicable_reason")):
+    if any(key in incoming for key in (
+        "risks", "risk_not_applicable_reason", "risk_basis_refs",
+        "performance_scenarios", "performance_not_applicable_reason", "performance_basis_refs",
+    )):
         affected.add("__global__")
     transaction_owner = {str(row.get("fact_id", "")): str(row.get("function_ref", "")) for row in facts.get("transactions", [])}
     incoming_assignments: list[dict[str, Any]] = []
@@ -1532,6 +1708,9 @@ def _assign_case_sources(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]
         for case in function.get("cases", [])
     }
     for case in value.get("cases", []):
+        for field in ("priority", "automation_priority"):
+            raw = str(case.get(field, "")).strip()
+            case[field] = PRIORITY_ALIASES.get(raw.lower(), PRIORITY_ALIASES.get(raw, raw.upper()))
         case_id = str(case.get("case_id", ""))
         planned = planned_cases.get(case_id, {})
         steps = case.get("steps", []) if isinstance(case.get("steps"), list) else []
@@ -1690,7 +1869,12 @@ def review_run(run_dir: Path, semantic_review: dict[str, Any] | None = None) -> 
     facts = load_facts(run_dir)
     plan = load_plan(run_dir)
     cases = load_cases(run_dir)
-    deterministic_issues = inspect_plan(run_dir) + inspect_cases(run_dir) + inspect_cross_artifacts(run_dir)
+    deterministic_issues = (
+        inspect_discovery(run_dir, facts)
+        + inspect_plan(run_dir)
+        + inspect_cases(run_dir)
+        + inspect_cross_artifacts(run_dir)
+    )
     issues = list(deterministic_issues)
     unresolved = [
         item for item in facts.get("open_items", [])
@@ -1708,15 +1892,15 @@ def review_run(run_dir: Path, semantic_review: dict[str, Any] | None = None) -> 
     semantic_issues: list[dict[str, str]] = []
     expected_case_ids = [str(case.get("case_id", "")) for case in cases.get("cases", [])]
     reviewed_case_ids = [str(value) for value in semantic.get("reviewed_case_ids", [])]
-    semantic_checks = semantic.get("checks") if isinstance(semantic.get("checks"), dict) else {}
     if not semantic:
         semantic_issues.append(_issue("semantic_review_missing", "repairable", "review.json", "the one model semantic review has not been supplied", "review the compact facts/plan/case projection once"))
     else:
         if reviewed_case_ids != expected_case_ids:
             semantic_issues.append(_issue("semantic_review_scope", "repairable", "review.json", "semantic review case order/set differs from function-cases.json", "review the current case set once in its existing order"))
-        missing_areas = [area for area in SEMANTIC_REVIEW_AREAS if semantic_checks.get(area) != "pass"]
-        if missing_areas:
-            semantic_issues.append(_issue("semantic_review_incomplete", "repairable", "review.json", f"semantic review did not pass areas: {missing_areas}", "complete only the missing semantic judgments"))
+        if not str(semantic.get("summary", "")).strip():
+            semantic_issues.append(_issue("semantic_review_incomplete", "repairable", "review.json", "semantic review lacks a concise conclusion", "state the actual semantic finding once"))
+        if not isinstance(semantic.get("issues", []), list):
+            semantic_issues.append(_issue("semantic_review_incomplete", "repairable", "review.json", "semantic review issues must be an array", "supply concrete findings or an empty array"))
         for index, item in enumerate(semantic.get("issues", []), 1):
             if not isinstance(item, dict) or not str(item.get("message", "")).strip():
                 semantic_issues.append(_issue("invalid_semantic_issue", "repairable", "review.json", f"semantic issue {index} is malformed", "record a concrete message and local repair"))
@@ -1766,7 +1950,7 @@ def review_run(run_dir: Path, semantic_review: dict[str, Any] | None = None) -> 
                 else "pass"
             ),
             "reviewed_case_ids": reviewed_case_ids,
-            "checks": semantic_checks,
+            "summary": str(semantic.get("summary", "")),
             "issues": semantic_issues,
             "local_fixes": semantic.get("local_fixes", []),
         },

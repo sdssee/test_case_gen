@@ -35,6 +35,35 @@ MULTILINE_HEADERS = {
 }
 INTERNAL_EXPORT_PATTERN = re.compile(r"(?:\b(?:UID|UUID|DOM|ARIA|XPATH)\b|\b(?:EL|TX|FN|PAGE|EVT)-[A-Z0-9_-]+\b)", re.IGNORECASE)
 EXCEL_ERRORS = {"#NULL!", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#N/A", "#GETTING_DATA"}
+FORMAL_WIDTHS = {
+    "测试设计总览": {
+        "测试范围": 30, "不测范围": 26, "主要风险": 28,
+        "准入条件": 32, "准出条件": 32, "待确认问题": 28,
+    },
+    "需求用户故事拆解": {
+        "用户故事/需求描述": 34, "业务价值": 28, "验收标准": 34, "业务规则": 32,
+        "前置条件": 30, "后置影响": 30, "依赖系统": 28, "待确认问题": 26,
+    },
+    "测试场景矩阵": {"测试对象/页面元素": 28, "输入数据/状态条件": 30, "观察点": 42, "备注": 28},
+    "功能测试用例": {"用例标题": 34, "前置条件": 30, "测试数据": 28, "操作步骤": 44, "预期结果": 44, "备注": 26},
+    "页面元素覆盖清单": {
+        "页面 URL/菜单路径": 26, "交互方式": 40, "适用DFX场景": 28,
+        "前置状态/权限": 30, "预期行为": 40, "业务依据/规则来源": 28,
+        "覆盖用例 ID": 26, "待确认问题/备注": 28,
+    },
+    "性能测试设计": {
+        "业务链路": 26, "DFX场景": 28, "监控指标": 28, "通过标准": 30,
+        "造数策略": 26, "风险说明": 30, "是否纳入本轮测试": 18,
+    },
+    "风险与待确认问题": {"描述": 34, "影响范围": 28, "建议处理方式": 32},
+}
+IMPORT_WIDTHS = {
+    "一级模块名称": 16, "二级模块名称": 16, "三级模块名称": 16,
+    "四级模块名称": 16, "五级模块名称": 16, "测试用例名称": 34,
+    "测试步骤描述": 44, "测试步骤预期结果": 44, "测试用例说明": 24,
+    "测试用例序号": 10, "测试类型": 14, "测试用例级别": 14, "执行方式": 12,
+    "前置条件": 30, "标签": 24, "备注": 24,
+}
 
 
 def _text(value: Any) -> str:
@@ -159,6 +188,30 @@ def _assert_structure_preserved(before: dict[str, Any], workbook, label: str) ->
         raise ValueError(f"{label} template structure changed unexpectedly: {changed or 'sheet order'}")
 
 
+def _apply_width_profile(workbook, profiles: dict[str, dict[str, float]]) -> None:
+    for sheet_name, widths in profiles.items():
+        if sheet_name not in workbook.sheetnames:
+            continue
+        worksheet = workbook[sheet_name]
+        headers = header_map(worksheet)
+        for header, width in widths.items():
+            if header in headers:
+                worksheet.column_dimensions[get_column_letter(headers[header])].width = width
+
+
+def _automation_suitable(case: dict[str, Any], plan_functions: dict[str, dict[str, Any]]) -> str:
+    explicit = case.get("automation")
+    if explicit is True:
+        return "是"
+    if explicit is False:
+        return "否"
+    profile = plan_functions.get(str(case.get("function_ref", "")), {}).get("automation_profile", {})
+    level = str(profile.get("level", "")).strip().lower() if isinstance(profile, dict) else ""
+    if level in {"不适用", "none", "n/a", "na"}:
+        return "否"
+    return "是" if str(case.get("automation_value", "")).strip() and str(case.get("automation_priority", "")).strip() else "待评估"
+
+
 def _sample_formulas(worksheet, row: int = 2) -> dict[int, str]:
     return {
         cell.column: str(cell.value)
@@ -242,17 +295,17 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
     rows["测试设计总览"].append({
         "项目/模块": _text(scope.get("module_path")),
         "需求名称": _text(scope.get("requirement_name") or scope.get("module_path")),
-        "版本/迭代": _text(scope.get("version")),
-        "测试负责人": _text(scope.get("owner")),
-        "需求来源": _text(scope.get("source")),
+        "版本/迭代": _text(scope.get("version") or "未提供"),
+        "测试负责人": _text(scope.get("owner") or "未提供"),
+        "需求来源": _text(scope.get("source") or "页面实探"),
         "测试范围": _text(scope.get("test_scope") or "；".join(functions.get(ref, ref) for ref in function_order)),
-        "不测范围": _text(scope.get("out_of_scope")),
+        "不测范围": _text(scope.get("out_of_scope") or "未提供明确排除项"),
         "测试类型": "功能测试；适用的DFX专项设计",
-        "测试环境": _text(scope.get("environment")),
-        "主要风险": "；".join(_text(row.get("description")) for row in risks if row.get("description")),
-        "准入条件": "；".join(dependency_summary),
-        "准出条件": "；".join(acceptance_summary),
-        "待确认问题": "；".join(_text(row.get("description") or row.get("reason")) for row in pending),
+        "测试环境": _text(scope.get("environment") or "未提供"),
+        "主要风险": "；".join(_text(row.get("description")) for row in risks if row.get("description")) or _text(plan.get("risk_not_applicable_reason") or "未发现需单独登记的风险"),
+        "准入条件": "；".join(dependency_summary) or "按功能设计上下文准备访问权限与受控数据",
+        "准出条件": "；".join(acceptance_summary) or "已计划场景均获得明确且可观察的结果",
+        "待确认问题": "；".join(_text(row.get("description") or row.get("reason")) for row in pending) or "无待确认项",
     })
     supplied_by_id = {
         _text(row.get("requirement_id")): row for row in supplied_requirements if _text(row.get("requirement_id"))
@@ -306,7 +359,7 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
             "前置条件": _text(requirement.get("preconditions")),
             "后置影响": _text(requirement.get("postconditions")),
             "依赖系统": _text(requirement.get("dependencies")),
-            "待确认问题": _text(requirement.get("unresolved")),
+            "待确认问题": _text(requirement.get("unresolved") or "无待确认项"),
         })
     for function in plan.get("functions", []):
         function_ref = str(function.get("function_ref", ""))
@@ -354,7 +407,7 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
             "预期结果": expected_text,
             "实际结果": "",
             "执行状态": "未执行",
-            "是否适合自动化": "是" if case.get("automation") is True else ("否" if case.get("automation") is False else "待评估"),
+            "是否适合自动化": _automation_suitable(case, plan_functions),
             "关联风险": _text(case.get("risks")),
             "备注": _text(case.get("notes")),
         })
@@ -403,8 +456,7 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
             "风险等级": "无", "建议处理方式": "无需额外处理", "负责人": "不适用", "状态": "已确认",
         })
     for case in case_document.get("cases", []):
-        automation = case.get("automation")
-        suitable = "是" if automation is True else ("否" if automation is False else "待评估")
+        suitable = _automation_suitable(case, plan_functions)
         profile = plan_functions.get(str(case.get("function_ref", "")), {}).get("automation_profile", {})
         if not isinstance(profile, dict):
             profile = {}
@@ -551,6 +603,7 @@ def assemble_formal_workbook(run_dir: Path, template: Path, output: Path) -> dic
     workbook = load_workbook(temporary)
     if workbook.sheetnames != SHEETS:
         raise ValueError(f"formal template must contain exactly the 8 standard sheets: {SHEETS}")
+    _apply_width_profile(workbook, FORMAL_WIDTHS)
     structure = _workbook_structure(workbook)
     counts: dict[str, int] = {}
     for sheet_name in SHEETS:
@@ -584,6 +637,7 @@ def generate_import_workbook(run_dir: Path, template: Path, output: Path, module
     shutil.copy2(template, temporary)
     cases = load_cases(run_dir).get("cases", [])
     target_book = load_workbook(temporary)
+    _apply_width_profile(target_book, {target_book.sheetnames[0]: IMPORT_WIDTHS})
     structure = _workbook_structure(target_book)
     target = target_book[target_book.sheetnames[0]]
     target_headers = header_map(target)
@@ -643,6 +697,7 @@ def _verify_generated_deliverables(
 ) -> None:
     formal = load_workbook(formal_path, data_only=False)
     formal_template = load_workbook(formal_template_path, data_only=False)
+    _apply_width_profile(formal_template, FORMAL_WIDTHS)
     _assert_structure_preserved(_workbook_structure(formal_template), formal, "saved formal workbook")
     if formal.sheetnames != SHEETS:
         raise ValueError("generated formal workbook does not retain the exact 8-sheet contract")
@@ -684,6 +739,7 @@ def _verify_generated_deliverables(
         raise ValueError("generated formal workbook has a missing, blank, or extra function-case row")
     imported = load_workbook(import_path, data_only=False)
     import_template = load_workbook(import_template_path, data_only=False)
+    _apply_width_profile(import_template, {import_template.sheetnames[0]: IMPORT_WIDTHS})
     _assert_structure_preserved(_workbook_structure(import_template), imported, "saved import workbook")
     import_ws = imported[imported.sheetnames[0]]
     import_headers = header_map(import_ws)

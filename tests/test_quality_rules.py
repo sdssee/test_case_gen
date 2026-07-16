@@ -77,7 +77,7 @@ class QualityRuleTests(unittest.TestCase):
     def test_persisted_facts_reject_unmasked_url_or_ip(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             run_dir = Path(value) / "sensitive"
-            ensure_run(run_dir, "网络>网络诊断")
+            ensure_run(run_dir, "工具>目标校验")
             with self.assertRaisesRegex(ValueError, "mask URLs and IP"):
                 append_events(run_dir, [{"kind": "element", "data": {
                     "name": "目标地址", "type": "文本输入框", "default_value": "192.168.1.1"
@@ -133,12 +133,12 @@ class QualityRuleTests(unittest.TestCase):
     def test_dfx_input_branches_are_declared_before_interaction_without_rejecting_progress(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             run_dir = Path(value) / "diagnostics"
-            ensure_run(run_dir, "网络>网络诊断")
+            ensure_run(run_dir, "工具>目标校验")
             base = [
-                {"kind": "page", "fact_id": "PAGE", "data": {"name": "网络诊断", "menu_path": ["网络", "网络诊断"], "final_scan_status": "stable", "unhandled_element_refs": []}},
-                {"kind": "function", "fact_id": "FN", "data": {"name": "Traceroute"}},
+                {"kind": "page", "fact_id": "PAGE", "data": {"name": "目标校验", "menu_path": ["工具", "目标校验"], "final_scan_status": "stable", "unhandled_element_refs": []}},
+                {"kind": "function", "fact_id": "FN", "data": {"name": "目标校验"}},
                 {"kind": "element", "fact_id": "EL-INPUT", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "目标地址", "type": "文本输入框", "interactive": True, "required": True}},
-                {"kind": "element", "fact_id": "EL-RUN", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "Traceroute", "type": "按钮", "interactive": True}},
+                {"kind": "element", "fact_id": "EL-RUN", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "执行", "type": "按钮", "interactive": True}},
             ]
             recorded = append_events(run_dir, base)
             input_element = next(item for item in recorded if item["fact_id"] == "EL-INPUT")
@@ -149,7 +149,7 @@ class QualityRuleTests(unittest.TestCase):
             incomplete = {"kind": "transaction", "fact_id": "TX", "data": {
                 "function_ref": "FN", "element_refs": ["EL-INPUT", "EL-RUN"], "checks": [
                     {"element_ref": "EL-INPUT", "used_element_refs": ["EL-INPUT", "EL-RUN"], "trigger_element_ref": "EL-RUN",
-                     "input_class": "valid_domain", "action": "输入有效域名并点击Traceroute", "result": "显示路由追踪结果", "result_anchor": {"assertion": "contains", "value": "路由追踪结果"}},
+                     "input_class": "valid_text", "action": "输入有效内容并点击执行", "result": "显示校验结果", "result_anchor": {"assertion": "contains", "value": "校验结果"}},
                 ]
             }}
             append_events(run_dir, [incomplete])
@@ -159,7 +159,7 @@ class QualityRuleTests(unittest.TestCase):
             append_events(run_dir, [{"kind": "transaction", "fact_id": "TX-EMPTY", "data": {
                 "function_ref": "FN", "element_refs": ["EL-INPUT", "EL-RUN"], "checks": [
                     {"element_ref": "EL-INPUT", "used_element_refs": ["EL-INPUT", "EL-RUN"], "trigger_element_ref": "EL-RUN",
-                     "input_class": "empty", "action": "清空目标地址并点击Traceroute", "result": "显示地址不合法提示", "result_anchor": {"assertion": "contains", "value": "不合法"}}
+                     "input_class": "empty", "action": "清空目标内容并点击执行", "result": "显示内容不能为空提示", "result_anchor": {"assertion": "contains", "value": "不能为空"}}
                 ]
             }}])
             self.assertTrue(checkpoint_facts(run_dir)["ready"])
@@ -167,21 +167,21 @@ class QualityRuleTests(unittest.TestCase):
             empty = next(item for item in hints if item["code"] == "empty")
             self.assertEqual([{"transaction_ref": "TX-EMPTY", "check_index": 1}], empty["related_checks"])
             save_plan(run_dir, {
-                "schema_version": "2.0", **_plan_decisions(), "functions": [{"function_ref": "FN", "name": "Traceroute", **_plan_metadata("执行路由追踪"), "cases": [
-                    {"case_id": "TC-VALID", "page_ref": "PAGE", "title": "正常域名追踪", "strategy": "baseline"},
-                    {"case_id": "TC-EMPTY", "page_ref": "PAGE", "title": "空地址校验", "strategy": "DFX", "dfx_dimension": "DFT功能", "dfx_scenario": "必填项为空"},
+                "schema_version": "2.0", **_plan_decisions(), "functions": [{"function_ref": "FN", "name": "目标校验", **_plan_metadata("执行目标校验"), "cases": [
+                    {"case_id": "TC-VALID", "page_ref": "PAGE", "title": "有效内容校验", "strategy": "baseline"},
+                    {"case_id": "TC-EMPTY", "page_ref": "PAGE", "title": "空内容校验", "strategy": "DFX", "dfx_dimension": "DFT功能", "dfx_scenario": "必填项为空"},
                 ]}], "check_assignments": [
                     {"transaction_ref": "TX", "check_index": 1, "disposition": "case", "case_id": "TC-VALID"},
                     {"transaction_ref": "TX-EMPTY", "check_index": 1, "disposition": "case", "case_id": "TC-EMPTY"},
                 ],
             })
-            navigation = {"action": "进入网络-网络诊断", "expected": "显示网络诊断页面"}
+            navigation = {"action": "进入工具-目标校验", "expected": "显示目标校验页面"}
             invalid_cases = {"schema_version": "2.0", "cases": [
-                {"case_id": "TC-VALID", "function_ref": "FN", "title": "Traceroute-正常域名追踪", "priority": "P1", "test_type": "功能测试",
-                 "preconditions": ["已登录管理界面"], "test_data": "受控有效域名", "steps": [navigation, {"action": "输入有效域名", "expected": "显示路由追踪结果"}]},
-                {"case_id": "TC-EMPTY", "function_ref": "FN", "title": "Traceroute-空地址校验", "priority": "P2", "test_type": "功能测试",
+                {"case_id": "TC-VALID", "function_ref": "FN", "title": "目标校验-有效内容校验", "priority": "P1", "test_type": "功能测试",
+                 "preconditions": ["已进入目标页面"], "test_data": "受控有效内容", "steps": [navigation, {"action": "输入有效内容", "expected": "显示校验结果"}]},
+                {"case_id": "TC-EMPTY", "function_ref": "FN", "title": "目标校验-空内容校验", "priority": "P2", "test_type": "功能测试",
                  "dfx_dimension": "DFT功能", "dfx_scenario": "必填项为空", "preconditions": ["已登录管理界面"], "test_data": "目标地址为空",
-                 "steps": [navigation, {"action": "清空目标地址并点击Traceroute", "expected": "显示地址不合法提示"}]},
+                 "steps": [navigation, {"action": "清空目标内容并点击执行", "expected": "显示内容不能为空提示"}]},
             ]}
             with self.assertRaisesRegex(ValueError, "omits the observed submit/execute trigger"):
                 save_cases(run_dir, invalid_cases)
@@ -189,15 +189,15 @@ class QualityRuleTests(unittest.TestCase):
     def test_declared_trigger_control_must_be_used(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             run_dir = Path(value) / "trigger"
-            ensure_run(run_dir, "网络>网络诊断")
+            ensure_run(run_dir, "工具>选项执行")
             with self.assertRaisesRegex(ValueError, "declared but not actually used"):
                 append_events(run_dir, [
-                    {"kind": "page", "fact_id": "PAGE", "data": {"name": "网络诊断", "menu_path": ["网络", "网络诊断"], "final_scan_status": "stable", "unhandled_element_refs": []}},
-                    {"kind": "function", "fact_id": "FN", "data": {"name": "Ping"}},
-                    {"kind": "element", "fact_id": "EL-OPTION", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "协议", "type": "下拉框", "interactive": True, "option_set": "finite", "options": ["IPv4"]}},
-                    {"kind": "element", "fact_id": "EL-RUN", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "Ping", "type": "按钮", "interactive": True}},
+                    {"kind": "page", "fact_id": "PAGE", "data": {"name": "选项执行", "menu_path": ["工具", "选项执行"], "final_scan_status": "stable", "unhandled_element_refs": []}},
+                    {"kind": "function", "fact_id": "FN", "data": {"name": "选项执行"}},
+                    {"kind": "element", "fact_id": "EL-OPTION", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "模式", "type": "下拉框", "interactive": True, "option_set": "finite", "options": ["模式A"]}},
+                    {"kind": "element", "fact_id": "EL-RUN", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "执行", "type": "按钮", "interactive": True}},
                     {"kind": "transaction", "data": {"function_ref": "FN", "element_refs": ["EL-OPTION", "EL-RUN"], "checks": [
-                        {"element_ref": "EL-OPTION", "used_element_refs": ["EL-OPTION"], "option_value": "IPv4", "action": "选择IPv4", "result": "使用IPv4", "result_anchor": {"assertion": "contains", "value": "IPv4"}}
+                        {"element_ref": "EL-OPTION", "used_element_refs": ["EL-OPTION"], "option_value": "模式A", "action": "选择模式A", "result": "使用模式A", "result_anchor": {"assertion": "contains", "value": "模式A"}}
                     ]}},
                 ])
 
@@ -222,7 +222,7 @@ class QualityRuleTests(unittest.TestCase):
             append_events(run_dir, [
                 {"kind": "page", "fact_id": "PAGE", "data": {"name": "告警列表", "menu_path": ["告警管理", "告警列表"], "final_scan_status": "stable", "unhandled_element_refs": []}},
                 {"kind": "function", "fact_id": "FN", "data": {"name": "查询"}},
-                {"kind": "element", "fact_id": "EL", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "查询", "interactive": True}},
+                {"kind": "element", "fact_id": "EL", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "查询", "type": "按钮", "interactive": True}},
                 {"kind": "transaction", "fact_id": "TX", "data": {"function_ref": "FN", "element_refs": ["EL"], "checks": [
                     {"element_ref": "EL", "action": "输入有效条件后点击查询", "result": "列表刷新并显示匹配数据", "result_anchor": {"assertion": "contains", "value": "匹配数据"}},
                     {"element_ref": "EL", "action": "清空条件后点击查询", "result": "列表刷新并显示全部数据", "result_anchor": {"assertion": "contains", "value": "全部数据"}},

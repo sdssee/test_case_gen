@@ -32,11 +32,11 @@ run-dir/
   "local_ref": "filter_transaction",
   "data": {
     "function_ref": "FN-FILTER",
-    "element_refs": ["EL-SEVERITY"],
+    "element_refs": ["EL-OPTION"],
     "transaction_type": "selection",
     "checks": [
-      {"element_ref": "EL-SEVERITY", "used_element_refs": ["EL-SEVERITY"], "action": "选择严重", "option_value": "严重", "result": "列表只显示严重级别告警", "result_anchor": {"assertion": "all_equal", "target": "告警列表", "field": "告警级别", "value": "严重"}},
-      {"element_ref": "EL-SEVERITY", "used_element_refs": ["EL-SEVERITY"], "action": "选择警告", "option_value": "警告", "result": "列表只显示警告级别告警", "result_anchor": {"assertion": "all_equal", "value": "警告"}}
+      {"element_ref": "EL-OPTION", "used_element_refs": ["EL-OPTION"], "action": "选择选项A", "option_value": "选项A", "result": "列表只显示选项A对应记录", "result_anchor": {"assertion": "all_equal", "target": "记录列表", "field": "状态", "value": "选项A"}},
+      {"element_ref": "EL-OPTION", "used_element_refs": ["EL-OPTION"], "action": "选择选项B", "option_value": "选项B", "result": "列表只显示选项B对应记录", "result_anchor": {"assertion": "all_equal", "value": "选项B"}}
     ],
     "recovery_result": "恢复全部级别"
   }
@@ -53,29 +53,31 @@ run-dir/
   "source": "facts.json",
   "functions": [{
     "function_ref": "FN-FILTER",
-    "name": "告警级别筛选",
+    "name": "有限选项筛选",
     "design_context": {
-      "user_goal": "按级别查看目标告警",
-      "role": "具备告警查看权限的用户",
-      "business_value": "快速聚焦需要处理的告警",
-      "acceptance_criteria": ["各级别选项分别得到对应列表结果"],
+      "user_goal": "按选项查看对应记录",
+      "role": "具备页面访问权限的用户",
+      "business_value": "快速聚焦目标记录",
+      "acceptance_criteria": ["各有限选项分别得到对应列表结果"],
       "business_rules": ["有限选项分别验证"],
-      "dependencies": ["存在各级别受控告警数据"],
+      "dependencies": ["存在可区分各选项效果的受控数据"],
       "postcondition": "列表保持在当前选择的级别",
       "basis": ["页面实探"]
     },
-    "automation_profile": {"level": "UI", "dependency": "受控告警数据", "stability_risk": "列表异步刷新", "recommendation": "项目现有UI框架"},
+    "automation_profile": {"level": "UI", "dependency": "受控页面数据", "stability_risk": "无已知稳定性风险", "recommendation": "项目现有UI框架"},
     "cases": [{
       "case_id": "TC-FILTER-001",
-      "page_ref": "PAGE-ALARM-LIST",
-      "title": "严重级别筛选",
+      "page_ref": "PAGE-LIST",
+      "title": "选项A筛选",
+      "verification_focus": "验证选择控件在选项A下只展示对应记录",
       "strategy": "baseline",
       "dfx_dimension": "DFT功能",
       "dfx_scenario": "正向流程"
     }, {
       "case_id": "TC-FILTER-002",
-      "page_ref": "PAGE-ALARM-LIST",
-      "title": "警告级别筛选",
+      "page_ref": "PAGE-LIST",
+      "title": "选项B筛选",
+      "verification_focus": "验证选择控件在选项B下只展示对应记录",
       "strategy": "baseline",
       "dfx_dimension": "DFT功能",
       "dfx_scenario": "正向流程"
@@ -94,7 +96,7 @@ run-dir/
 }
 ```
 
-计划只写测试意图和唯一检查点分配账本；`fact_refs`、元素覆盖、功能覆盖和DFX关联由系统派生，不要求模型重复维护。每个有限选项和每个实测有效输入等价类分别对应独立 baseline Case；空值、无效格式、边界等已声明且实测的分支分别对应独立 DFX Case。不合并到一个 Case，也不默认做跨维度组合。性能或风险不适用时模型只提交真实原因，运行时自动补充并校验有效功能事实引用。
+计划只写测试意图和唯一检查点分配账本；`fact_refs`、元素覆盖、功能覆盖和DFX关联由系统派生，不要求模型重复维护。每个Case包含唯一 `verification_focus`；缺省时运行时根据主验证元素、独立分支和观察结果派生事实化建议，模型只在需要表达业务差异时优化。每个有限选项和每个实测有效输入等价类分别对应独立 baseline Case；空值、无效格式、边界等已声明且实测的分支分别对应独立 DFX Case。不合并到一个 Case，也不默认做跨维度组合。页面自动化入口由运行时归一为UI；已有稳定性风险去重进入风险项；存在提交、加载或超时事实时只生成一条轻量响应场景，不按Case重复。确无适用专项时才保留真实不适用原因。
 计划通过内部 `write-plan` 按功能 upsert；结构或映射错误在本次生成动作中局部修正，不把错误计划留给最终 Review。精确重复提交返回成功且不改写文件。
 
 ## function-cases.json
@@ -106,21 +108,22 @@ run-dir/
   "cases": [{
     "case_id": "TC-FILTER-001",
     "function_ref": "FN-FILTER",
-    "title": "告警级别筛选-严重级别筛选",
-    "preconditions": ["告警列表存在严重级别的可查看数据"],
-    "test_data": "告警级别：严重",
+    "title": "有限选项筛选-选项A筛选",
+    "preconditions": ["列表存在可区分选项A效果的受控数据"],
+    "test_data": "筛选值：选项A",
     "automation_value": "高频筛选回归",
     "automation_priority": "P1",
+    "verification_focus": "验证选择控件在选项A下只展示对应记录",
     "steps": [
-      {"action": "进入告警管理-告警列表", "expected": "显示告警查询区和告警列表"},
-      {"action": "在告警级别中选择严重", "expected": "告警列表刷新，所有记录的告警级别均为严重", "source_check": {"transaction_ref": "TX-FILTER", "check_index": 1}}
+      {"action": "进入实际菜单路径对应的目标页面", "expected": "显示筛选区域和记录列表"},
+      {"action": "在有限选项控件中选择选项A", "expected": "列表刷新，所有记录均符合选项A", "source_check": {"transaction_ref": "TX-FILTER", "check_index": 1}}
     ],
-    "fact_refs": ["FN-FILTER", "EL-SEVERITY", "TX-FILTER"]
+    "fact_refs": ["FN-FILTER", "EL-OPTION", "TX-FILTER"]
   }]
 }
 ```
 
-模型提交步骤时只写 `action+expected`；写入器按 `check_assignments` 顺序自动注入一个内部 `source_check`，并从主验证和辅助使用控件派生 `fact_refs`。结构化 `result_anchor` 只校验明确的 `tokens` 或结果 `value`，允许目标、字段和观察原句使用更完整的等价表述。内部来源不导出Excel。
+模型提交步骤时只写 `action+expected`；写入器按 `check_assignments` 顺序自动注入一个内部 `source_check` 和计划中的 `verification_focus`，并从主验证和辅助使用控件派生 `fact_refs`。结构化 `result_anchor` 只校验明确的 `tokens` 或结果 `value`，允许目标、字段和观察原句使用更完整的等价表述。内部来源不导出Excel，主验证目标用于场景矩阵、用例备注和一次性语义Review。
 用例通过内部 `write-cases` 按功能 upsert；标题、菜单路径、配对步骤、具体数据、功能顺序和事实引用在生成时完成约束。同一功能再次提交时只替换该功能块，其他功能保持不变。
 
 ## review.json

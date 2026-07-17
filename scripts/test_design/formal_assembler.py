@@ -74,6 +74,13 @@ def _text(value: Any) -> str:
     return str(value)
 
 
+def _compact_list(values: Iterable[Any], limit: int = 3) -> str:
+    unique = list(dict.fromkeys(_text(value).strip() for value in values if _text(value).strip()))
+    if len(unique) <= limit:
+        return "；".join(unique)
+    return "；".join(unique[:limit]) + f"；另有{len(unique) - limit}项"
+
+
 def _numbered(values: Any) -> str:
     if not isinstance(values, list):
         values = [line for line in str(values or "").splitlines() if line.strip()]
@@ -279,18 +286,37 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         if element_ref:
             primary_elements_by_case.setdefault(str(assignment.get("case_id", "")), []).append(element_ref)
     open_items = facts.get("open_items", [])
-    pending = [row for row in open_items if row.get("category") in {"external_question", "blocked_condition"}]
-    risks = [row for row in open_items if row.get("category") == "observed_risk"] + plan.get("risks", [])
+    pending = [
+        row for row in open_items
+        if row.get("category") in {"external_question", "blocked_condition"}
+        and row.get("status") not in {"resolved", "accepted", "closed"}
+    ]
+    raw_risks = [row for row in open_items if row.get("category") == "observed_risk"] + plan.get("risks", [])
+    risks: list[dict[str, Any]] = []
+    seen_risks: set[tuple[str, str]] = set()
+    for row in raw_risks:
+        key = (
+            re.sub(r"\s+", "", _text(row.get("description") or row.get("reason"))),
+            _text(row.get("function_ref") or row.get("impact")),
+        )
+        if key not in seen_risks:
+            risks.append(row)
+            seen_risks.add(key)
     function_contexts = [
         row.get("design_context", {}) for row in plan.get("functions", [])
         if isinstance(row.get("design_context"), dict)
     ]
-    acceptance_summary = list(dict.fromkeys(
-        _text(value) for context in function_contexts for value in context.get("acceptance_criteria", []) if _text(value)
-    ))
     dependency_summary = list(dict.fromkeys(
         _text(value) for context in function_contexts for value in context.get("dependencies", []) if _text(value)
     ))
+    planned_case_count = sum(len(function.get("cases", [])) for function in plan.get("functions", []))
+    written_case_count = len(case_document.get("cases", []))
+    exit_conditions = [
+        "既定页面实探分支均已有用例或明确专项处置",
+        f"计划与已编写用例数量一致（{planned_case_count}条）" if planned_case_count == written_case_count else "计划与已编写用例数量需保持一致",
+        "无未解决的阻塞问题" if not pending else "阻塞问题已确认处理方式",
+        "双Excel内容一致并通过技术校验",
+    ]
     rows: dict[str, list[dict[str, str]]] = {name: [] for name in SHEETS}
     rows["测试设计总览"].append({
         "项目/模块": _text(scope.get("module_path")),
@@ -302,10 +328,10 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         "不测范围": _text(scope.get("out_of_scope") or "未提供明确排除项"),
         "测试类型": "功能测试；适用的DFX专项设计",
         "测试环境": _text(scope.get("environment") or "未提供"),
-        "主要风险": "；".join(_text(row.get("description")) for row in risks if row.get("description")) or _text(plan.get("risk_not_applicable_reason") or "未发现需单独登记的风险"),
+        "主要风险": _compact_list((row.get("description") for row in risks), limit=4) or _text(plan.get("risk_not_applicable_reason") or "未发现需单独登记的风险"),
         "准入条件": "；".join(dependency_summary) or "按功能设计上下文准备访问权限与受控数据",
-        "准出条件": "；".join(acceptance_summary) or "已计划场景均获得明确且可观察的结果",
-        "待确认问题": "；".join(_text(row.get("description") or row.get("reason")) for row in pending) or "无待确认项",
+        "准出条件": "；".join(exit_conditions),
+        "待确认问题": _compact_list((row.get("description") or row.get("reason") for row in pending), limit=4) or "无待确认项",
     })
     supplied_by_id = {
         _text(row.get("requirement_id")): row for row in supplied_requirements if _text(row.get("requirement_id"))
@@ -371,6 +397,9 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
                 for step in written.get("steps", [])[1:]
                 if str(step.get("expected", "")).strip()
             ]
+            observation = _text(case.get("verification_focus"))
+            if expected_points:
+                observation = "；".join(filter(None, [observation, "实际断言：" + "；".join(expected_points)]))
             rows["测试场景矩阵"].append({
                 "场景 ID": _text(case.get("case_id")),
                 "Story ID/需求 ID": _text(case.get("requirement_id") or requirement_id),
@@ -382,15 +411,29 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
                     fact_names.get(str(ref), "") for ref in primary_elements_by_case.get(str(case.get("case_id", "")), []) if fact_names.get(str(ref), "")
                 )),
                 "输入数据/状态条件": _text(written.get("test_data") or case.get("test_data")),
-                "观察点": "；".join(expected_points) or _text(case.get("observation")),
-                "风险等级": _text(written.get("risk_level") or case.get("risk_level") or ({"P0": "高", "P1": "高", "P2": "中", "P3": "低"}.get(str(written.get("priority") or case.get("priority") or "P1"), "中"))),
+                "观察点": observation or _text(case.get("observation")),
+                "风险等级": _text(written.get("risk_level") or case.get("risk_level") or "未单独识别"),
                 "优先级": _text(written.get("priority") or case.get("priority") or "P1"),
                 "是否生成用例": "是",
                 "备注": _text(case.get("notes")),
             })
+    global_risk_ids = [
+        _text(row.get("risk_id")) for row in plan.get("risks", [])
+        if not str(row.get("function_ref", "")).strip() and _text(row.get("risk_id"))
+    ]
+    risk_ids_by_function: dict[str, list[str]] = {}
+    for row in plan.get("risks", []):
+        function_ref = str(row.get("function_ref", "")).strip()
+        risk_id = _text(row.get("risk_id"))
+        if function_ref and risk_id:
+            risk_ids_by_function.setdefault(function_ref, []).append(risk_id)
     for case in case_document.get("cases", []):
         function_id = str(case.get("function_ref", ""))
         action_text, expected_text = _paired_columns(case.get("steps"))
+        case_risks = case.get("risks", [])
+        if not isinstance(case_risks, list):
+            case_risks = [case_risks] if _text(case_risks) else []
+        linked_risks = list(dict.fromkeys(global_risk_ids + risk_ids_by_function.get(function_id, []) + [_text(value) for value in case_risks if _text(value)]))
         rows[FUNCTION_SHEET].append({
             "用例 ID": _text(case.get("case_id")),
             "Story ID/需求 ID": _text(case.get("requirement_id") or requirement_by_function.get(function_id)),
@@ -408,8 +451,8 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
             "实际结果": "",
             "执行状态": "未执行",
             "是否适合自动化": _automation_suitable(case, plan_functions),
-            "关联风险": _text(case.get("risks")),
-            "备注": _text(case.get("notes")),
+            "关联风险": "；".join(linked_risks),
+            "备注": _text(case.get("notes") or ("主验证：" + _text(case.get("verification_focus")) if case.get("verification_focus") else "")),
         })
     for item in plan.get("performance_scenarios", []):
         mapping = {
@@ -510,7 +553,6 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         if ref and reason:
             non_case_by_element.setdefault(ref, []).append(reason)
             non_case_status_by_element.setdefault(ref, []).append(str(assignment.get("disposition", "")))
-    actions_by_element: dict[str, list[str]] = {}
     results_by_element: dict[str, list[str]] = {}
     for transaction in transactions.values():
         for check in transaction.get("checks", []):
@@ -518,8 +560,6 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
             if check.get("element_ref"):
                 refs.add(str(check.get("element_ref")))
             for ref in refs:
-                if _text(check.get("action")):
-                    actions_by_element.setdefault(ref, []).append(_text(check.get("action")))
                 if _text(check.get("result")):
                     results_by_element.setdefault(ref, []).append(_text(check.get("result")))
     blocked_functions = {
@@ -556,23 +596,37 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         preconditions = list(dict.fromkeys(
             _text(value) for case in related_cases for value in case.get("preconditions", []) if _text(value)
         ))
-        actions = list(dict.fromkeys(actions_by_element.get(element_id, [])))
         results = list(dict.fromkeys(results_by_element.get(element_id, [])))
+        branch_values = [
+            _text(requirement.get("value"))
+            for requirement in element.get("exploration_requirements", [])
+            if _text(requirement.get("value"))
+        ]
+        auxiliary_ids = list(dict.fromkeys(auxiliary_case_by_fact.get(element_id, [])))
         note = _text(element.get("notes")) or "；".join(non_case_reasons)
         if coverage_status == "未覆盖" and not note:
             note = "已登记元素尚未关联独立测试意图，需在最终Review中局部补充"
         elif coverage_status == "受阻" and not note:
             note = "受页面权限、数据或环境条件阻塞"
+        if auxiliary_ids:
+            auxiliary_note = "辅助使用用例：" + "；".join(auxiliary_ids)
+            note = "；".join(filter(None, [note, auxiliary_note]))
+        interaction_summary = _text(element.get("interaction"))
+        if not interaction_summary:
+            interaction_summary = _compact_list(branch_values) if branch_values else _text(element.get("type") or "页面控件") + "按页面实际方式操作"
+        expected_summary = _text(element.get("expected_behavior")) or _compact_list(results, limit=2)
+        if not expected_summary:
+            expected_summary = "各主验证分支产生已记录的可观察结果"
         rows["页面元素覆盖清单"].append({
             "元素 ID": element_label or _text(element.get("name")), "Story ID/需求 ID": _text(element.get("requirement_id") or requirement_by_function.get(function_ref)),
             "页面/入口": page_name,
             "页面 URL/菜单路径": "-".join(str(value) for value in menu_path) if isinstance(menu_path, list) else _text(menu_path),
             "元素名称/文案": _text(element.get("name")), "元素类型": _text(element.get("type") or "页面控件"),
-            "交互方式": _text(element.get("interaction") or "；".join(actions) or "按页面实际方式操作"),
+            "交互方式": interaction_summary,
             "适用DFX维度": _text(element.get("dfx_dimensions") or "；".join(dfx_dimensions) or "DFT功能"),
             "适用DFX场景": _text(element.get("dfx_scenarios") or "；".join(dfx_scenarios) or "正向流程"),
             "前置状态/权限": _text(element.get("precondition") or "；".join(preconditions) or "具备当前页面访问权限"),
-            "预期行为": _text(element.get("expected_behavior") or "；".join(results) or "按页面实际规则反馈操作结果"),
+            "预期行为": expected_summary,
             "业务依据/规则来源": _text(element.get("rule_source") or "；".join(plan_functions.get(function_ref, {}).get("design_context", {}).get("basis", [])) or "页面实探"),
             "覆盖用例 ID": "；".join(covered_case_ids),
             "覆盖状态": coverage_status,

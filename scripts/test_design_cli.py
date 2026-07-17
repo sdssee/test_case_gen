@@ -24,6 +24,12 @@ from test_design.session_runtime import (
 )
 
 
+for stream_name in ("stdin", "stdout", "stderr"):
+    stream = getattr(sys, stream_name, None)
+    if stream is not None and hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8")
+
+
 def _payload(path: Path | None) -> object:
     if path:
         try:

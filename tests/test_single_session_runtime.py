@@ -309,7 +309,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
     def test_recompile_without_business_changes_keeps_review_valid(self) -> None:
         self._write_plan_and_cases()
         self.assertEqual(["FN-VIEW"], load_plan(self.run_dir)["performance_basis_refs"])
-        self.assertEqual(["FN-VIEW"], load_plan(self.run_dir)["risk_basis_refs"])
+        self.assertEqual(["页面控件定位变化"], [row["description"] for row in load_plan(self.run_dir)["risks"]])
         self.assertEqual("ready", review_run(self.run_dir, _semantic_review(self.run_dir))["status"])
         time.sleep(1.1)
         compile_facts(self.run_dir)
@@ -569,6 +569,8 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertNotIn("EL-VIEW", coverage_text)
         coverage_headers = {cell.value: cell.column for cell in coverage[1]}
         self.assertEqual("已覆盖", coverage.cell(2, coverage_headers["覆盖状态"]).value)
+        self.assertIn("另有4项", coverage.cell(2, coverage_headers["交互方式"]).value)
+        self.assertNotIn("选择精简视图", coverage.cell(2, coverage_headers["交互方式"]).value)
         requirements = workbook["需求用户故事拆解"]
         requirement_headers = {cell.value: cell.column for cell in requirements[1]}
         for header in ("Story ID/需求 ID", "用户故事/需求描述", "角色", "业务价值", "验收标准", "业务规则"):
@@ -581,8 +583,8 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertEqual("PERF-N/A", performance.cell(2, 1).value)
         self.assertIn("不包含可独立定义指标", "\n".join(str(cell.value or "") for cell in performance[2]))
         risk = workbook["风险与待确认问题"]
-        self.assertEqual("RISK-N/A", risk.cell(2, 1).value)
-        self.assertIn("未发现需要单独登记", "\n".join(str(cell.value or "") for cell in risk[2]))
+        self.assertEqual("RISK-001", risk.cell(2, 1).value)
+        self.assertIn("页面控件定位变化", "\n".join(str(cell.value or "") for cell in risk[2]))
         automation = workbook["自动化建议"]
         self.assertEqual(8, automation.max_row)
         automation_headers = {cell.value: cell.column for cell in automation[1]}

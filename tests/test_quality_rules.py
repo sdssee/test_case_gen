@@ -73,6 +73,43 @@ class QualityRuleTests(unittest.TestCase):
             }
             saved = save_plan(run_dir, separate)
             self.assertEqual(2, len(saved["functions"][0]["cases"]))
+            focuses = [row["verification_focus"] for row in saved["functions"][0]["cases"]]
+            self.assertEqual(2, len(set(focuses)))
+            self.assertTrue(any("valid_domain" in value for value in focuses))
+            self.assertTrue(any("valid_ip" in value for value in focuses))
+
+    def test_page_plan_derives_focus_light_performance_risk_and_ui_layer_once(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "derived-design"
+            ensure_run(run_dir, "业务中心>执行页面")
+            append_events(run_dir, [
+                {"kind": "page", "fact_id": "PAGE", "data": {"name": "执行页面", "menu_path": ["业务中心", "执行页面"], "final_scan_status": "stable", "unhandled_element_refs": []}},
+                {"kind": "function", "fact_id": "FN", "data": {"name": "任务执行"}},
+                {"kind": "element", "fact_id": "EL-INPUT", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "任务参数", "type": "input", "valid_input_classes": ["text"]}},
+                {"kind": "element", "fact_id": "EL-RUN", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "执行", "type": "trigger"}},
+                {"kind": "transaction", "fact_id": "TX", "data": {"function_ref": "FN", "element_refs": ["EL-INPUT", "EL-RUN"], "checks": [{
+                    "element_ref": "EL-INPUT", "used_element_refs": ["EL-INPUT", "EL-RUN"], "trigger_element_ref": "EL-RUN",
+                    "input_class": "valid_text", "action": "输入受控内容并点击执行", "result": "显示任务完成提示",
+                    "result_anchor": {"assertion": "contains", "value": "任务完成提示"},
+                }]}},
+            ])
+            self.assertTrue(checkpoint_facts(run_dir)["ready"])
+            saved = save_plan(run_dir, {
+                "schema_version": "2.0", **_plan_decisions(), "functions": [{
+                    "function_ref": "FN", **_plan_metadata("使用受控参数执行任务"),
+                    "automation_profile": {"level": "CLI", "dependency": "受控数据", "stability_risk": "外部服务响应波动", "recommendation": "现有自动化框架"},
+                    "cases": [{"case_id": "TC-1", "page_ref": "PAGE", "title": "有效参数执行", "strategy": "baseline"}],
+                }],
+                "check_assignments": [{"transaction_ref": "TX", "check_index": 1, "disposition": "case", "case_id": "TC-1"}],
+            })
+            function = saved["functions"][0]
+            self.assertEqual("任务执行", function["name"])
+            self.assertEqual("UI", function["automation_profile"]["level"])
+            self.assertIn("任务参数", function["cases"][0]["verification_focus"])
+            self.assertEqual("单次响应与超时体验", saved["performance_scenarios"][0]["test_type"])
+            self.assertNotIn("performance_not_applicable_reason", saved)
+            self.assertEqual(["外部服务响应波动"], [row["description"] for row in saved["risks"]])
+            self.assertNotIn("risk_not_applicable_reason", saved)
 
     def test_persisted_facts_reject_unmasked_url_or_ip(self) -> None:
         with tempfile.TemporaryDirectory() as value:

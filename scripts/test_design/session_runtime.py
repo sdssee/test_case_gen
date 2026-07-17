@@ -971,6 +971,40 @@ def _function_dfx_hints(elements: list[dict[str, Any]], transactions: list[dict[
     return list({json.dumps(item, ensure_ascii=False, sort_keys=True): item for item in hints}.values())
 
 
+def _verification_focus_hint(element: dict[str, Any], check: dict[str, Any]) -> str:
+    """Build one factual focus hint without inventing business semantics."""
+    element_name = str(element.get("name") or check.get("element_ref") or "当前交互").strip()
+    branch = str(check.get("input_class") or check.get("option_value") or "已实探分支").strip()
+    anchor = check.get("result_anchor") if isinstance(check.get("result_anchor"), dict) else {}
+    raw_result = anchor.get("stable_tokens", anchor.get("tokens"))
+    if raw_result in (None, "", []):
+        raw_result = anchor.get("value") or check.get("result") or "页面实际观察结果"
+    if isinstance(raw_result, list):
+        result = "、".join(str(value).strip() for value in raw_result if str(value).strip())
+    else:
+        result = str(raw_result).strip()
+    return f"验证{element_name}在{branch}下产生{result}"
+
+
+def _has_observable_wait(facts: dict[str, Any]) -> bool:
+    """A submitted, loading or timed interaction merits at least a light response scenario."""
+    for transaction in facts.get("transactions", []):
+        for check in transaction.get("checks", []):
+            if str(check.get("trigger_element_ref", "")).strip():
+                return True
+            if check.get("intermediate_states") or str(check.get("completion_state", "")).strip():
+                return True
+    return False
+
+
+def _substantive_stability_risk(value: Any) -> bool:
+    text = re.sub(r"\s+", "", str(value or "")).lower()
+    if not text:
+        return False
+    benign = {"无", "无风险", "无已知风险", "无已知稳定性风险", "不适用", "none", "n/a", "na"}
+    return text not in benign
+
+
 def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
     """Build the factual planning input without creating another persisted artifact."""
     facts = load_facts(run_dir)
@@ -1016,6 +1050,7 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
                         "dfx_dimension": str(requirement.get("dfx_dimension", "DFT功能")),
                         "dfx_scenario": str(requirement.get("dfx_scenario", "正向流程")),
                         "independent_case": bool(requirement.get("independent_case")),
+                        "verification_focus_hint": _verification_focus_hint(element, check),
                         "related_check": {"transaction_ref": transaction_ref, "check_index": index},
                     })
         unique_hints = _function_dfx_hints(owned_elements, owned_transactions, function_ref)
@@ -1059,15 +1094,27 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
             "automation_profile_fields": [
                 "level", "dependency", "stability_risk", "recommendation",
             ],
+            "automation_rule": "页面交互用例使用UI层；只有实际测试入口是接口、命令行或组件时才使用对应层级",
         })
     return {
         "schema_version": SCHEMA_VERSION,
         "source": "facts.json",
         "checkpoint": _current_checkpoint(facts),
         "specialist_decisions": {
-            "performance": "填写 performance_scenarios；不适用时只填写真实理由，事实引用由运行时派生",
-            "risk": "填写 risks；无风险时只填写真实理由，事实引用由运行时派生",
+            "performance": {
+                "observable_wait": _has_observable_wait(facts),
+                "rule": "有并发容量目标时写正式场景；有提交、加载、异步、长任务或超时时至少写一个轻量响应场景；确无可观察性能行为时才写不适用理由",
+            },
+            "risk": {
+                "observed_open_items": [
+                    {key: row.get(key) for key in ("fact_id", "category", "description", "affected_function_refs") if row.get(key) not in (None, "", [])}
+                    for row in facts.get("open_items", [])
+                    if row.get("status") not in {"resolved", "accepted", "closed"}
+                ],
+                "rule": "从外部依赖、稳定性、权限、数据、状态一致性、超时和实探异常聚合去重；存在具体风险时不得写无风险",
+            },
         },
+        "case_intent_rule": "每个Case填写唯一verification_focus；它描述主验证对象、独立分支和可观察效果，辅助控件不能替代主验证",
         "dfx_evaluation": {
             "candidate_dimensions": ["DFT功能", "DFB业务", "DFS安全", "DFR可靠", "DFU可用", "DFI接口", "DFC兼容", "DFP性能", "DFM维护", "DFD部署", "DFO运维", "DFX极端"],
             "rule": "结合事实和功能语义只选择适用维度；页面可执行项进入用例，专项进入性能或风险，不生成固定矩阵",
@@ -1107,6 +1154,8 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
     planned_functions: set[str] = set()
     case_ids: set[str] = set()
     titles: set[tuple[str, str]] = set()
+    focuses: set[tuple[str, str]] = set()
+    profile_stability_risks: list[tuple[str, str]] = []
     planned_cases: dict[str, dict[str, Any]] = {}
     for function in plan.get("functions", []):
         function_ref = str(function.get("function_ref", ""))
@@ -1129,6 +1178,16 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
         profile = function.get("automation_profile") if isinstance(function.get("automation_profile"), dict) else {}
         if any(not str(profile.get(field, "")).strip() for field in ("level", "dependency", "stability_risk", "recommendation")):
             issues.append(_issue("missing_automation_profile", "repairable", "case-plan.json", f"function {function_ref} lacks a compact automation profile", "complete the four function-level automation fields", function_ref=function_ref))
+        level = str(profile.get("level", "")).strip().lower()
+        if level and level not in {"ui", "页面", "手工", "manual", "不适用", "none", "n/a", "na"}:
+            issues.append(_issue(
+                "automation_entry_mismatch", "repairable", "case-plan.json",
+                f"function {function_ref} is a page interaction but automation level is {profile.get('level')!r}",
+                "use UI for the executable page case; assess lower-layer automation separately",
+                function_ref=function_ref,
+            ))
+        if _substantive_stability_risk(profile.get("stability_risk")):
+            profile_stability_risks.append((function_ref, str(profile.get("stability_risk"))))
         cases = function.get("cases", [])
         if not cases or not any(str(case.get("strategy", "")).lower() == "baseline" for case in cases):
             issues.append(_issue("missing_baseline", "repairable", "case-plan.json", f"function {function_ref} lacks a baseline intent", "add its observed baseline intent", function_ref=function_ref))
@@ -1150,6 +1209,24 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
             if title_key in titles:
                 issues.append(_issue("duplicate_title", "repairable", "case-plan.json", f"function {function_ref} repeats planned title {title_key[1]!r}", "merge or differentiate the actual intent", function_ref=function_ref, case_id=case_id))
             titles.add(title_key)
+            focus = str(case.get("verification_focus", "")).strip()
+            if not focus:
+                issues.append(_issue(
+                    "missing_verification_focus", "repairable", "case-plan.json",
+                    f"case {case_id} lacks its primary verification focus",
+                    "state the primary element, independent branch and observable effect once",
+                    function_ref=function_ref, case_id=case_id,
+                ))
+            focus_key = (function_ref, re.sub(r"\s+", "", focus).lower())
+            if focus and focus_key in focuses:
+                issues.append(_issue(
+                    "duplicate_verification_focus", "repairable", "case-plan.json",
+                    f"case {case_id} repeats another case's primary verification focus",
+                    "differentiate the primary behavior being verified instead of changing only the title",
+                    function_ref=function_ref, case_id=case_id,
+                ))
+            if focus:
+                focuses.add(focus_key)
             function_name = str(functions.get(function_ref, {}).get("name", "")).strip()
             if function_name and function_name in str(case.get("title", "")):
                 issues.append(_issue("redundant_title", "repairable", "case-plan.json", f"case {case_id} repeats its function name inside the scenario title", "retain only the concrete scenario in the plan title", function_ref=function_ref, case_id=case_id))
@@ -1160,12 +1237,26 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
         issues.append(_issue("missing_function", "repairable", "case-plan.json", f"functions missing from plan: {sorted(missing_functions)}", "plan only the missing function blocks"))
     if not plan.get("performance_scenarios") and not str(plan.get("performance_not_applicable_reason", "")).strip():
         issues.append(_issue("missing_performance_decision", "repairable", "case-plan.json", "performance design is empty without an explicit applicability reason", "record the specialist decision during planning", function_ref="__global__"))
+    if not plan.get("performance_scenarios") and _has_observable_wait(facts):
+        issues.append(_issue(
+            "unsupported_performance_na", "repairable", "case-plan.json",
+            "observed submit/loading behavior requires at least one light response or timeout scenario",
+            "add one compact response/timeout scenario; do not create per-case performance rows",
+            function_ref="__global__",
+        ))
     if not plan.get("performance_scenarios"):
         refs = plan.get("performance_basis_refs", [])
         if not isinstance(refs, list) or not refs or any(str(ref) not in fact_ids for ref in refs):
             issues.append(_issue("unsupported_performance_decision", "repairable", "case-plan.json", "performance not-applicable decision lacks valid fact basis", "reference the observed facts used for this decision", function_ref="__global__"))
     if not plan.get("risks") and not str(plan.get("risk_not_applicable_reason", "")).strip():
         issues.append(_issue("missing_risk_decision", "repairable", "case-plan.json", "risk design is empty without an explicit applicability reason", "record the specialist decision during planning", function_ref="__global__"))
+    if not plan.get("risks") and profile_stability_risks:
+        issues.append(_issue(
+            "unsupported_risk_na", "repairable", "case-plan.json",
+            f"automation profiles already identify stability risks: {profile_stability_risks}",
+            "deduplicate these concrete risks into the global risk list once",
+            function_ref="__global__",
+        ))
     if not plan.get("risks"):
         refs = plan.get("risk_basis_refs", [])
         if not isinstance(refs, list) or not refs or any(str(ref) not in fact_ids for ref in refs):
@@ -1407,6 +1498,15 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
         planned_title = str(planned_case.get("title", "")).strip()
         if function_name and planned_title and title != f"{function_name}-{planned_title}":
             issues.append(_issue("plan_mismatch", "repairable", "function-cases.json", f"case {case_id} title differs from its planned intent", "restore this planned title", **context))
+        planned_focus = str(planned_case.get("verification_focus", "")).strip()
+        actual_focus = str(case.get("verification_focus", "")).strip()
+        if not actual_focus or actual_focus != planned_focus:
+            issues.append(_issue(
+                "verification_focus_mismatch", "repairable", "function-cases.json",
+                f"case {case_id} does not preserve its planned primary verification focus",
+                "restore the planned focus and make the paired step express that behavior",
+                **context,
+            ))
         steps = case.get("steps")
         if not isinstance(steps, list) or not steps:
             issues.append(_issue("invalid_steps", "repairable", "function-cases.json", f"case {case_id} has no paired steps", "write paired action and expected entries", **context))
@@ -1560,6 +1660,8 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
     if not value.get("risks") and str(value.get("risk_not_applicable_reason", "")).strip() and "risk_basis_refs" not in value:
         value["risk_basis_refs"] = function_basis
     transactions = {str(row["fact_id"]): row for row in facts.get("transactions", [])}
+    elements = {str(row["fact_id"]): row for row in facts.get("elements", [])}
+    function_names = {str(row.get("fact_id", "")): str(row.get("name", "")) for row in facts.get("functions", [])}
     by_case: dict[str, list[dict[str, Any]]] = {}
     for assignment in value.get("check_assignments", []):
         if assignment.get("disposition") == "case":
@@ -1573,6 +1675,76 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
         )
         for index, function in enumerate(facts.get("functions", []), 1)
     }
+    page_functions = {
+        str(element.get("function_ref", ""))
+        for element in facts.get("elements", [])
+        if str(element.get("page_ref", "")).strip()
+    }
+    incoming_function_refs = {str(function.get("function_ref", "")) for function in value.get("functions", [])}
+    value["risks"] = [
+        row for row in value.get("risks", [])
+        if not (
+            isinstance(row, dict)
+            and row.get("source") == "automation_profile"
+            and str(row.get("function_ref", "")) in incoming_function_refs
+        )
+    ]
+    value["performance_scenarios"] = [
+        row for row in value.get("performance_scenarios", [])
+        if not (isinstance(row, dict) and row.get("source") == "observed_wait")
+    ]
+    profile_risk_candidates: list[dict[str, Any]] = []
+    for function in value.get("functions", []):
+        function_ref = str(function.get("function_ref", ""))
+        profile = function.get("automation_profile") if isinstance(function.get("automation_profile"), dict) else {}
+        level = str(profile.get("level", "")).strip().lower()
+        if function_ref in page_functions and level not in {"", "ui", "页面", "手工", "manual", "不适用", "none", "n/a", "na"}:
+            profile["level"] = "UI"
+        if _substantive_stability_risk(profile.get("stability_risk")):
+            profile_risk_candidates.append({
+                "function_ref": function_ref,
+                "source": "automation_profile",
+                "type": "稳定性风险",
+                "dfx_dimension": "DFR可靠",
+                "dfx_scenario": "自动化与环境稳定性",
+                "description": str(profile.get("stability_risk", "")).strip(),
+                "impact": function_names.get(function_ref) or function_ref,
+                "level": "中",
+                "recommendation": "使用受控数据和稳定断言，并隔离可变环境依赖",
+                "status": "已识别",
+            })
+        function["automation_profile"] = profile
+    if _has_observable_wait(facts) and not value.get("performance_scenarios"):
+        scope = facts.get("scope", {})
+        value["performance_scenarios"] = [{
+            "source": "observed_wait",
+            "flow": str(scope.get("module_path") or "页面功能链路"),
+            "test_type": "单次响应与超时体验",
+            "concurrency": "单用户",
+            "throughput": "不适用",
+            "response_time": "记录实际响应时间；存在需求目标时按目标判定",
+            "data_scale": "复用功能用例的受控数据",
+            "duration": "从触发操作至完成或超时",
+            "metrics": "开始时间、完成时间、加载状态、完成或超时反馈",
+            "pass_criteria": "操作完成或超时时页面给出明确、可恢复的反馈",
+            "data_strategy": "复用功能用例的受控数据",
+            "risk": "实际时延可能受环境和外部依赖影响",
+            "included": "是",
+        }]
+        value.pop("performance_not_applicable_reason", None)
+        value.pop("performance_basis_refs", None)
+    existing_risk_keys = {
+        (str(row.get("function_ref", "")), re.sub(r"\s+", "", str(row.get("description", ""))))
+        for row in value.get("risks", []) if isinstance(row, dict)
+    }
+    for candidate in profile_risk_candidates:
+        key = (str(candidate.get("function_ref", "")), re.sub(r"\s+", "", str(candidate.get("description", ""))))
+        if key not in existing_risk_keys:
+            value.setdefault("risks", []).append(candidate)
+            existing_risk_keys.add(key)
+    if value.get("risks"):
+        value.pop("risk_not_applicable_reason", None)
+        value.pop("risk_basis_refs", None)
     for index, scenario in enumerate(value.get("performance_scenarios", []), 1):
         function_ref = str(scenario.get("function_ref", ""))
         scenario.setdefault("scenario_id", f"PERF-{index:03d}")
@@ -1586,6 +1758,8 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
         risk.setdefault("requirement_id", requirement_ids.get(function_ref, ""))
     for function in value.get("functions", []):
         function_ref = str(function.get("function_ref", ""))
+        if not str(function.get("name", "")).strip() and function_names.get(function_ref):
+            function["name"] = function_names[function_ref]
         function.setdefault("requirement_id", requirement_ids.get(function_ref, ""))
         for case in function.get("cases", []):
             case_id = str(case.get("case_id", ""))
@@ -1596,6 +1770,18 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
             case["fact_refs"] = _derive_case_fact_refs(
                 function_ref, str(case.get("page_ref", "")), by_case.get(case_id, []), transactions,
             )
+            if not str(case.get("verification_focus", "")).strip():
+                focus_hints: list[str] = []
+                for assignment in by_case.get(case_id, []):
+                    transaction = transactions.get(str(assignment.get("transaction_ref", "")), {})
+                    try:
+                        check = transaction.get("checks", [])[int(assignment.get("check_index", 0)) - 1]
+                    except (IndexError, TypeError, ValueError):
+                        continue
+                    element = elements.get(str(check.get("element_ref", "")), {})
+                    focus_hints.append(_verification_focus_hint(element, check))
+                if focus_hints:
+                    case["verification_focus"] = "；".join(dict.fromkeys(focus_hints))
     return value
 
 
@@ -1725,7 +1911,7 @@ def _assign_case_sources(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]
                     "check_index": int(source.get("check_index", 0)),
                 }
         case["fact_refs"] = list(planned.get("fact_refs", []))
-        for field in ("requirement_id", "strategy", "dfx_dimension", "dfx_scenario"):
+        for field in ("requirement_id", "strategy", "dfx_dimension", "dfx_scenario", "verification_focus"):
             case[field] = planned.get(field, case.get(field, ""))
     value["source_plan"] = "case-plan.json"
     value["source_plan_digest"] = _semantic_content_digest(plan)

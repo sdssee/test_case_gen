@@ -59,6 +59,7 @@ def _plan_metadata(goal: str = "验证页面功能") -> dict[str, object]:
 def _semantic_review(run_dir: Path) -> dict[str, object]:
     return {
         "reviewed_case_ids": [str(row.get("case_id", "")) for row in load_cases(run_dir).get("cases", [])],
+        "reviewed_sections": ["cases", "performance", "risks", "automation", "elements", "cross_sheet"],
         "summary": "逐条复核当前用例，未发现需要局部修正的语义问题。",
         "issues": [], "local_fixes": [],
     }
@@ -125,7 +126,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
             ],
         }
         save_plan(self.run_dir, plan)
-        navigation = {"action": "进入告警管理-告警列表", "expected": "显示告警列表和查询区"}
+        navigation = {"action": "进入告警管理>告警列表", "expected": "显示告警列表和查询区"}
         cases = {"schema_version": "2.0", "source_plan": "case-plan.json", "cases": [
             {"case_id": f"TC-VIEW-{index:03d}", "function_ref": "FN-VIEW", "title": f"告警视图模式-{title}",
              "priority": "P1" if index < 6 else "P2", "test_type": "功能测试",
@@ -146,6 +147,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self._write_plan_and_cases()
         self.assertEqual(7, sum(len(item["cases"]) for item in json.loads(artifact_paths(self.run_dir)["plan"].read_text(encoding="utf-8"))["functions"]))
         written = load_cases(self.run_dir)
+        self.assertEqual("进入告警管理-告警列表", written["cases"][0]["steps"][0]["action"])
         self.assertEqual({"transaction_ref": "TX-VIEW", "check_index": 1}, written["cases"][0]["steps"][1]["source_check"])
         self.assertIn("EL-VIEW-MODE", written["cases"][0]["fact_refs"])
 
@@ -154,6 +156,9 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertEqual([], validate_plan(self.run_dir))
         self.assertEqual([], validate_cases(self.run_dir))
         facts_before = artifact_paths(self.run_dir)["facts"].read_bytes()
+        partial_review = _semantic_review(self.run_dir)
+        partial_review["reviewed_sections"] = ["cases"]
+        self.assertEqual("needs_local_fix", review_run(self.run_dir, partial_review)["status"])
         self.assertEqual("ready", review_run(self.run_dir, _semantic_review(self.run_dir))["status"])
         self.assertEqual(facts_before, artifact_paths(self.run_dir)["facts"].read_bytes())
         self.assertFalse(artifact_paths(self.run_dir)["diagnostics"].exists())
@@ -401,6 +406,17 @@ class SingleSessionRuntimeTests(unittest.TestCase):
             self.assertEqual("stable", facts["pages"][0]["final_scan_status"])
             self.assertEqual(facts["pages"][0]["fact_id"], facts["functions"][0]["page_ref"])
 
+    def test_misplaced_event_envelope_fields_are_normalized_before_append(self) -> None:
+        append_events(self.run_dir, [{
+            "kind": "page",
+            "data": {"fact_id": "PAGE-LIST", "status": "active", "name": "告警记录列表"},
+        }])
+        facts = compile_facts(self.run_dir)
+        self.assertEqual(1, len(facts["pages"]))
+        self.assertEqual("PAGE-LIST", facts["pages"][0]["fact_id"])
+        self.assertEqual("告警记录列表", facts["pages"][0]["name"])
+        self.assertNotIn("fact_id", facts["pages"][0].get("data", {}))
+
     def test_model_shaped_controls_are_normalized_without_product_rules(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             run_dir = Path(value) / "normalization"
@@ -561,6 +577,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertNotIn("EL-VIEW", matrix_text)
         matrix_headers = {cell.value: cell.column for cell in matrix[1]}
         self.assertEqual("P1", matrix.cell(4, matrix_headers["优先级"]).value)
+        self.assertEqual("中", matrix.cell(4, matrix_headers["风险等级"]).value)
         self.assertEqual("视图模式：详细", matrix.cell(4, matrix_headers["输入数据/状态条件"]).value)
         self.assertIn("全部可见告警字段", matrix.cell(4, matrix_headers["观察点"]).value)
         coverage = workbook["页面元素覆盖清单"]
@@ -569,7 +586,8 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertNotIn("EL-VIEW", coverage_text)
         coverage_headers = {cell.value: cell.column for cell in coverage[1]}
         self.assertEqual("已覆盖", coverage.cell(2, coverage_headers["覆盖状态"]).value)
-        self.assertIn("另有4项", coverage.cell(2, coverage_headers["交互方式"]).value)
+        self.assertNotIn("另有", coverage.cell(2, coverage_headers["交互方式"]).value)
+        self.assertIn("精简；标准；详细；仅未确认；仅已确认；仅严重；全部", coverage.cell(2, coverage_headers["交互方式"]).value)
         self.assertNotIn("选择精简视图", coverage.cell(2, coverage_headers["交互方式"]).value)
         requirements = workbook["需求用户故事拆解"]
         requirement_headers = {cell.value: cell.column for cell in requirements[1]}

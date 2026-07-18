@@ -90,6 +90,7 @@ class QualityRuleTests(unittest.TestCase):
                 {"kind": "transaction", "fact_id": "TX", "data": {"function_ref": "FN", "element_refs": ["EL-INPUT", "EL-RUN"], "checks": [{
                     "element_ref": "EL-INPUT", "used_element_refs": ["EL-INPUT", "EL-RUN"], "trigger_element_ref": "EL-RUN",
                     "input_class": "valid_text", "action": "输入受控内容并点击执行", "result": "显示任务完成提示",
+                    "intermediate_states": ["执行中"], "completion_state": "任务完成",
                     "result_anchor": {"assertion": "contains", "value": "任务完成提示"},
                 }]}},
             ])
@@ -110,6 +111,79 @@ class QualityRuleTests(unittest.TestCase):
             self.assertNotIn("performance_not_applicable_reason", saved)
             self.assertEqual(["外部服务响应波动"], [row["description"] for row in saved["risks"]])
             self.assertNotIn("risk_not_applicable_reason", saved)
+
+            deduplicated = save_plan(run_dir, {
+                "schema_version": "2.0",
+                "risks": [{
+                    "description": "外部依赖不可用可能导致响应超时", "impact": "任务执行",
+                    "level": "中", "recommendation": "使用受控数据并提供明确超时反馈", "status": "已识别",
+                    "dfx_dimension": "DFR可靠",
+                }],
+                "functions": [{
+                    "function_ref": "FN", **_plan_metadata("使用受控参数执行任务"),
+                    "automation_profile": {"level": "UI", "dependency": "受控数据", "stability_risk": "外部服务响应波动", "recommendation": "现有自动化框架"},
+                    "cases": [{"case_id": "TC-1", "page_ref": "PAGE", "title": "有效参数执行", "strategy": "baseline"}],
+                }],
+                "check_assignments": [{"transaction_ref": "TX", "check_index": 1, "disposition": "case", "case_id": "TC-1"}],
+            })
+            self.assertEqual(1, len(deduplicated["risks"]))
+            self.assertEqual("外部依赖不可用可能导致响应超时", deduplicated["risks"][0]["description"])
+
+            quantified = {
+                "schema_version": "2.0",
+                "performance_scenarios": [{
+                    "flow": "执行受控任务", "test_type": "响应时间", "concurrency": "单用户",
+                    "throughput": "不适用", "response_time": "5秒内完成", "data_scale": "单条受控数据",
+                    "duration": "单次执行", "metrics": "开始与完成时间", "pass_criteria": "5秒内完成",
+                    "data_strategy": "复用受控数据", "risk": "外部依赖波动", "included": "是",
+                }],
+                "risks": [], "risk_not_applicable_reason": "实探未发现需单独登记的风险",
+                "functions": [{
+                    "function_ref": "FN", **_plan_metadata("使用受控参数执行任务"),
+                    "cases": [{"case_id": "TC-1", "page_ref": "PAGE", "title": "有效参数执行", "strategy": "baseline"}],
+                }],
+                "check_assignments": [{"transaction_ref": "TX", "check_index": 1, "disposition": "case", "case_id": "TC-1"}],
+            }
+            with self.assertRaisesRegex(ValueError, "quantified time target"):
+                save_plan(run_dir, quantified)
+
+            conflicting_legacy = dict(quantified)
+            conflicting_legacy["performance_scenarios"] = [dict(
+                quantified["performance_scenarios"][0],
+                response_time="记录实际响应时间",
+                pass_criteria="页面给出明确完成反馈",
+                included="是",
+                included_in_current_test="否",
+            )]
+            with self.assertRaisesRegex(ValueError, "included conflicts"):
+                save_plan(run_dir, conflicting_legacy)
+
+    def test_trigger_reference_alone_does_not_force_a_performance_scenario(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "trigger-only"
+            ensure_run(run_dir, "业务中心>操作页面")
+            append_events(run_dir, [
+                {"kind": "page", "fact_id": "PAGE", "data": {"name": "操作页面", "menu_path": ["业务中心", "操作页面"], "final_scan_status": "stable", "unhandled_element_refs": []}},
+                {"kind": "function", "fact_id": "FN", "data": {"name": "普通操作"}},
+                {"kind": "element", "fact_id": "EL", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "内容", "type": "input", "valid_input_classes": ["text"]}},
+                {"kind": "element", "fact_id": "RUN", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "执行", "type": "trigger"}},
+                {"kind": "transaction", "fact_id": "TX", "data": {"function_ref": "FN", "element_refs": ["EL", "RUN"], "checks": [{
+                    "element_ref": "EL", "used_element_refs": ["EL", "RUN"], "trigger_element_ref": "RUN",
+                    "input_class": "valid_text", "action": "输入受控内容并点击执行", "result": "立即显示处理结果",
+                    "result_anchor": {"assertion": "contains", "value": "处理结果"},
+                }]}} ,
+            ])
+            self.assertTrue(checkpoint_facts(run_dir)["ready"])
+            saved = save_plan(run_dir, {
+                "schema_version": "2.0", **_plan_decisions(),
+                "functions": [{
+                    "function_ref": "FN", **_plan_metadata("执行普通页面操作"),
+                    "cases": [{"case_id": "TC-1", "page_ref": "PAGE", "title": "有效内容执行", "strategy": "baseline"}],
+                }],
+                "check_assignments": [{"transaction_ref": "TX", "check_index": 1, "disposition": "case", "case_id": "TC-1"}],
+            })
+            self.assertEqual([], saved["performance_scenarios"])
+            self.assertIn("performance_not_applicable_reason", saved)
 
     def test_persisted_facts_reject_unmasked_url_or_ip(self) -> None:
         with tempfile.TemporaryDirectory() as value:

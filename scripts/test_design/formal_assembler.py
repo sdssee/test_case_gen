@@ -81,6 +81,41 @@ def _compact_list(values: Iterable[Any], limit: int = 3) -> str:
     return "；".join(unique[:limit]) + f"；另有{len(unique) - limit}项"
 
 
+def _complete_list(values: Iterable[Any]) -> str:
+    return "；".join(dict.fromkeys(_text(value).strip() for value in values if _text(value).strip()))
+
+
+def _humanize_branch(value: Any) -> str:
+    text = _text(value).strip()
+    aliases = {
+        "valid": "有效值", "empty": "空值", "invalid": "无效值", "invalid_format": "无效格式",
+        "boundary_min": "下边界", "boundary_max": "上边界", "duplicate": "重复值",
+    }
+    if text in aliases:
+        return aliases[text]
+    if text.startswith("valid_"):
+        return "有效" + text[len("valid_"):].replace("_", "")
+    return text.replace("_", " ")
+
+
+def _element_interaction_summary(element: dict[str, Any], branch_values: list[str]) -> str:
+    explicit = _text(element.get("interaction")).strip()
+    if explicit:
+        return explicit
+    element_type = _text(element.get("type") or element.get("element_type")).strip().lower()
+    name = _text(element.get("name") or "当前控件").strip()
+    branches = _complete_list(_humanize_branch(value) for value in branch_values)
+    if element_type == "trigger":
+        return f"点击{name}并观察执行结果"
+    if element_type == "select":
+        return f"逐项选择并观察页面变化：{branches}" if branches else f"逐项选择{name}并观察页面变化"
+    if element_type == "input":
+        return f"逐类输入并触发功能：{branches}" if branches else f"在{name}中输入并触发功能"
+    if element_type == "toggle":
+        return f"逐项切换{name}并观察页面变化"
+    return f"操作{name}并观察页面变化"
+
+
 def _numbered(values: Any) -> str:
     if not isinstance(values, list):
         values = [line for line in str(values or "").splitlines() if line.strip()]
@@ -302,6 +337,22 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         if key not in seen_risks:
             risks.append(row)
             seen_risks.add(key)
+    risk_level_order = {"无": 0, "低": 1, "中": 2, "高": 3, "严重": 4}
+    global_risk_rows = [row for row in risks if not str(row.get("function_ref", "")).strip()]
+    risks_by_function: dict[str, list[dict[str, Any]]] = {}
+    for row in risks:
+        refs = [str(value) for value in row.get("affected_function_refs", []) if str(value).strip()]
+        if str(row.get("function_ref", "")).strip():
+            refs.append(str(row.get("function_ref", "")).strip())
+        for ref in dict.fromkeys(refs):
+            risks_by_function.setdefault(ref, []).append(row)
+
+    def risk_rows_for(function_ref: str) -> list[dict[str, Any]]:
+        return list({id(row): row for row in global_risk_rows + risks_by_function.get(function_ref, [])}.values())
+
+    def risk_level_for(function_ref: str) -> str:
+        linked = risk_rows_for(function_ref)
+        return max((_text(row.get("level") or "中") for row in linked), key=lambda value: risk_level_order.get(value, 2)) if linked else "未单独识别"
     function_contexts = [
         row.get("design_context", {}) for row in plan.get("functions", [])
         if isinstance(row.get("design_context"), dict)
@@ -412,28 +463,21 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
                 )),
                 "输入数据/状态条件": _text(written.get("test_data") or case.get("test_data")),
                 "观察点": observation or _text(case.get("observation")),
-                "风险等级": _text(written.get("risk_level") or case.get("risk_level") or "未单独识别"),
+                "风险等级": _text(written.get("risk_level") or case.get("risk_level") or risk_level_for(function_ref)),
                 "优先级": _text(written.get("priority") or case.get("priority") or "P1"),
                 "是否生成用例": "是",
                 "备注": _text(case.get("notes")),
             })
-    global_risk_ids = [
-        _text(row.get("risk_id")) for row in plan.get("risks", [])
-        if not str(row.get("function_ref", "")).strip() and _text(row.get("risk_id"))
-    ]
-    risk_ids_by_function: dict[str, list[str]] = {}
-    for row in plan.get("risks", []):
-        function_ref = str(row.get("function_ref", "")).strip()
-        risk_id = _text(row.get("risk_id"))
-        if function_ref and risk_id:
-            risk_ids_by_function.setdefault(function_ref, []).append(risk_id)
     for case in case_document.get("cases", []):
         function_id = str(case.get("function_ref", ""))
         action_text, expected_text = _paired_columns(case.get("steps"))
         case_risks = case.get("risks", [])
         if not isinstance(case_risks, list):
             case_risks = [case_risks] if _text(case_risks) else []
-        linked_risks = list(dict.fromkeys(global_risk_ids + risk_ids_by_function.get(function_id, []) + [_text(value) for value in case_risks if _text(value)]))
+        linked_risks = list(dict.fromkeys(
+            [_text(row.get("risk_id") or row.get("fact_id")) for row in risk_rows_for(function_id) if _text(row.get("risk_id") or row.get("fact_id"))]
+            + [_text(value) for value in case_risks if _text(value)]
+        ))
         rows[FUNCTION_SHEET].append({
             "用例 ID": _text(case.get("case_id")),
             "Story ID/需求 ID": _text(case.get("requirement_id") or requirement_by_function.get(function_id)),
@@ -611,10 +655,8 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         if auxiliary_ids:
             auxiliary_note = "辅助使用用例：" + "；".join(auxiliary_ids)
             note = "；".join(filter(None, [note, auxiliary_note]))
-        interaction_summary = _text(element.get("interaction"))
-        if not interaction_summary:
-            interaction_summary = _compact_list(branch_values) if branch_values else _text(element.get("type") or "页面控件") + "按页面实际方式操作"
-        expected_summary = _text(element.get("expected_behavior")) or _compact_list(results, limit=2)
+        interaction_summary = _element_interaction_summary(element, branch_values)
+        expected_summary = _text(element.get("expected_behavior")) or _complete_list(results)
         if not expected_summary:
             expected_summary = "各主验证分支产生已记录的可观察结果"
         rows["页面元素覆盖清单"].append({

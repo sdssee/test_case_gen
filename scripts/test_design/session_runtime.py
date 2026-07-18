@@ -56,6 +56,8 @@ ELEMENT_TYPE_ALIASES = {
 NEGATIVE_INPUT_CLASSES = {"empty", "invalid", "invalid_format", "duplicate", "boundary_min", "boundary_max"}
 ANGLE_PLACEHOLDER = re.compile(r"<[^<>\r\n]{1,80}>")
 PRIORITY_ALIASES = {"最高": "P0", "高": "P1", "中": "P2", "低": "P3", "high": "P1", "medium": "P2", "low": "P3"}
+EVENT_ENVELOPE_FIELDS = ("fact_id", "status", "client_ref", "local_ref")
+REVIEW_SECTIONS = ("cases", "performance", "risks", "automation", "elements", "cross_sheet")
 
 
 def _now() -> str:
@@ -228,6 +230,31 @@ def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
     item.setdefault("event_id", f"EVT-{uuid.uuid4().hex[:12].upper()}")
     item.setdefault("observed_at", _now())
     item.setdefault("status", "active")
+    return item
+
+
+def _normalize_event_envelope(event: dict[str, Any]) -> dict[str, Any]:
+    """Accept a misplaced envelope field without persisting a ghost fact.
+
+    This compatibility normalization runs only on a new caller payload. Stored
+    events remain strict and deterministic. Conflicting values are rejected
+    before anything is appended to ``events.jsonl``.
+    """
+    item = dict(event)
+    data = item.get("data")
+    if not isinstance(data, dict):
+        return item
+    normalized_data = dict(data)
+    for field in EVENT_ENVELOPE_FIELDS:
+        if field not in normalized_data:
+            continue
+        nested = normalized_data.pop(field)
+        top = item.get(field)
+        if top not in (None, "") and str(top) != str(nested):
+            raise ValueError(f"event {field} conflicts between envelope and data")
+        if top in (None, ""):
+            item[field] = nested
+    item["data"] = normalized_data
     return item
 
 
@@ -518,7 +545,7 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
     are merged by fact_id/client_ref and are never fuzzy-matched.
     """
     paths = artifact_paths(run_dir)
-    raw_items = [dict(event) for event in events]
+    raw_items = [_normalize_event_envelope(dict(event)) for event in events]
     existing_events = load_events(run_dir)
     client_refs: dict[str, tuple[str, str]] = {}
     for existing in existing_events:
@@ -986,15 +1013,106 @@ def _verification_focus_hint(element: dict[str, Any], check: dict[str, Any]) -> 
     return f"验证{element_name}在{branch}下产生{result}"
 
 
-def _has_observable_wait(facts: dict[str, Any]) -> bool:
-    """A submitted, loading or timed interaction merits at least a light response scenario."""
+def _branch_action_intent(element: dict[str, Any], requirement: dict[str, Any]) -> str:
+    kind = str(requirement.get("kind", ""))
+    value = str(requirement.get("value", ""))
+    name = str(element.get("name") or "当前控件")
+    if kind == "option_value":
+        options = [str(option) for option in element.get("options", [])]
+        default = str(element.get("default_value", ""))
+        if value == default and any(option != value for option in options):
+            return f"先切换到其他安全选项，再切回{value}，观察选中状态及实际功能效果"
+        return f"从当前状态切换到{value}，观察选中状态及实际功能效果"
+    labels = {
+        "empty": "清空输入并触发功能，观察拦截提示及数据未提交",
+        "invalid_format": "输入明确的无效格式并触发功能，观察格式校验及数据未提交",
+        "boundary_min": "输入已声明的下边界并触发功能，观察边界处理结果",
+        "boundary_max": "输入已声明的上边界并触发功能，观察边界处理结果",
+    }
+    return labels.get(value, f"在{name}中使用{value}并触发功能，观察该输入类别的实际效果")
+
+
+def _observable_wait_refs(facts: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return only facts that actually observed waiting, timing or timeout state.
+
+    A trigger reference merely proves that an action was submitted; it is not
+    performance evidence by itself.
+    """
+    refs: list[dict[str, Any]] = []
     for transaction in facts.get("transactions", []):
-        for check in transaction.get("checks", []):
-            if str(check.get("trigger_element_ref", "")).strip():
-                return True
-            if check.get("intermediate_states") or str(check.get("completion_state", "")).strip():
-                return True
-    return False
+        transaction_type = str(transaction.get("transaction_type", "")).strip().lower()
+        for index, check in enumerate(transaction.get("checks", []), 1):
+            has_state = bool(check.get("intermediate_states")) or bool(str(check.get("completion_state", "")).strip())
+            has_timing = any(
+                check.get(field) not in (None, "", [])
+                for field in ("observed_duration", "elapsed_time", "started_at", "completed_at", "timeout_state")
+            )
+            is_long_running = transaction_type in {"async", "asynchronous", "long_task", "long-running", "batch"}
+            if has_state or has_timing or is_long_running:
+                refs.append({
+                    "function_ref": str(transaction.get("function_ref", "")),
+                    "transaction_ref": str(transaction.get("fact_id", "")),
+                    "check_index": index,
+                })
+    return refs
+
+
+def _has_observable_wait(facts: dict[str, Any]) -> bool:
+    return bool(_observable_wait_refs(facts))
+
+
+def _risk_theme(value: Any) -> str:
+    """Group common risk causes without product- or page-specific wording."""
+    text = re.sub(r"\s+", "", str(value or "")).lower()
+    themes = (
+        ("response_dependency", ("响应", "波动", "超时", "延迟", "不可达", "不可用", "response", "timeout", "latency", "unavailable")),
+        ("permission", ("权限", "越权", "permission", "authorization")),
+        ("consistency", ("一致性", "持久化", "幂等", "consistency", "persistence", "idempot")),
+        ("data", ("数据", "造数", "样本", "data")),
+        ("security", ("安全", "泄露", "注入", "security", "leak", "injection")),
+        ("compatibility", ("兼容", "浏览器", "分辨率", "compatib", "browser")),
+    )
+    for theme, tokens in themes:
+        if any(token in text for token in tokens):
+            return theme
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text)
+
+
+def _deduplicate_risks(rows: list[dict[str, Any]], function_names: dict[str, str]) -> list[dict[str, Any]]:
+    """Merge the same semantic risk and retain every affected function."""
+    merged: list[dict[str, Any]] = []
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        row = json.loads(json.dumps(raw, ensure_ascii=False))
+        dimension = str(row.get("dfx_dimension") or row.get("type") or "风险").strip()
+        key = (dimension, _risk_theme(row.get("description")))
+        current = by_key.get(key)
+        function_ref = str(row.get("function_ref", "")).strip()
+        affected = [str(value) for value in row.get("affected_function_refs", []) if str(value).strip()]
+        if function_ref:
+            affected.append(function_ref)
+        affected = list(dict.fromkeys(affected))
+        if current is None:
+            row["affected_function_refs"] = affected
+            by_key[key] = row
+            merged.append(row)
+            continue
+        current_refs = [str(value) for value in current.get("affected_function_refs", []) if str(value).strip()]
+        current["affected_function_refs"] = list(dict.fromkeys(current_refs + affected))
+        impacts = [str(current.get("impact", "")).strip(), str(row.get("impact", "")).strip()]
+        impacts.extend(function_names.get(ref, ref) for ref in current["affected_function_refs"])
+        current["impact"] = "；".join(dict.fromkeys(value for value in impacts if value))
+        if not str(current.get("function_ref", "")).strip() or not function_ref or current.get("function_ref") != function_ref:
+            current.pop("function_ref", None)
+            current.pop("requirement_id", None)
+    return merged
+
+
+def _has_quantified_time_target(value: Any) -> bool:
+    text = str(value or "")
+    return bool(re.search(r"\d+(?:\.\d+)?\s*(?:ms|毫秒|s|sec(?:ond)?s?|秒|min(?:ute)?s?|分钟|h(?:our)?s?|小时)", text, re.IGNORECASE))
 
 
 def _substantive_stability_risk(value: Any) -> bool:
@@ -1051,6 +1169,7 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
                         "dfx_scenario": str(requirement.get("dfx_scenario", "正向流程")),
                         "independent_case": bool(requirement.get("independent_case")),
                         "verification_focus_hint": _verification_focus_hint(element, check),
+                        "action_intent_hint": _branch_action_intent(element, requirement),
                         "related_check": {"transaction_ref": transaction_ref, "check_index": index},
                     })
         unique_hints = _function_dfx_hints(owned_elements, owned_transactions, function_ref)
@@ -1103,7 +1222,8 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
         "specialist_decisions": {
             "performance": {
                 "observable_wait": _has_observable_wait(facts),
-                "rule": "有并发容量目标时写正式场景；有提交、加载、异步、长任务或超时时至少写一个轻量响应场景；确无可观察性能行为时才写不适用理由",
+                "observed_wait_refs": _observable_wait_refs(facts),
+                "rule": "按钮或提交动作本身不是性能依据；只有实测加载、异步、长任务、超时、耗时或需求性能目标时写场景，未提供量化目标时不得发明秒数",
             },
             "risk": {
                 "observed_open_items": [
@@ -1240,7 +1360,7 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
     if not plan.get("performance_scenarios") and _has_observable_wait(facts):
         issues.append(_issue(
             "unsupported_performance_na", "repairable", "case-plan.json",
-            "observed submit/loading behavior requires at least one light response or timeout scenario",
+            "observed waiting, loading, timing or timeout behavior requires one light response or timeout scenario",
             "add one compact response/timeout scenario; do not create per-case performance rows",
             function_ref="__global__",
         ))
@@ -1267,6 +1387,19 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
         missing = [field for field in required if not str(scenario.get(field, "")).strip()]
         if missing:
             issues.append(_issue("incomplete_performance_scenario", "repairable", "case-plan.json", f"performance scenario {scenario_id} lacks {missing}", "complete this specialist scenario during planning", function_ref=str(scenario.get("function_ref", "__global__"))))
+        quantified_target = " ".join(
+            str(scenario.get(field, "")) for field in ("response_time", "pass_criteria")
+        )
+        if _has_quantified_time_target(quantified_target):
+            refs = scenario.get("target_basis_refs", [])
+            source = str(scenario.get("target_basis", "")).strip().lower()
+            if source not in {"requirement", "observed", "需求", "实测"} or not isinstance(refs, list) or not refs or any(str(ref) not in fact_ids for ref in refs):
+                issues.append(_issue(
+                    "unsupported_performance_target", "repairable", "case-plan.json",
+                    f"performance scenario {scenario_id} contains a quantified time target without traceable requirement or observed basis",
+                    "remove the invented threshold or provide target_basis and valid target_basis_refs during planning",
+                    function_ref=str(scenario.get("function_ref", "__global__")),
+                ))
     for risk in plan.get("risks", []):
         risk_id = str(risk.get("risk_id", ""))
         required = ("description", "impact", "level", "recommendation", "status")
@@ -1415,6 +1548,19 @@ def _expected_satisfies_anchor(expected: str, check: dict[str, Any]) -> bool:
     return all(token in expected for token in tokens)
 
 
+def _uses_volatile_anchor_sample(expected: str, check: dict[str, Any]) -> bool:
+    anchor = check.get("result_anchor") if isinstance(check.get("result_anchor"), dict) else {}
+    stable = anchor.get("stable_tokens", anchor.get("tokens"))
+    value = anchor.get("value")
+    if stable in (None, "", []) or value in (None, "", []):
+        return False
+    samples = value if isinstance(value, list) else [value]
+    return any(
+        str(sample).strip() in expected and bool(re.search(r"\d|%|百分比|耗时|进度", str(sample)))
+        for sample in samples if str(sample).strip()
+    )
+
+
 def _action_satisfies_check(action: str, check: dict[str, Any]) -> bool:
     tokens = check.get("action_tokens", [])
     if isinstance(tokens, str):
@@ -1554,6 +1700,13 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
                 issues.append(_issue("action_fact_mismatch", "blocker", "function-cases.json", f"case {case_id} step {index} omits the observed option or input value", "restore the concrete action from the transaction fact", **context))
             if not _expected_satisfies_anchor(str(step.get("expected", "")), check):
                 issues.append(_issue("ungrounded_expected", "blocker", "function-cases.json", f"case {case_id} step {index} does not preserve its observed result", "rewrite this expected result from the transaction fact", **context))
+            if _uses_volatile_anchor_sample(str(step.get("expected", "")), check):
+                issues.append(_issue(
+                    "volatile_sample_expected", "repairable", "function-cases.json",
+                    f"case {case_id} step {index} fixes an observed numeric sample even though stable tokens exist",
+                    "retain the stable result fields and remove the incidental count, percentage, duration or progress value",
+                    **context,
+                ))
         if planned_checks != actual_checks or actual_check_list != planned_check_list or len(steps[1:]) != len(planned_check_list):
             issues.append(_issue("check_mapping_mismatch", "repairable", "function-cases.json", f"case {case_id} steps do not map one-to-one to all planned checks", "add, remove or remap only the affected paired steps", **context))
         prose = "\n".join(
@@ -1654,6 +1807,17 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("deprecated parallel coverage ledgers are not accepted; use check_assignments only")
     value["source"] = "facts.json"
     value["source_digest"] = _planning_fact_digest(facts)
+    for scenario in value.get("performance_scenarios", []):
+        if not isinstance(scenario, dict):
+            continue
+        if not str(scenario.get("flow", "")).strip() and str(scenario.get("business_link", "")).strip():
+            scenario["flow"] = scenario["business_link"]
+        legacy_included = scenario.pop("included_in_current_test", None)
+        if legacy_included not in (None, ""):
+            current = scenario.get("included")
+            if current not in (None, "") and str(current).strip() != str(legacy_included).strip():
+                raise ValueError("performance included conflicts with included_in_current_test")
+            scenario["included"] = legacy_included
     function_basis = [str(row.get("fact_id", "")) for row in facts.get("functions", []) if str(row.get("fact_id", ""))]
     if not value.get("performance_scenarios") and str(value.get("performance_not_applicable_reason", "")).strip() and "performance_basis_refs" not in value:
         value["performance_basis_refs"] = function_basis
@@ -1714,15 +1878,20 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
                 "status": "已识别",
             })
         function["automation_profile"] = profile
-    if _has_observable_wait(facts) and not value.get("performance_scenarios"):
+    wait_refs = _observable_wait_refs(facts)
+    if wait_refs and not value.get("performance_scenarios"):
         scope = facts.get("scope", {})
+        affected_function_refs = list(dict.fromkeys(str(row.get("function_ref", "")) for row in wait_refs if str(row.get("function_ref", ""))))
+        affected_names = [function_names.get(ref, ref) for ref in affected_function_refs]
         value["performance_scenarios"] = [{
             "source": "observed_wait",
-            "flow": str(scope.get("module_path") or "页面功能链路"),
+            "function_ref": affected_function_refs[0] if len(affected_function_refs) == 1 else "",
+            "basis_refs": wait_refs,
+            "flow": "；".join(affected_names) or str(scope.get("module_path") or "页面功能链路"),
             "test_type": "单次响应与超时体验",
             "concurrency": "单用户",
             "throughput": "不适用",
-            "response_time": "记录实际响应时间；存在需求目标时按目标判定",
+            "response_time": "未提供量化目标；记录实际响应时间",
             "data_scale": "复用功能用例的受控数据",
             "duration": "从触发操作至完成或超时",
             "metrics": "开始时间、完成时间、加载状态、完成或超时反馈",
@@ -1733,15 +1902,13 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
         }]
         value.pop("performance_not_applicable_reason", None)
         value.pop("performance_basis_refs", None)
-    existing_risk_keys = {
-        (str(row.get("function_ref", "")), re.sub(r"\s+", "", str(row.get("description", ""))))
-        for row in value.get("risks", []) if isinstance(row, dict)
-    }
-    for candidate in profile_risk_candidates:
-        key = (str(candidate.get("function_ref", "")), re.sub(r"\s+", "", str(candidate.get("description", ""))))
-        if key not in existing_risk_keys:
-            value.setdefault("risks", []).append(candidate)
-            existing_risk_keys.add(key)
+    if value.get("performance_scenarios"):
+        value.pop("performance_not_applicable_reason", None)
+        value.pop("performance_basis_refs", None)
+    value["risks"] = _deduplicate_risks(
+        [row for row in value.get("risks", []) if isinstance(row, dict)] + profile_risk_candidates,
+        function_names,
+    )
     if value.get("risks"):
         value.pop("risk_not_applicable_reason", None)
         value.pop("risk_basis_refs", None)
@@ -1883,6 +2050,8 @@ def save_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
 
 def _assign_case_sources(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]:
     plan = load_plan(run_dir)
+    facts = load_facts(run_dir)
+    pages = {str(page.get("fact_id", "")): page for page in facts.get("pages", [])}
     value = json.loads(json.dumps(cases, ensure_ascii=False))
     assignments: dict[str, list[dict[str, Any]]] = {}
     for assignment in plan.get("check_assignments", []):
@@ -1900,12 +2069,22 @@ def _assign_case_sources(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]
         case_id = str(case.get("case_id", ""))
         planned = planned_cases.get(case_id, {})
         steps = case.get("steps", []) if isinstance(case.get("steps"), list) else []
+        core_steps = steps[1:] if steps and str(steps[0].get("action", "")).strip().startswith("进入") else steps
+        page = pages.get(str(planned.get("page_ref", "")), {})
+        menu_path = "-".join(str(part).strip() for part in page.get("menu_path", []) if str(part).strip())
+        page_anchor = str(page.get("result_anchor") or page.get("name") or "目标页面").strip()
+        navigation = {
+            "action": f"进入{menu_path}",
+            "expected": f"显示{page_anchor}" if page_anchor.endswith("页面") else f"显示{page_anchor}页面",
+        }
+        steps = [navigation] + core_steps
+        case["steps"] = steps
         sources = assignments.get(case_id, [])
         for step in steps:
             if isinstance(step, dict):
                 step.pop("source_check", None)
-        if len(steps[1:]) == len(sources):
-            for step, source in zip(steps[1:], sources):
+        if len(core_steps) == len(sources):
+            for step, source in zip(core_steps, sources):
                 step["source_check"] = {
                     "transaction_ref": str(source.get("transaction_ref", "")),
                     "check_index": int(source.get("check_index", 0)),
@@ -2081,6 +2260,14 @@ def review_run(run_dir: Path, semantic_review: dict[str, Any] | None = None) -> 
     if not semantic:
         semantic_issues.append(_issue("semantic_review_missing", "repairable", "review.json", "the one model semantic review has not been supplied", "review the compact facts/plan/case projection once"))
     else:
+        reviewed_sections = [str(value).strip() for value in semantic.get("reviewed_sections", []) if str(value).strip()]
+        missing_sections = [section for section in REVIEW_SECTIONS if section not in reviewed_sections]
+        if missing_sections:
+            semantic_issues.append(_issue(
+                "semantic_review_scope", "repairable", "review.json",
+                f"semantic review did not cover sections: {missing_sections}",
+                "review cases, performance, risks, automation, elements and cross-sheet conclusions in the same one-time audit",
+            ))
         if reviewed_case_ids != expected_case_ids:
             semantic_issues.append(_issue("semantic_review_scope", "repairable", "review.json", "semantic review case order/set differs from function-cases.json", "review the current case set once in its existing order"))
         if not str(semantic.get("summary", "")).strip():
@@ -2136,6 +2323,7 @@ def review_run(run_dir: Path, semantic_review: dict[str, Any] | None = None) -> 
                 else "pass"
             ),
             "reviewed_case_ids": reviewed_case_ids,
+            "reviewed_sections": [str(value) for value in semantic.get("reviewed_sections", [])] if semantic else [],
             "summary": str(semantic.get("summary", "")),
             "issues": semantic_issues,
             "local_fixes": semantic.get("local_fixes", []),

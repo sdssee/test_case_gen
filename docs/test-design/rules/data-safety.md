@@ -9,7 +9,7 @@
 
 ## 敏感信息
 
-facts、证据、用例、Excel 和归档中不得保留真实 URL/IP、内部主机名、生产账号、手机号、证件号、密码、密钥或令牌。使用 `<test_env_base_url>`、`<test_user_account>`、`<test_user_password>`、`<valid_api_key>` 等占位符。
+facts、证据、用例、Excel 和归档中不得保留真实 URL/IP、内部主机名、生产账号、手机号、证件号、密码、密钥或令牌。事实中只记录脱敏类别和稳定观察；可执行用例使用 `TEST_ENV_URL`、`TEST_USER_ACCOUNT`、`TEST_VALID_TARGET` 等命名受控数据引用，并在前置条件中说明同名数据由当前测试环境或受控数据集提供。不得使用尖括号、自然语言地址或“有效值”等无法直接执行的占位描述。
 
 ## 资产保护
 

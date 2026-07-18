@@ -85,11 +85,18 @@ def _complete_list(values: Iterable[Any]) -> str:
     return "；".join(dict.fromkeys(_text(value).strip() for value in values if _text(value).strip()))
 
 
-def _humanize_branch(value: Any) -> str:
+def _humanize_branch(value: Any, descriptions: dict[str, Any] | None = None) -> str:
     text = _text(value).strip()
+    if descriptions and _text(descriptions.get(text)).strip():
+        return _text(descriptions[text]).strip()
     aliases = {
         "valid": "有效值", "empty": "空值", "invalid": "无效值", "invalid_format": "无效格式",
         "boundary_min": "下边界", "boundary_max": "上边界", "duplicate": "重复值",
+        "valid_domain": "有效域名", "valid_hostname": "有效主机名", "valid_ipv4": "有效IPv4地址",
+        "valid_ipv6": "有效IPv6地址", "valid_ip": "有效IP地址", "valid_email": "有效邮箱地址",
+        "valid_url": "有效URL", "valid_date": "有效日期", "valid_datetime": "有效日期时间",
+        "valid_number": "有效数字", "valid_integer": "有效整数", "valid_decimal": "有效小数",
+        "valid_port": "有效端口", "valid_phone": "有效电话号码",
     }
     if text in aliases:
         return aliases[text]
@@ -104,7 +111,8 @@ def _element_interaction_summary(element: dict[str, Any], branch_values: list[st
         return explicit
     element_type = _text(element.get("type") or element.get("element_type")).strip().lower()
     name = _text(element.get("name") or "当前控件").strip()
-    branches = _complete_list(_humanize_branch(value) for value in branch_values)
+    descriptions = element.get("valid_input_class_descriptions") if isinstance(element.get("valid_input_class_descriptions"), dict) else {}
+    branches = _complete_list(_humanize_branch(value, descriptions) for value in branch_values)
     if element_type == "trigger":
         return f"点击{name}并观察执行结果"
     if element_type == "select":
@@ -251,6 +259,10 @@ def _automation_suitable(case: dict[str, Any], plan_functions: dict[str, dict[st
     level = str(profile.get("level", "")).strip().lower() if isinstance(profile, dict) else ""
     if level in {"不适用", "none", "n/a", "na"}:
         return "否"
+    risk = str(profile.get("stability_risk", "")).strip().lower()
+    substantive_risk = risk and not any(marker in risk for marker in ("无风险", "无已知", "none", "n/a", "不适用"))
+    if substantive_risk:
+        return "有条件"
     return "是" if str(case.get("automation_value", "")).strip() and str(case.get("automation_priority", "")).strip() else "待评估"
 
 
@@ -513,7 +525,7 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
             raise ValueError("case-plan.json must state why performance design is not applicable")
         rows["性能测试设计"].append({
             "性能场景 ID": "PERF-N/A", "Story ID/需求 ID": "不适用", "业务链路": _text(scope.get("module_path")),
-            "性能测试类型": "不适用", "DFX维度": "DFP性能", "DFX场景": reason,
+            "性能测试类型": "不适用", "DFX维度": "DFP性能", "DFX场景": "不适用判定",
             "目标用户量/并发数": "不适用", "TPS/QPS 目标": "不适用", "响应时间目标": "不适用",
             "数据量级": "不适用", "测试时长": "不适用", "监控指标": "不适用", "通过标准": "不适用",
             "造数策略": "不适用", "风险说明": reason, "是否纳入本轮测试": "否",
@@ -605,7 +617,11 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
                 refs.add(str(check.get("element_ref")))
             for ref in refs:
                 if _text(check.get("result")):
-                    results_by_element.setdefault(ref, []).append(_text(check.get("result")))
+                    anchor = check.get("result_anchor") if isinstance(check.get("result_anchor"), dict) else {}
+                    stable = anchor.get("stable_tokens", anchor.get("tokens"))
+                    stable_values = stable if isinstance(stable, list) else [stable] if stable not in (None, "", []) else []
+                    summary = "稳定显示：" + "、".join(_text(value) for value in stable_values if _text(value)) if stable_values else _text(check.get("result"))
+                    results_by_element.setdefault(ref, []).append(summary)
     blocked_functions = {
         str(ref)
         for item in open_items

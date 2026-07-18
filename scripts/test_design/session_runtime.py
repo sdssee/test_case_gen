@@ -34,7 +34,12 @@ INTERNAL_PROSE = re.compile(
     re.IGNORECASE,
 )
 SCREENSHOT_MARKERS = ("截图", "截屏", "screenshot", "screen shot")
-PLACEHOLDER_MARKERS = ("TODO", "TBD", "待补充", "请补充", "示例数据", "占位", "输入测试数据", "填写测试数据")
+PLACEHOLDER_MARKERS = (
+    "TODO", "TBD", "待补充", "请补充", "示例数据", "占位", "输入测试数据", "填写测试数据",
+)
+NATURAL_PLACEHOLDER_PATTERN = re.compile(
+    r"(?:公网|有效|合法|可用|测试)[\w\u4e00-\u9fff]{0,16}(?:地址|域名|主机名|账号|账户|密码|密钥|令牌|手机号)"
+)
 URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
 IPV4_PATTERN = re.compile(r"(?<![\d.])(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?![\d.])")
 FACT_ID_PREFIXES = {
@@ -58,6 +63,7 @@ ANGLE_PLACEHOLDER = re.compile(r"<[^<>\r\n]{1,80}>")
 PRIORITY_ALIASES = {"最高": "P0", "高": "P1", "中": "P2", "低": "P3", "high": "P1", "medium": "P2", "low": "P3"}
 EVENT_ENVELOPE_FIELDS = ("fact_id", "status", "client_ref", "local_ref")
 REVIEW_SECTIONS = ("cases", "performance", "risks", "automation", "elements", "cross_sheet")
+DATA_REFERENCE_PATTERN = re.compile(r"\bTEST_[A-Z][A-Z0-9_]{2,}\b")
 
 
 def _now() -> str:
@@ -325,6 +331,13 @@ def _normalize_element(element: dict[str, Any]) -> dict[str, Any]:
     if descriptions:
         data["valid_input_class_descriptions"] = descriptions
 
+    raw_formats = data.get("input_formats", data.get("input_format", constraints.get("formats", constraints.get("format", []))))
+    if isinstance(raw_formats, str):
+        raw_formats = [raw_formats]
+    input_formats = list(dict.fromkeys(str(value).strip().lower() for value in raw_formats if str(value).strip())) if isinstance(raw_formats, list) else []
+    if input_formats:
+        data["input_formats"] = input_formats
+
     known = canonical in ELEMENT_TYPE_ALIASES
     if data.get("interactive", True) is False:
         data["classification_status"] = "not_interactive"
@@ -347,6 +360,24 @@ def _is_trigger_element(element: dict[str, Any]) -> bool:
 
 def _action_has_trigger(action: str) -> bool:
     return bool(re.search(r"点击|单击|提交|执行|保存|查询|搜索|确认|触发|click|submit|execute|run", action, re.IGNORECASE))
+
+
+def _normalized_action(value: Any) -> str:
+    return re.sub(r"[\s，。；、,.;:：]+", "", str(value or "")).lower()
+
+
+def _default_option_action_complete(element: dict[str, Any], check: dict[str, Any]) -> bool:
+    target = str(check.get("option_value", "")).strip()
+    default = str(element.get("default_value", "")).strip()
+    options = [str(value).strip() for value in element.get("options", []) if str(value).strip()]
+    if not target or target != default or len(options) < 2:
+        return True
+    action = str(check.get("action", ""))
+    target_position = action.rfind(target)
+    return target_position >= 0 and any(
+        option != target and 0 <= action.find(option) < target_position
+        for option in options
+    )
 
 
 def _derive_exploration_requirements(element: dict[str, Any]) -> list[dict[str, Any]]:
@@ -372,11 +403,11 @@ def _derive_exploration_requirements(element: dict[str, Any]) -> list[dict[str, 
                 "reason": "页面声明该输入为必填",
                 "independent_case": True,
             })
-        if element.get("input_format") or constraints.get("format") or constraints.get("pattern"):
+        if element.get("input_formats") or element.get("input_format") or constraints.get("format") or constraints.get("formats") or constraints.get("pattern"):
             requirements.append({
                 "kind": "input_class", "value": "invalid_format", "strategy": "DFX",
                 "dfx_code": "invalid_format", "dfx_dimension": "DFT功能", "dfx_scenario": "无效输入格式",
-                "reason": "页面声明了输入格式",
+                "reason": "页面语义、需求参考或模型推断表明该元素接受结构化输入",
                 "independent_case": True,
             })
         if element.get("unique") is True or constraints.get("unique") is True:
@@ -476,7 +507,25 @@ def _validate_new_transactions(run_dir: Path, items: list[dict[str, Any]]) -> No
         missing_usage = declared - used
         if missing_usage:
             raise ValueError(f"transaction elements were declared but not actually used by any check: {sorted(missing_usage)}")
+        independent_actions: dict[str, tuple[int, str, str]] = {}
         for index, check in enumerate(checks, 1):
+            primary_ref = str(check.get("element_ref", "")).strip()
+            primary_element = elements.get(primary_ref, {})
+            independent = any(row.get("independent_case") for row in _matching_requirements(primary_element, check))
+            action_key = _normalized_action(check.get("action"))
+            if independent and action_key:
+                previous = independent_actions.get(action_key)
+                branch = str(check.get("input_class") or check.get("option_value") or "")
+                if previous and (previous[1] != primary_ref or previous[2] != branch):
+                    raise ValueError(
+                        f"transaction independent checks {previous[0]} and {index} reuse the same physical action; "
+                        "execute each primary element branch independently"
+                    )
+                independent_actions[action_key] = (index, primary_ref, branch)
+            if primary_element.get("option_set") == "finite" and not _default_option_action_complete(primary_element, check):
+                raise ValueError(
+                    f"transaction check {index} must switch away from and then back to the default option before observing its effect"
+                )
             used_refs = {str(value) for value in check.get("used_element_refs", [])}
             trigger_refs = [ref for ref in used_refs if ref in elements and _is_trigger_element(elements[ref])]
             if not trigger_refs:
@@ -598,6 +647,20 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
     items = [resolve(item) for item in items]
     if not items:
         return []
+
+    # A final scan is an observation made at a point in the interaction stream.
+    # Stamp it with the transaction sequence so an unchanged page can still prove
+    # it was rescanned after new actions, while an exact repeated submission remains
+    # an idempotent no-op.
+    transaction_sequence = sum(
+        1 for existing in existing_events
+        if _prepare_event(existing).get("kind") == "transaction"
+    )
+    for item in items:
+        if item.get("kind") == "transaction":
+            transaction_sequence += 1
+        elif item.get("kind") == "page" and item.get("data", {}).get("final_scan_status") == "stable":
+            item.setdefault("data", {})["final_scan_transaction_sequence"] = transaction_sequence
 
     # Exact resubmissions are successful no-ops.  This is deliberately strict:
     # only the same kind/status/data is absorbed; similar business prose is not
@@ -840,6 +903,54 @@ def pending_exploration_requirements(run_dir: Path) -> list[dict[str, Any]]:
     return _pending_exploration(elements, transactions)
 
 
+def _final_scan_issues(run_dir: Path, facts: dict[str, Any]) -> list[dict[str, str]]:
+    """Require one explicit stable page scan after that page's last transaction."""
+    events = load_events(run_dir)
+    element_pages = {
+        str(element.get("fact_id", "")): str(element.get("page_ref", ""))
+        for element in facts.get("elements", [])
+    }
+    function_pages: dict[str, set[str]] = {}
+    for element in facts.get("elements", []):
+        function_ref = str(element.get("function_ref", ""))
+        page_ref = str(element.get("page_ref", ""))
+        if function_ref and page_ref:
+            function_pages.setdefault(function_ref, set()).add(page_ref)
+    last_transaction_by_page: dict[str, int] = {}
+    final_scan_by_page: dict[str, int] = {}
+    explicit_unhandled: dict[str, Any] = {}
+    for position, raw in enumerate(events):
+        event = _prepare_event(raw)
+        data = event.get("data", {})
+        if event.get("kind") == "page" and data.get("final_scan_status") == "stable":
+            page_ref = str(event.get("fact_id", ""))
+            final_scan_by_page[page_ref] = position
+            explicit_unhandled[page_ref] = data.get("unhandled_element_refs", None)
+        elif event.get("kind") == "transaction" and event.get("status", "active") not in NON_ACTIONABLE_STATUSES:
+            page_refs = set(function_pages.get(str(data.get("function_ref", "")), set()))
+            for check in data.get("checks", []):
+                for element_ref in check.get("used_element_refs", []):
+                    if element_pages.get(str(element_ref)):
+                        page_refs.add(element_pages[str(element_ref)])
+            for page_ref in page_refs:
+                last_transaction_by_page[page_ref] = position
+    issues: list[dict[str, str]] = []
+    for page in facts.get("pages", []):
+        page_ref = str(page.get("fact_id", ""))
+        final_position = final_scan_by_page.get(page_ref, -1)
+        transaction_position = last_transaction_by_page.get(page_ref, -1)
+        if final_position < 0:
+            issues.append(_issue("missing_final_scan", "blocker", "facts.json", f"page {page_ref} has no explicit stable final scan", "record one final page update after all page transactions"))
+        elif final_position <= transaction_position:
+            issues.append(_issue("stale_final_scan", "blocker", "facts.json", f"page {page_ref} final scan predates its last transaction", "rescan the page once after the last transaction"))
+        unhandled = explicit_unhandled.get(page_ref, None)
+        if not isinstance(unhandled, list):
+            issues.append(_issue("missing_final_scan_scope", "blocker", "facts.json", f"page {page_ref} final scan does not explicitly list unhandled elements", "record unhandled_element_refs as an explicit array"))
+        elif unhandled:
+            issues.append(_issue("unhandled_final_elements", "blocker", "facts.json", f"page {page_ref} still has unhandled elements: {unhandled}", "explore only those final-scan elements"))
+    return issues
+
+
 def inspect_discovery(run_dir: Path, facts: dict[str, Any] | None = None) -> list[dict[str, str]]:
     if facts is None:
         try:
@@ -864,10 +975,7 @@ def inspect_discovery(run_dir: Path, facts: dict[str, Any] | None = None) -> lis
             issues.append(_issue("missing_fact", "blocker", "facts.json", f"page {page['fact_id']} lacks its actual menu_path", "record the menu hierarchy observed during navigation"))
         if not str(page.get("name", "")).strip():
             issues.append(_issue("missing_fact", "blocker", "facts.json", f"page {page['fact_id']} lacks its visible name", "record the visible page name"))
-        if page.get("final_scan_status") != "stable":
-            issues.append(_issue("missing_fact", "blocker", "facts.json", f"page {page['fact_id']} has no stable final scan", "perform one final full scan"))
-        if page.get("unhandled_element_refs"):
-            issues.append(_issue("missing_fact", "blocker", "facts.json", f"page {page['fact_id']} still has unhandled elements", "explore only the listed elements"))
+    issues.extend(_final_scan_issues(run_dir, facts))
     for element in facts.get("elements", []):
         ref = str(element.get("fact_id"))
         function_ref = str(element.get("function_ref", ""))
@@ -917,6 +1025,33 @@ def inspect_discovery(run_dir: Path, facts: dict[str, Any] | None = None) -> lis
         if kind in {"create", "edit", "configuration", "delete"}:
             if transaction.get("test_object_ref") not in test_object_refs:
                 issues.append(_issue("broken_reference", "blocker", "facts.json", f"{kind} transaction {transaction['fact_id']} has no current-run test object", "bind the current-run test object"))
+    independent_actions: dict[tuple[str, str], tuple[str, int, str, str]] = {}
+    elements_by_ref = {str(row.get("fact_id", "")): row for row in facts.get("elements", [])}
+    for transaction in facts.get("transactions", []):
+        function_ref = str(transaction.get("function_ref", ""))
+        for index, check in enumerate(transaction.get("checks", []), 1):
+            element_ref = str(check.get("element_ref", ""))
+            element = elements_by_ref.get(element_ref, {})
+            if not any(row.get("independent_case") for row in _matching_requirements(element, check)):
+                continue
+            action_key = _normalized_action(check.get("action"))
+            branch = str(check.get("input_class") or check.get("option_value") or "")
+            key = (function_ref, action_key)
+            previous = independent_actions.get(key)
+            if action_key and previous and (previous[2] != element_ref or previous[3] != branch):
+                issues.append(_issue(
+                    "reused_independent_action", "blocker", "facts.json",
+                    f"independent checks {(previous[0], previous[1])} and {(transaction.get('fact_id'), index)} reuse one physical action",
+                    "execute and record the later primary branch independently", function_ref=function_ref,
+                ))
+            elif action_key:
+                independent_actions[key] = (str(transaction.get("fact_id", "")), index, element_ref, branch)
+            if element.get("option_set") == "finite" and not _default_option_action_complete(element, check):
+                issues.append(_issue(
+                    "default_option_not_reselected", "blocker", "facts.json",
+                    f"check {(transaction.get('fact_id'), index)} does not switch away from and back to its default option",
+                    "repeat only the default option branch with an observable switch-away-and-back action", function_ref=function_ref,
+                ))
     for item in facts.get("open_items", []):
         if item.get("page_verifiable") is True:
             issues.append(_issue("invalid_open_item", "blocker", "facts.json", f"open item {item['fact_id']} can be verified on the page", "operate the page and update this item instead of asking the user"))
@@ -1441,6 +1576,15 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
                 issues.append(_issue("invalid_assignment", "repairable", "case-plan.json", f"non-case check {key} has no reason", "add one concrete reason"))
         else:
             issues.append(_issue("invalid_assignment", "repairable", "case-plan.json", f"check {key} has unsupported disposition {disposition!r}", "use case/performance/risk/not_applicable"))
+        if transaction and key[1] >= 1 and key[1] <= len(transaction.get("checks", [])):
+            check = transaction.get("checks", [])[key[1] - 1]
+            observed_outcome = str(check.get("outcome") or transaction.get("outcome") or "").strip().lower()
+            if observed_outcome in {"unexpected", "anomaly", "failed_unexpectedly"} and disposition not in {"case", "risk", "performance"}:
+                issues.append(_issue(
+                    "unhandled_observed_anomaly", "repairable", "case-plan.json",
+                    f"unexpected observed check {key} has no executable or specialist disposition",
+                    "assign this observed anomaly to a case, risk or performance scenario", function_ref=str(transaction.get("function_ref", "")),
+                ))
     empty_cases = set(case_owners) - assigned_case_ids
     for case_id in sorted(empty_cases):
         issues.append(_issue(
@@ -1536,6 +1680,16 @@ def _normalize_core_prose(steps: list[dict[str, Any]]) -> tuple[tuple[str, str],
     return tuple(normalized)
 
 
+def _normalize_core_column(steps: list[dict[str, Any]], key: str) -> tuple[str, ...]:
+    core_steps = steps[1:] if steps and "进入" in str(steps[0].get("action", "")) else steps
+    return tuple(
+        re.sub(r"\s+", " ", re.sub(
+            r"(?i)(?:AI_TEST|CODEX_TEST)(?:[-_][A-Za-z0-9]+)+", "<TEST_OBJECT>", str(step.get(key, "")),
+        )).strip()
+        for step in core_steps
+    )
+
+
 def _expected_satisfies_anchor(expected: str, check: dict[str, Any]) -> bool:
     anchor = check.get("result_anchor") if isinstance(check.get("result_anchor"), dict) else {}
     raw_tokens = anchor.get("stable_tokens", anchor.get("tokens"))
@@ -1606,6 +1760,8 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
     closed_functions: set[str] = set()
     previous_function = ""
     signatures: dict[tuple[str, tuple[tuple[str, str], ...]], str] = {}
+    action_signatures: dict[tuple[str, tuple[str, ...]], str] = {}
+    expected_signatures: dict[tuple[str, tuple[str, ...]], str] = {}
     for case in document.get("cases", []):
         case_id = str(case.get("case_id", "")).strip()
         function_ref = str(case.get("function_ref", "")).strip()
@@ -1720,20 +1876,56 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
             issues.append(_issue("screenshot_step", "repairable", "function-cases.json", f"case {case_id} asks the tester to take a screenshot", "replace it with an observable assertion", **context))
         if any(marker.lower() in prose.lower() for marker in PLACEHOLDER_MARKERS):
             issues.append(_issue("placeholder", "repairable", "function-cases.json", f"case {case_id} contains placeholder prose", "supply concrete masked data", **context))
+        executable_input_text = "\n".join(
+            [str(case.get("test_data", ""))] + [str(step.get("action", "")) for step in steps]
+        )
+        if NATURAL_PLACEHOLDER_PATTERN.search(executable_input_text):
+            issues.append(_issue("placeholder", "repairable", "function-cases.json", f"case {case_id} contains a natural-language data placeholder", "use a named TEST_* controlled-data reference and explain its source", **context))
         if ANGLE_PLACEHOLDER.search(prose):
             issues.append(_issue("placeholder", "repairable", "function-cases.json", f"case {case_id} contains unresolved angle-bracket data", "replace it with concrete controlled test data", **context))
         if URL_PATTERN.search(prose) or IPV4_PATTERN.search(prose):
             issues.append(_issue("sensitive_network", "blocker", "function-cases.json", f"case {case_id} exposes a URL or IP address", "replace it with a controlled masked test-data reference", **context))
+        test_data_refs = set(DATA_REFERENCE_PATTERN.findall(str(case.get("test_data", ""))))
+        precondition_text = "\n".join(str(value) for value in case.get("preconditions", []))
+        missing_data_refs = sorted(ref for ref in test_data_refs if ref not in precondition_text)
+        if missing_data_refs:
+            issues.append(_issue(
+                "test_data_source_missing", "repairable", "function-cases.json",
+                f"case {case_id} does not explain the controlled source of {', '.join(missing_data_refs)}",
+                "add the same named test-data reference and its controlled source to the preconditions",
+                **context,
+            ))
         refs = {str(value) for value in case.get("fact_refs", [])}
         planned_refs = {str(value) for value in planned_case.get("fact_refs", [])}
         if not refs or not refs <= fact_ids or not planned_refs <= refs:
             issues.append(_issue("ungrounded_case", "blocker", "function-cases.json", f"case {case_id} is not grounded in all planned facts", "restore only the missing fact mapping; do not invent an expected result", **context))
         signature = _normalize_core_prose(steps)
         signature_key = (function_ref, signature)
-        if signature and signature_key in signatures:
+        duplicate_pair = bool(signature and signature_key in signatures)
+        if duplicate_pair:
             issues.append(_issue("duplicate_core", "repairable", "function-cases.json", f"case {case_id} duplicates the core actions and results of {signatures[signature_key]}", "rewrite or merge this planned scenario", **context))
         if signature:
             signatures[signature_key] = case_id
+        action_signature = _normalize_core_column(steps, "action")
+        expected_signature = _normalize_core_column(steps, "expected")
+        action_key = (function_ref, action_signature)
+        expected_key = (function_ref, expected_signature)
+        if not duplicate_pair and action_signature and action_key in action_signatures:
+            issues.append(_issue(
+                "duplicate_core_action", "repairable", "function-cases.json",
+                f"case {case_id} repeats the core action of {action_signatures[action_key]} despite a different primary focus",
+                "use the independently observed action intent for this primary branch", **context,
+            ))
+        if not duplicate_pair and expected_signature and expected_key in expected_signatures:
+            issues.append(_issue(
+                "duplicate_core_expected", "repairable", "function-cases.json",
+                f"case {case_id} repeats the core expected result of {expected_signatures[expected_key]} despite a different scenario",
+                "state the branch-specific observable effect while retaining stable result tokens", **context,
+            ))
+        if action_signature:
+            action_signatures[action_key] = case_id
+        if expected_signature:
+            expected_signatures[expected_key] = case_id
         for field in ("dfx_dimension", "dfx_scenario"):
             if str(case.get(field, "")).strip() != str(planned_case.get(field, "")).strip():
                 issues.append(_issue("plan_mismatch", "repairable", "function-cases.json", f"case {case_id} {field} differs from plan", "restore this planned value", **context))
@@ -2062,12 +2254,23 @@ def _assign_case_sources(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]
         for function in plan.get("functions", [])
         for case in function.get("cases", [])
     }
+    planned_function_names = {
+        str(function.get("function_ref", "")): str(function.get("name", ""))
+        for function in plan.get("functions", [])
+    }
     for case in value.get("cases", []):
+        case_id = str(case.get("case_id", ""))
+        planned = planned_cases.get(case_id, {})
+        case["test_type"] = str(case.get("test_type") or planned.get("test_type") or "功能测试")
+        case["priority"] = str(case.get("priority") or planned.get("priority") or "P1")
+        case["automation_priority"] = str(case.get("automation_priority") or planned.get("automation_priority") or case["priority"])
         for field in ("priority", "automation_priority"):
             raw = str(case.get(field, "")).strip()
             case[field] = PRIORITY_ALIASES.get(raw.lower(), PRIORITY_ALIASES.get(raw, raw.upper()))
-        case_id = str(case.get("case_id", ""))
-        planned = planned_cases.get(case_id, {})
+        function_name = planned_function_names.get(str(case.get("function_ref", "")), "")
+        planned_title = str(planned.get("title", "")).strip()
+        if function_name and planned_title:
+            case["title"] = f"{function_name}-{planned_title}"
         steps = case.get("steps", []) if isinstance(case.get("steps"), list) else []
         core_steps = steps[1:] if steps and str(steps[0].get("action", "")).strip().startswith("进入") else steps
         page = pages.get(str(planned.get("page_ref", "")), {})

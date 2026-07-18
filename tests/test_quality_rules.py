@@ -10,9 +10,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from test_design.session_runtime import (
-    append_events, build_plan_skeleton, checkpoint_facts, ensure_run,
+    append_events, artifact_paths, build_plan_skeleton, checkpoint_facts, ensure_run,
     pending_exploration_requirements, save_cases, save_plan,
 )
+
+
+def _mark_final_scan(run_dir: Path, page_ref: str = "PAGE") -> None:
+    append_events(run_dir, [{
+        "kind": "page", "fact_id": page_ref,
+        "data": {"final_scan_status": "stable", "unhandled_element_refs": []},
+    }])
 
 
 def _plan_metadata(goal: str) -> dict[str, object]:
@@ -37,6 +44,85 @@ def _plan_decisions() -> dict[str, object]:
 
 
 class QualityRuleTests(unittest.TestCase):
+    def test_final_scan_must_follow_the_last_transaction_and_remains_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "final-scan"
+            ensure_run(run_dir, "工具>执行页")
+            append_events(run_dir, [
+                {"kind": "page", "fact_id": "PAGE", "data": {
+                    "name": "执行页", "menu_path": ["工具", "执行页"],
+                    "final_scan_status": "stable", "unhandled_element_refs": [],
+                }},
+                {"kind": "function", "fact_id": "FN", "data": {"name": "执行"}},
+                {"kind": "element", "fact_id": "EL", "data": {
+                    "page_ref": "PAGE", "function_ref": "FN", "name": "执行", "type": "button",
+                }},
+                {"kind": "transaction", "fact_id": "TX", "data": {
+                    "function_ref": "FN", "element_refs": ["EL"], "checks": [{
+                        "element_ref": "EL", "action": "点击执行", "result": "显示处理结果",
+                        "result_anchor": {"assertion": "contains", "value": "处理结果"},
+                    }],
+                }},
+            ])
+            self.assertFalse(checkpoint_facts(run_dir)["ready"])
+            _mark_final_scan(run_dir)
+            self.assertTrue(checkpoint_facts(run_dir)["ready"])
+            events_path = artifact_paths(run_dir)["events"]
+            before = len(events_path.read_text(encoding="utf-8").splitlines())
+            _mark_final_scan(run_dir)
+            after = len(events_path.read_text(encoding="utf-8").splitlines())
+            self.assertEqual(before, after)
+
+    def test_independent_branches_cannot_reuse_one_physical_action(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "physical-actions"
+            ensure_run(run_dir, "工具>选择页")
+            with self.assertRaisesRegex(ValueError, "reuse the same physical action"):
+                append_events(run_dir, [
+                    {"kind": "page", "fact_id": "PAGE", "data": {"name": "选择页", "menu_path": ["工具", "选择页"]}},
+                    {"kind": "function", "fact_id": "FN", "data": {"name": "选择"}},
+                    {"kind": "element", "fact_id": "EL-A", "data": {
+                        "page_ref": "PAGE", "function_ref": "FN", "name": "选项A", "type": "select", "options": ["A"],
+                    }},
+                    {"kind": "element", "fact_id": "EL-B", "data": {
+                        "page_ref": "PAGE", "function_ref": "FN", "name": "选项B", "type": "select", "options": ["B"],
+                    }},
+                    {"kind": "transaction", "fact_id": "TX", "data": {
+                        "function_ref": "FN", "element_refs": ["EL-A", "EL-B"], "checks": [
+                            {"element_ref": "EL-A", "option_value": "A", "action": "执行同一操作", "result": "显示A结果", "result_anchor": {"assertion": "contains", "value": "A结果"}},
+                            {"element_ref": "EL-B", "option_value": "B", "action": "执行同一操作", "result": "显示B结果", "result_anchor": {"assertion": "contains", "value": "B结果"}},
+                        ],
+                    }},
+                ])
+
+    def test_observed_anomaly_cannot_be_silently_marked_not_applicable(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "anomaly"
+            ensure_run(run_dir, "工具>处理页")
+            append_events(run_dir, [
+                {"kind": "page", "fact_id": "PAGE", "data": {"name": "处理页", "menu_path": ["工具", "处理页"]}},
+                {"kind": "function", "fact_id": "FN", "data": {"name": "处理"}},
+                {"kind": "element", "fact_id": "EL", "data": {"page_ref": "PAGE", "function_ref": "FN", "name": "执行", "type": "button"}},
+                {"kind": "transaction", "fact_id": "TX", "data": {"function_ref": "FN", "element_refs": ["EL"], "checks": [
+                    {"element_ref": "EL", "action": "首次点击执行", "result": "显示完成结果", "result_anchor": {"assertion": "contains", "value": "完成结果"}},
+                    {"element_ref": "EL", "action": "再次点击执行", "result": "显示非预期错误", "outcome": "unexpected", "result_anchor": {"assertion": "contains", "value": "错误"}},
+                ]}},
+            ])
+            _mark_final_scan(run_dir)
+            self.assertTrue(checkpoint_facts(run_dir)["ready"])
+            plan = {
+                "schema_version": "2.0", **_plan_decisions(),
+                "functions": [{"function_ref": "FN", "name": "处理", **_plan_metadata("执行页面处理"), "cases": [
+                    {"case_id": "TC-BASE", "page_ref": "PAGE", "title": "正常执行", "strategy": "baseline"},
+                ]}],
+                "check_assignments": [
+                    {"transaction_ref": "TX", "check_index": 1, "disposition": "case", "case_id": "TC-BASE"},
+                    {"transaction_ref": "TX", "check_index": 2, "disposition": "not_applicable", "reason": "暂不处理"},
+                ],
+            }
+            with self.assertRaisesRegex(ValueError, "unexpected observed check"):
+                save_plan(run_dir, plan)
+
     def test_each_valid_input_equivalence_class_requires_an_independent_baseline_case(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             run_dir = Path(value) / "valid-classes"
@@ -51,6 +137,7 @@ class QualityRuleTests(unittest.TestCase):
                     {"element_ref": "EL", "used_element_refs": ["EL", "RUN"], "trigger_element_ref": "RUN", "input_class": "valid_ip", "action": "输入有效IP并点击执行", "result": "显示IP诊断结果", "result_anchor": {"assertion": "contains", "value": "IP诊断结果"}},
                 ]}},
             ])
+            _mark_final_scan(run_dir)
             self.assertTrue(checkpoint_facts(run_dir)["ready"])
             combined = {
                 "schema_version": "2.0", **_plan_decisions(), "functions": [{"function_ref": "FN", "name": "目标诊断", **_plan_metadata("使用不同目标执行诊断"), "cases": [
@@ -94,6 +181,7 @@ class QualityRuleTests(unittest.TestCase):
                     "result_anchor": {"assertion": "contains", "value": "任务完成提示"},
                 }]}},
             ])
+            _mark_final_scan(run_dir)
             self.assertTrue(checkpoint_facts(run_dir)["ready"])
             saved = save_plan(run_dir, {
                 "schema_version": "2.0", **_plan_decisions(), "functions": [{
@@ -173,6 +261,7 @@ class QualityRuleTests(unittest.TestCase):
                     "result_anchor": {"assertion": "contains", "value": "处理结果"},
                 }]}} ,
             ])
+            _mark_final_scan(run_dir)
             self.assertTrue(checkpoint_facts(run_dir)["ready"])
             saved = save_plan(run_dir, {
                 "schema_version": "2.0", **_plan_decisions(),
@@ -273,6 +362,7 @@ class QualityRuleTests(unittest.TestCase):
                      "input_class": "empty", "action": "清空目标内容并点击执行", "result": "显示内容不能为空提示", "result_anchor": {"assertion": "contains", "value": "不能为空"}}
                 ]
             }}])
+            _mark_final_scan(run_dir)
             self.assertTrue(checkpoint_facts(run_dir)["ready"])
             hints = build_plan_skeleton(run_dir)["functions"][0]["dfx_hints"]
             empty = next(item for item in hints if item["code"] == "empty")
@@ -339,6 +429,7 @@ class QualityRuleTests(unittest.TestCase):
                     {"element_ref": "EL", "action": "清空条件后点击查询", "result": "列表刷新并显示全部数据", "result_anchor": {"assertion": "contains", "value": "全部数据"}},
                 ]}},
             ])
+            _mark_final_scan(run_dir)
             self.assertTrue(checkpoint_facts(run_dir)["ready"])
             plan = {"schema_version": "2.0", **_plan_decisions(), "functions": [
                 {"function_ref": "FN", "name": "查询", **_plan_metadata("按条件筛选列表"), "cases": [

@@ -37,6 +37,13 @@ from test_design.session_runtime import (
 from test_design_cli import _payload, _project_scoped_run_dir, execute_request
 
 
+def _mark_final_scan(run_dir: Path, page_ref: str = "PAGE") -> None:
+    append_events(run_dir, [{
+        "kind": "page", "fact_id": page_ref,
+        "data": {"final_scan_status": "stable", "unhandled_element_refs": []},
+    }])
+
+
 def _plan_metadata(goal: str = "验证页面功能") -> dict[str, object]:
     return {
         "design_context": {
@@ -96,6 +103,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                 ],
             }},
         ])
+        _mark_final_scan(self.run_dir, "PAGE-LIST")
         checkpoint_facts(self.run_dir)
 
     def tearDown(self) -> None:
@@ -150,6 +158,16 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertEqual("进入告警管理-告警列表", written["cases"][0]["steps"][0]["action"])
         self.assertEqual({"transaction_ref": "TX-VIEW", "check_index": 1}, written["cases"][0]["steps"][1]["source_check"])
         self.assertIn("EL-VIEW-MODE", written["cases"][0]["fact_refs"])
+
+    def test_named_test_data_reference_requires_the_same_controlled_source(self) -> None:
+        self._write_plan_and_cases()
+        cases = load_cases(self.run_dir)
+        cases["cases"][0]["test_data"] = "有效目标地址"
+        with self.assertRaisesRegex(ValueError, "natural-language data placeholder"):
+            save_cases(self.run_dir, cases)
+        cases["cases"][0]["test_data"] = "TEST_VALID_TARGET"
+        with self.assertRaisesRegex(ValueError, "controlled source"):
+            save_cases(self.run_dir, cases)
 
     def test_review_is_ready_and_has_no_evidence_dependency(self) -> None:
         self._write_plan_and_cases()
@@ -251,6 +269,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                     {"element_ref": "EL-B", "used_element_refs": ["EL-B"], "trigger_element_ref": "EL-B", "action": "点击执行B", "result": "显示B结果", "result_anchor": {"assertion": "contains", "value": "B结果"}}
                 ]}},
             ])
+            _mark_final_scan(run_dir)
             self.assertTrue(checkpoint_facts(run_dir)["ready"])
             for suffix in ("A", "B"):
                 save_plan(run_dir, {
@@ -349,6 +368,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                     ],
                 }},
             ])
+            _mark_final_scan(run_dir)
             checkpoint = checkpoint_facts(run_dir)
             self.assertTrue(checkpoint["ready"])
             hints = build_plan_skeleton(run_dir)["functions"][0]["dfx_hints"]
@@ -519,6 +539,9 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                     "result": f"页面接受{option}", "result_anchor": {"assertion": "contains", "value": option}, "commit_result": "保存成功", "persistence_result": "重开后回显一致",
                     "effect_result": f"规则按{option}生效", "recovery_result": "恢复基线",
                 })
+            checks[0]["action"] = (
+                f"先设置通知方式为{checks[1]['option_value']}，再切回{checks[0]['option_value']}"
+            )
             append_events(run_dir, [
                 {"kind": "page", "fact_id": "PAGE", "data": {"name": "新增告警规则", "menu_path": ["告警管理", "告警规则", "新增告警规则"], "final_scan_status": "stable", "unhandled_element_refs": []}},
                 {"kind": "function", "fact_id": "FN-CONFIG", "data": {"name": "通知方式配置"}},
@@ -532,6 +555,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                     "test_object_ref": "OBJ", "outcome": "success", "combination": False, "checks": checks
                 }},
             ])
+            _mark_final_scan(run_dir)
             compile_facts(run_dir)
             self.assertEqual([], validate_discovery(run_dir))
 
@@ -553,7 +577,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         function_headers = {cell.value: cell.column for cell in workbook["功能测试用例"][1]}
         self.assertGreaterEqual(workbook["功能测试用例"].column_dimensions[get_column_letter(function_headers["操作步骤"])].width, 44)
         self.assertEqual(
-            {"是"},
+            {"有条件"},
             {workbook["功能测试用例"].cell(row, function_headers["是否适合自动化"]).value for row in range(2, 9)},
         )
         imported_book = load_workbook(import_file, data_only=False)

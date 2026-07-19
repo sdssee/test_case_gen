@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from test_design.session_runtime import (
     append_events, artifact_paths, build_plan_skeleton, checkpoint_facts, ensure_run,
-    pending_exploration_requirements, save_cases, save_plan,
+    load_facts, pending_exploration_requirements, save_cases, save_plan,
 )
 
 
@@ -329,6 +329,137 @@ class QualityRuleTests(unittest.TestCase):
             ])
             pending = pending_exploration_requirements(run_dir)
             self.assertEqual(["EL-B"], [row["element_ref"] for row in pending])
+
+    def test_observed_control_relationships_create_only_valid_case_scenarios(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "constrained-relationships"
+            ensure_run(run_dir, "工具>处理")
+            append_events(run_dir, [
+                {"kind": "page", "fact_id": "PAGE", "data": {
+                    "name": "处理", "menu_path": ["工具", "处理"],
+                    "final_scan_status": "stable", "unhandled_element_refs": [],
+                }},
+                {"kind": "function", "fact_id": "FN", "data": {"name": "目标处理"}},
+                {"kind": "element", "fact_id": "EL-TARGET", "data": {
+                    "page_ref": "PAGE", "function_ref": "FN", "name": "目标输入", "type": "input",
+                    "valid_input_classes": [
+                        {"value": "type_a", "description": "有效类型A"},
+                        {"value": "type_b", "description": "有效类型B"},
+                    ],
+                }},
+                {"kind": "element", "fact_id": "EL-MODE", "data": {
+                    "page_ref": "PAGE", "function_ref": "FN", "name": "执行模式", "type": "select",
+                    "options": ["模式一", "模式二"], "default_value": "模式一",
+                }},
+                {"kind": "element", "fact_id": "EL-RUN", "data": {
+                    "page_ref": "PAGE", "function_ref": "FN", "name": "执行", "type": "trigger",
+                }},
+                {"kind": "transaction", "fact_id": "TX", "data": {
+                    "function_ref": "FN", "element_refs": ["EL-TARGET", "EL-MODE", "EL-RUN"], "checks": [
+                        {"element_ref": "EL-TARGET", "used_element_refs": ["EL-TARGET", "EL-MODE", "EL-RUN"],
+                         "trigger_element_ref": "EL-RUN", "input_class": "type_a", "option_value": "模式一",
+                         "action": "输入受控类型A数据，选择模式一并点击执行", "result": "显示模式一类型A结果",
+                         "result_anchor": {"assertion": "contains", "stable_tokens": ["类型A结果"]}},
+                        {"element_ref": "EL-TARGET", "used_element_refs": ["EL-TARGET", "EL-MODE", "EL-RUN"],
+                         "trigger_element_ref": "EL-RUN", "input_class": "type_a", "option_value": "模式二",
+                         "action": "输入受控类型A数据，选择模式二并点击执行", "result": "显示模式二类型A结果",
+                         "result_anchor": {"assertion": "contains", "stable_tokens": ["类型A结果"]}},
+                        {"element_ref": "EL-TARGET", "used_element_refs": ["EL-TARGET", "EL-MODE", "EL-RUN"],
+                         "trigger_element_ref": "EL-RUN", "input_class": "type_b", "option_value": "模式一",
+                         "action": "输入受控类型B数据，先选择模式二，再切回模式一并点击执行", "result": "显示模式一类型B结果",
+                         "result_anchor": {"assertion": "contains", "stable_tokens": ["类型B结果"]}},
+                    ],
+                }},
+            ])
+            self.assertEqual([], pending_exploration_requirements(run_dir))
+            _mark_final_scan(run_dir)
+            self.assertTrue(checkpoint_facts(run_dir)["ready"])
+            checks = load_facts(run_dir)["transactions"][0]["checks"]
+            self.assertTrue(all(len(check["branch_bindings"]) == 2 for check in checks))
+            skeleton = build_plan_skeleton(run_dir)
+            required = skeleton["functions"][0]["required_case_branches"]
+            self.assertEqual(3, len(required))
+            self.assertTrue(all(row["kind"] == "relationship" for row in required))
+            self.assertEqual(3, len({row["scenario_signature"] for row in required}))
+            self.assertEqual(
+                {
+                    "目标输入-有效类型A与执行模式-模式一",
+                    "目标输入-有效类型A与执行模式-模式二",
+                    "目标输入-有效类型B与执行模式-模式一",
+                },
+                {row["test_point_hint"] for row in required},
+            )
+
+            plan = {
+                "schema_version": "2.0", **_plan_decisions(),
+                "functions": [{"function_ref": "FN", "name": "目标处理", **_plan_metadata("处理受控目标"),
+                               "cases": [
+                                   {"case_id": f"TC-{index}", "page_ref": "PAGE", "title": f"有效关联{index}", "strategy": "baseline"}
+                                   for index in range(1, 4)
+                               ]}],
+                "check_assignments": [
+                    {"transaction_ref": "TX", "check_index": index, "disposition": "case", "case_id": f"TC-{index}"}
+                    for index in range(1, 4)
+                ],
+            }
+            saved = save_plan(run_dir, plan)
+            cases = saved["functions"][0]["cases"]
+            self.assertEqual(3, len({row["test_point"] for row in cases}))
+            self.assertTrue(all(row["scenario_signature"].startswith("SCN-") for row in cases))
+            written = save_cases(run_dir, {"schema_version": "2.0", "cases": [
+                {
+                    "case_id": f"TC-{index}", "function_ref": "FN",
+                    "preconditions": ["具备页面访问权限"],
+                    "test_data": f"受控类型{input_type}数据；{mode}",
+                    "automation_value": "稳定关联回归", "automation_priority": "P1",
+                    "steps": [{"action": action, "expected": expected}],
+                }
+                for index, (input_type, mode, action, expected) in enumerate([
+                    ("A", "模式一", "输入受控类型A数据，选择模式一并点击执行", "页面显示模式一对应的类型A结果"),
+                    ("A", "模式二", "输入受控类型A数据，选择模式二并点击执行", "页面显示模式二对应的类型A结果"),
+                    ("B", "模式一", "输入受控类型B数据，先选择模式二，再切回模式一并点击执行", "页面显示模式一对应的类型B结果"),
+                ], 1)
+            ]})
+            self.assertEqual(
+                [row["test_point"] for row in cases],
+                [row["test_point"] for row in written["cases"]],
+            )
+            self.assertEqual(
+                [1, 2, 3],
+                [row["steps"][1]["source_check"]["check_index"] for row in written["cases"]],
+            )
+
+    def test_relationship_bindings_do_not_cross_satisfy_similar_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "binding-scope"
+            ensure_run(run_dir, "工具>双输入")
+            append_events(run_dir, [
+                {"kind": "page", "fact_id": "PAGE", "data": {"name": "双输入", "menu_path": ["工具", "双输入"]}},
+                {"kind": "function", "fact_id": "FN", "data": {"name": "双输入处理"}},
+                {"kind": "element", "fact_id": "EL-A", "data": {
+                    "page_ref": "PAGE", "function_ref": "FN", "name": "输入一", "type": "input",
+                    "valid_input_classes": ["type_a", "type_b"],
+                }},
+                {"kind": "element", "fact_id": "EL-B", "data": {
+                    "page_ref": "PAGE", "function_ref": "FN", "name": "输入二", "type": "input",
+                    "valid_input_classes": ["type_a", "type_b"],
+                }},
+                {"kind": "transaction", "fact_id": "TX", "data": {
+                    "function_ref": "FN", "element_refs": ["EL-A", "EL-B"], "checks": [{
+                        "element_ref": "EL-A", "used_element_refs": ["EL-A", "EL-B"],
+                        "branch_bindings": [
+                            {"element_ref": "EL-A", "kind": "input_class", "value": "type_a"},
+                            {"element_ref": "EL-B", "kind": "input_class", "value": "type_b"},
+                        ],
+                        "action": "输入一使用类型A，输入二使用类型B并执行处理",
+                        "result": "显示双输入处理结果",
+                        "result_anchor": {"assertion": "contains", "stable_tokens": ["处理结果"]},
+                    }]},
+                },
+            ])
+            pending = {row["element_ref"]: row["requirements"] for row in pending_exploration_requirements(run_dir)}
+            self.assertEqual(["valid_type_b"], [row["value"] for row in pending["EL-A"]])
+            self.assertEqual(["valid_type_a"], [row["value"] for row in pending["EL-B"]])
 
     def test_dfx_input_branches_are_declared_before_interaction_without_rejecting_progress(self) -> None:
         with tempfile.TemporaryDirectory() as value:

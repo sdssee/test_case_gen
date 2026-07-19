@@ -184,7 +184,7 @@ def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
             anchor = check.get("result_anchor")
             if not isinstance(anchor, dict) or not str(anchor.get("assertion", "")).strip():
                 raise ValueError(f"transaction check {index} result_anchor requires an assertion")
-            if anchor.get("value") in (None, "", []) and anchor.get("tokens") in (None, "", []):
+            if all(anchor.get(field) in (None, "", []) for field in ("value", "tokens", "stable_tokens")):
                 raise ValueError(f"transaction check {index} result_anchor requires observable value or tokens")
             primary_ref = str(check.get("element_ref", "")).strip()
             used_refs = check.get("used_element_refs")
@@ -277,6 +277,126 @@ def _normalize_input_class(value: Any) -> str:
     if not normalized or normalized in NEGATIVE_INPUT_CLASSES or normalized.startswith("valid_"):
         return normalized
     return "valid" if normalized == "valid" else f"valid_{normalized}"
+
+
+BRANCH_BINDING_KINDS = {
+    "input_class", "option_value", "toggle_state", "configuration_value", "state",
+}
+
+
+def _normalize_branch_binding(binding: Any) -> dict[str, str]:
+    if not isinstance(binding, dict):
+        raise ValueError("transaction branch_bindings entries must be objects")
+    element_ref = str(binding.get("element_ref", "")).strip()
+    kind = str(binding.get("kind", "")).strip().lower()
+    value = str(binding.get("value", "")).strip()
+    if not element_ref or kind not in BRANCH_BINDING_KINDS or not value:
+        raise ValueError(
+            "transaction branch_bindings require element_ref, supported kind and non-empty value"
+        )
+    if kind == "input_class":
+        value = _normalize_input_class(value)
+    return {"element_ref": element_ref, "kind": kind, "value": value}
+
+
+def _normalize_transaction_branch_bindings(run_dir: Path, items: list[dict[str, Any]]) -> None:
+    """Normalize explicit bindings and infer only unambiguous legacy input/select pairs.
+
+    ``used_element_refs`` remains the full participation list.  A branch binding is
+    narrower: its value is part of the observed business branch and may therefore
+    share one relationship Case with another bound value.  No cartesian product is
+    created here; bindings only describe the physical check that was submitted.
+    """
+    latest = {str(event.get("fact_id", "")): _prepare_event(event) for event in load_events(run_dir)}
+    latest.update({str(item.get("fact_id", "")): item for item in items})
+    elements = {
+        fact_id: event.get("data", {})
+        for fact_id, event in latest.items()
+        if event.get("kind") == "element" and event.get("status", "active") not in NON_ACTIONABLE_STATUSES
+    }
+    for item in items:
+        if item.get("kind") != "transaction":
+            continue
+        for index, check in enumerate(item.get("data", {}).get("checks", []), 1):
+            used_refs = [str(ref).strip() for ref in check.get("used_element_refs", []) if str(ref).strip()]
+            bindings = [_normalize_branch_binding(row) for row in check.get("branch_bindings", [])]
+            for binding in bindings:
+                if binding["element_ref"] not in elements:
+                    raise ValueError(
+                        f"transaction check {index} branch binding references unknown element {binding['element_ref']!r}"
+                    )
+                if binding["element_ref"] not in used_refs:
+                    raise ValueError(
+                        f"transaction check {index} branch binding must reference a used element"
+                    )
+
+            def add_inferred(kind: str, value: Any, candidates: list[str]) -> None:
+                text = str(value or "").strip()
+                if not text or any(row["kind"] == kind for row in bindings):
+                    return
+                if len(candidates) > 1:
+                    raise ValueError(
+                        f"transaction check {index} has multiple controls for {kind}; provide explicit branch_bindings"
+                    )
+                if len(candidates) == 1:
+                    bindings.append(_normalize_branch_binding({
+                        "element_ref": candidates[0], "kind": kind, "value": text,
+                    }))
+
+            input_refs = [ref for ref in used_refs if _is_input_element(elements.get(ref, {}))]
+            option_refs = [
+                ref for ref in used_refs
+                if elements.get(ref, {}).get("option_set") == "finite"
+                or _canonical_element_type(elements.get(ref, {}).get("type")) == "select"
+            ]
+            primary_ref = str(check.get("element_ref", "")).strip()
+            if primary_ref in input_refs:
+                input_refs = [primary_ref]
+            if primary_ref in option_refs:
+                option_refs = [primary_ref]
+            add_inferred("input_class", check.get("input_class"), input_refs)
+            add_inferred("option_value", check.get("option_value"), option_refs)
+
+            unique: dict[tuple[str, str], dict[str, str]] = {}
+            for binding in bindings:
+                key = (binding["element_ref"], binding["kind"])
+                previous = unique.get(key)
+                if previous and previous["value"] != binding["value"]:
+                    raise ValueError(
+                        f"transaction check {index} contains conflicting branch bindings for {key}"
+                    )
+                unique[key] = binding
+            for binding in unique.values():
+                element = elements[binding["element_ref"]]
+                if binding["kind"] == "input_class" and not _is_input_element(element):
+                    raise ValueError(
+                        f"transaction check {index} input_class binding must reference an input element"
+                    )
+                if binding["kind"] == "option_value":
+                    if not (
+                        element.get("option_set") == "finite"
+                        or _canonical_element_type(element.get("type")) == "select"
+                    ):
+                        raise ValueError(
+                            f"transaction check {index} option_value binding must reference a selection element"
+                        )
+                    options = {str(value) for value in element.get("options", [])}
+                    if options and binding["value"] not in options:
+                        raise ValueError(
+                            f"transaction check {index} option_value was not declared by the observed element"
+                        )
+                if binding["kind"] in {"input_class", "option_value"} and not any(
+                    _binding_matches_requirement(binding, requirement)
+                    for requirement in element.get("exploration_requirements", [])
+                ):
+                    raise ValueError(
+                        f"transaction check {index} branch binding was not declared before interaction"
+                    )
+            if unique:
+                order = {ref: position for position, ref in enumerate(used_refs)}
+                check["branch_bindings"] = sorted(
+                    unique.values(), key=lambda row: (order.get(row["element_ref"], len(order)), row["kind"]),
+                )
 
 
 def _value_from_descriptor(value: Any) -> tuple[str, str]:
@@ -465,9 +585,20 @@ def _requirement_is_observed(requirement: dict[str, Any], checks: list[dict[str,
         return _input_class_matches(value, {
             str(check.get("input_class", "")).strip()
             for check in checks if str(check.get("input_class", "")).strip()
+        } | {
+            str(binding.get("value", "")).strip()
+            for check in checks for binding in check.get("branch_bindings", [])
+            if binding.get("kind") == "input_class" and str(binding.get("value", "")).strip()
         })
     if kind == "option_value":
-        return value in {str(check.get("option_value")) for check in checks if check.get("option_value") is not None}
+        return value in (
+            {str(check.get("option_value")) for check in checks if check.get("option_value") is not None}
+            | {
+                str(binding.get("value"))
+                for check in checks for binding in check.get("branch_bindings", [])
+                if binding.get("kind") == "option_value" and binding.get("value") is not None
+            }
+        )
     return False
 
 
@@ -476,6 +607,141 @@ def _matching_requirements(element: dict[str, Any], check: dict[str, Any]) -> li
         requirement for requirement in element.get("exploration_requirements", [])
         if _requirement_is_observed(requirement, [check])
     ]
+
+
+def _requirement_is_observed_for_element(
+    requirement: dict[str, Any], element: dict[str, Any], checks: list[dict[str, Any]],
+) -> bool:
+    element_ref = str(element.get("fact_id", ""))
+    for check in checks:
+        for binding in check.get("branch_bindings", []):
+            if str(binding.get("element_ref", "")) != element_ref:
+                continue
+            if not _binding_matches_requirement(binding, requirement):
+                continue
+            if (
+                binding.get("kind") == "option_value"
+                and str(binding.get("value", "")) == str(element.get("default_value", ""))
+                and not _default_option_action_complete(
+                    element, {**check, "option_value": binding.get("value")},
+                )
+            ):
+                continue
+            return True
+    legacy = [
+        check for check in checks
+        if str(check.get("element_ref", "")) == element_ref and not check.get("branch_bindings")
+    ]
+    if (
+        str(requirement.get("kind", "")) == "option_value"
+        and str(requirement.get("value", "")) == str(element.get("default_value", ""))
+    ):
+        legacy = [check for check in legacy if _default_option_action_complete(element, check)]
+    return _requirement_is_observed(requirement, legacy)
+
+
+def _binding_matches_requirement(binding: dict[str, Any], requirement: dict[str, Any]) -> bool:
+    if str(binding.get("kind", "")) != str(requirement.get("kind", "")):
+        return False
+    if binding.get("kind") == "input_class":
+        return _input_class_matches(
+            str(requirement.get("value", "")), {str(binding.get("value", ""))},
+        )
+    return str(binding.get("value", "")) == str(requirement.get("value", ""))
+
+
+def _matching_bound_requirements(
+    elements: dict[str, dict[str, Any]], check: dict[str, Any],
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for binding in check.get("branch_bindings", []):
+        element_ref = str(binding.get("element_ref", ""))
+        element = elements.get(element_ref, {})
+        for requirement in element.get("exploration_requirements", []):
+            if _binding_matches_requirement(binding, requirement):
+                matches.append({
+                    "element_ref": element_ref,
+                    "element": element,
+                    "binding": binding,
+                    "requirement": requirement,
+                })
+    if matches:
+        return matches
+    primary_ref = str(check.get("element_ref", ""))
+    primary = elements.get(primary_ref, {})
+    return [{
+        "element_ref": primary_ref,
+        "element": primary,
+        "binding": {
+            "element_ref": primary_ref,
+            "kind": str(requirement.get("kind", "")),
+            "value": str(requirement.get("value", "")),
+        },
+        "requirement": requirement,
+    } for requirement in _matching_requirements(primary, check)]
+
+
+def _scenario_signature(function_ref: str, check: dict[str, Any]) -> str:
+    bindings = [
+        {
+            "element_ref": str(row.get("element_ref", "")),
+            "kind": str(row.get("kind", "")),
+            "value": str(row.get("value", "")),
+        }
+        for row in check.get("branch_bindings", [])
+        if str(row.get("element_ref", "")).strip() and str(row.get("value", "")).strip()
+    ]
+    anchor = check.get("result_anchor") if isinstance(check.get("result_anchor"), dict) else {}
+    identity = {
+        "function_ref": function_ref,
+        "trigger_element_ref": str(check.get("trigger_element_ref", "")),
+        "bindings": bindings,
+        "outcome": str(check.get("outcome", "")),
+        "result_anchor": {
+            key: anchor.get(key) for key in ("assertion", "target", "field", "stable_tokens", "tokens")
+            if anchor.get(key) not in (None, "", [])
+        },
+    }
+    if not bindings:
+        identity["primary_element_ref"] = str(check.get("element_ref", ""))
+        identity["action"] = _normalized_action(check.get("action"))
+    return "SCN-" + _content_digest(identity)[:12].upper()
+
+
+def _humanize_branch(value: Any, element: dict[str, Any] | None = None) -> str:
+    text = str(value or "").strip()
+    descriptions = (
+        element.get("valid_input_class_descriptions", {})
+        if isinstance(element, dict) and isinstance(element.get("valid_input_class_descriptions"), dict)
+        else {}
+    )
+    if str(descriptions.get(text, "")).strip():
+        return str(descriptions[text]).strip()
+    aliases = {
+        "valid": "有效值", "empty": "必填空值", "invalid": "无效值",
+        "invalid_format": "无效格式", "boundary_min": "下边界", "boundary_max": "上边界",
+        "duplicate": "重复值",
+    }
+    if text in aliases:
+        return aliases[text]
+    if text.startswith("valid_"):
+        return "有效" + text[len("valid_"):].replace("_", "")
+    return text.replace("_", " ")
+
+
+def _test_point_hint(elements: dict[str, dict[str, Any]], check: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for binding in check.get("branch_bindings", []):
+        element = elements.get(str(binding.get("element_ref", "")), {})
+        name = str(element.get("name") or binding.get("element_ref") or "当前控件").strip()
+        label = _humanize_branch(binding.get("value"), element)
+        part = f"{name}-{label}"
+        if part not in parts:
+            parts.append(part)
+    if parts:
+        return "与".join(parts)
+    primary = elements.get(str(check.get("element_ref", "")), {})
+    return str(primary.get("name") or "当前功能分支").strip()
 
 
 def _validate_new_transactions(run_dir: Path, items: list[dict[str, Any]]) -> None:
@@ -510,22 +776,20 @@ def _validate_new_transactions(run_dir: Path, items: list[dict[str, Any]]) -> No
         independent_actions: dict[str, tuple[int, str, str]] = {}
         for index, check in enumerate(checks, 1):
             primary_ref = str(check.get("element_ref", "")).strip()
-            primary_element = elements.get(primary_ref, {})
-            independent = any(row.get("independent_case") for row in _matching_requirements(primary_element, check))
+            bound_requirements = _matching_bound_requirements(elements, check)
+            independent = any(
+                row.get("requirement", {}).get("independent_case") for row in bound_requirements
+            )
             action_key = _normalized_action(check.get("action"))
             if independent and action_key:
                 previous = independent_actions.get(action_key)
-                branch = str(check.get("input_class") or check.get("option_value") or "")
+                branch = _scenario_signature(str(data.get("function_ref", "")), check)
                 if previous and (previous[1] != primary_ref or previous[2] != branch):
                     raise ValueError(
                         f"transaction independent checks {previous[0]} and {index} reuse the same physical action; "
                         "execute each primary element branch independently"
                     )
                 independent_actions[action_key] = (index, primary_ref, branch)
-            if primary_element.get("option_set") == "finite" and not _default_option_action_complete(primary_element, check):
-                raise ValueError(
-                    f"transaction check {index} must switch away from and then back to the default option before observing its effect"
-                )
             used_refs = {str(value) for value in check.get("used_element_refs", [])}
             trigger_refs = [ref for ref in used_refs if ref in elements and _is_trigger_element(elements[ref])]
             if not trigger_refs:
@@ -647,6 +911,10 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
     items = [resolve(item) for item in items]
     if not items:
         return []
+
+    # Normalize the observed relationship before idempotence comparison so a
+    # legacy payload and its persisted normalized form remain an exact no-op.
+    _normalize_transaction_branch_bindings(run_dir, items)
 
     # A final scan is an observation made at a point in the interaction stream.
     # Stamp it with the transaction sequence so an unchanged page can still prove
@@ -861,12 +1129,17 @@ def _pending_exploration(
     checks_by_element: dict[str, list[dict[str, Any]]] = {}
     for transaction in transactions:
         for check in transaction.get("checks", []):
-            # An element's independent branch can only be completed when that
-            # element is the primary verification target. Auxiliary use never
-            # consumes another control's own exploration requirement.
-            ref = str(check.get("element_ref", "")).strip()
-            if ref:
-                checks_by_element.setdefault(ref, []).append(check)
+            # Explicit relationship bindings can complete multiple branches in
+            # one physical action.  Plain auxiliary participation still cannot.
+            bound_refs = {
+                str(binding.get("element_ref", "")).strip()
+                for binding in check.get("branch_bindings", [])
+                if str(binding.get("element_ref", "")).strip()
+            }
+            refs = bound_refs or {str(check.get("element_ref", "")).strip()}
+            for ref in refs:
+                if ref:
+                    checks_by_element.setdefault(ref, []).append(check)
     pending: list[dict[str, Any]] = []
     for element in elements:
         if element.get("status") in NON_ACTIONABLE_STATUSES or element.get("interactive", True) is False:
@@ -874,7 +1147,9 @@ def _pending_exploration(
         ref = str(element.get("fact_id", ""))
         missing = [
             requirement for requirement in element.get("exploration_requirements", [])
-            if not _requirement_is_observed(requirement, checks_by_element.get(ref, []))
+            if not _requirement_is_observed_for_element(
+                requirement, element, checks_by_element.get(ref, []),
+            )
         ]
         if missing:
             pending.append({
@@ -1031,11 +1306,11 @@ def inspect_discovery(run_dir: Path, facts: dict[str, Any] | None = None) -> lis
         function_ref = str(transaction.get("function_ref", ""))
         for index, check in enumerate(transaction.get("checks", []), 1):
             element_ref = str(check.get("element_ref", ""))
-            element = elements_by_ref.get(element_ref, {})
-            if not any(row.get("independent_case") for row in _matching_requirements(element, check)):
+            matches = _matching_bound_requirements(elements_by_ref, check)
+            if not any(row.get("requirement", {}).get("independent_case") for row in matches):
                 continue
             action_key = _normalized_action(check.get("action"))
-            branch = str(check.get("input_class") or check.get("option_value") or "")
+            branch = _scenario_signature(function_ref, check)
             key = (function_ref, action_key)
             previous = independent_actions.get(key)
             if action_key and previous and (previous[2] != element_ref or previous[3] != branch):
@@ -1046,12 +1321,6 @@ def inspect_discovery(run_dir: Path, facts: dict[str, Any] | None = None) -> lis
                 ))
             elif action_key:
                 independent_actions[key] = (str(transaction.get("fact_id", "")), index, element_ref, branch)
-            if element.get("option_set") == "finite" and not _default_option_action_complete(element, check):
-                issues.append(_issue(
-                    "default_option_not_reselected", "blocker", "facts.json",
-                    f"check {(transaction.get('fact_id'), index)} does not switch away from and back to its default option",
-                    "repeat only the default option branch with an observable switch-away-and-back action", function_ref=function_ref,
-                ))
     for item in facts.get("open_items", []):
         if item.get("page_verifiable") is True:
             issues.append(_issue("invalid_open_item", "blocker", "facts.json", f"open item {item['fact_id']} can be verified on the page", "operate the page and update this item instead of asking the user"))
@@ -1148,23 +1417,26 @@ def _verification_focus_hint(element: dict[str, Any], check: dict[str, Any]) -> 
     return f"验证{element_name}在{branch}下产生{result}"
 
 
-def _branch_action_intent(element: dict[str, Any], requirement: dict[str, Any]) -> str:
-    kind = str(requirement.get("kind", ""))
-    value = str(requirement.get("value", ""))
-    name = str(element.get("name") or "当前控件")
-    if kind == "option_value":
-        options = [str(option) for option in element.get("options", [])]
-        default = str(element.get("default_value", ""))
-        if value == default and any(option != value for option in options):
-            return f"先切换到其他安全选项，再切回{value}，观察选中状态及实际功能效果"
-        return f"从当前状态切换到{value}，观察选中状态及实际功能效果"
-    labels = {
-        "empty": "清空输入并触发功能，观察拦截提示及数据未提交",
-        "invalid_format": "输入明确的无效格式并触发功能，观察格式校验及数据未提交",
-        "boundary_min": "输入已声明的下边界并触发功能，观察边界处理结果",
-        "boundary_max": "输入已声明的上边界并触发功能，观察边界处理结果",
-    }
-    return labels.get(value, f"在{name}中使用{value}并触发功能，观察该输入类别的实际效果")
+def _relationship_verification_focus_hint(
+    elements: dict[str, dict[str, Any]], check: dict[str, Any],
+) -> str:
+    bindings = check.get("branch_bindings", [])
+    if len(bindings) <= 1:
+        element = elements.get(str(check.get("element_ref", "")), {})
+        return _verification_focus_hint(element, check)
+    conditions: list[str] = []
+    for binding in bindings:
+        element = elements.get(str(binding.get("element_ref", "")), {})
+        name = str(element.get("name") or binding.get("element_ref") or "当前控件").strip()
+        label = _humanize_branch(binding.get("value"), element)
+        connector = "为" if binding.get("kind") in {"option_value", "toggle_state", "state"} else "使用"
+        conditions.append(f"{name}{connector}{label}")
+    anchor = check.get("result_anchor") if isinstance(check.get("result_anchor"), dict) else {}
+    raw_result = anchor.get("stable_tokens", anchor.get("tokens"))
+    if raw_result in (None, "", []):
+        raw_result = anchor.get("value") or check.get("result") or "页面实际观察结果"
+    result = "、".join(str(value).strip() for value in raw_result if str(value).strip()) if isinstance(raw_result, list) else str(raw_result).strip()
+    return f"验证{'且'.join(conditions)}时产生{result}"
 
 
 def _observable_wait_refs(facts: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1270,6 +1542,7 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
         owned_elements = [row for row in elements if str(row.get("function_ref", "")) == function_ref]
         owned_transactions = [row for row in transactions if str(row.get("function_ref", "")) == function_ref]
         page_refs = sorted({str(row.get("page_ref")) for row in owned_elements if str(row.get("page_ref", "")) in pages})
+        element_map = {str(row.get("fact_id", "")): row for row in owned_elements}
         checks = [
             {
                 "transaction_ref": str(transaction["fact_id"]),
@@ -1280,6 +1553,9 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
                 "used_element_refs": list(check.get("used_element_refs", [])),
                 "input_class": str(check.get("input_class", "")),
                 "option_value": str(check.get("option_value", "")),
+                "branch_bindings": list(check.get("branch_bindings", [])),
+                "scenario_signature": _scenario_signature(function_ref, check),
+                "test_point_hint": _test_point_hint(element_map, check),
                 "result_anchor": check.get("result_anchor", {}),
                 "intermediate_states": check.get("intermediate_states", []),
                 "completion_state": check.get("completion_state", ""),
@@ -1287,26 +1563,47 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
             for transaction in owned_transactions
             for index, check in enumerate(transaction.get("checks", []), 1)
         ]
-        element_map = {str(row.get("fact_id", "")): row for row in owned_elements}
         required_case_branches: list[dict[str, Any]] = []
         for transaction in owned_transactions:
             transaction_ref = str(transaction["fact_id"])
             for index, check in enumerate(transaction.get("checks", []), 1):
-                element_ref = str(check.get("element_ref", ""))
-                element = element_map.get(element_ref, {})
-                for requirement in _matching_requirements(element, check):
-                    required_case_branches.append({
-                        "kind": str(requirement.get("kind", "")),
-                        "element_ref": element_ref,
-                        "value": str(requirement.get("value", "")),
-                        "strategy": str(requirement.get("strategy", "baseline")).lower(),
-                        "dfx_dimension": str(requirement.get("dfx_dimension", "DFT功能")),
-                        "dfx_scenario": str(requirement.get("dfx_scenario", "正向流程")),
-                        "independent_case": bool(requirement.get("independent_case")),
-                        "verification_focus_hint": _verification_focus_hint(element, check),
-                        "action_intent_hint": _branch_action_intent(element, requirement),
-                        "related_check": {"transaction_ref": transaction_ref, "check_index": index},
-                    })
+                matches = _matching_bound_requirements(element_map, check)
+                if not matches:
+                    continue
+                dfx_matches = [
+                    row for row in matches
+                    if str(row.get("requirement", {}).get("strategy", "baseline")).lower() == "dfx"
+                ]
+                governing = dfx_matches[0] if dfx_matches else matches[0]
+                requirement = governing["requirement"]
+                intents = [str(check.get("action", "")).strip()]
+                required_case_branches.append({
+                    "kind": "relationship" if len(matches) > 1 else str(requirement.get("kind", "")),
+                    "element_ref": str(check.get("element_ref", "")),
+                    "value": "；".join(
+                        f"{row['binding'].get('kind')}={row['binding'].get('value')}" for row in matches
+                    ),
+                    "branch_bindings": list(check.get("branch_bindings", [])),
+                    "scenario_signature": _scenario_signature(function_ref, check),
+                    "strategy": str(requirement.get("strategy", "baseline")).lower(),
+                    "dfx_dimension": str(requirement.get("dfx_dimension", "DFT功能")),
+                    "dfx_scenario": str(requirement.get("dfx_scenario", "正向流程")),
+                    "independent_case": any(
+                        bool(row.get("requirement", {}).get("independent_case")) for row in matches
+                    ),
+                    "verification_focus_hint": _relationship_verification_focus_hint(element_map, check),
+                    "test_point_hint": _test_point_hint(element_map, check),
+                    "action_intent_hint": "；".join(dict.fromkeys(intents)),
+                    "covered_requirements": [
+                        {
+                            "element_ref": row["element_ref"],
+                            "kind": str(row["requirement"].get("kind", "")),
+                            "value": str(row["requirement"].get("value", "")),
+                        }
+                        for row in matches
+                    ],
+                    "related_check": {"transaction_ref": transaction_ref, "check_index": index},
+                })
         unique_hints = _function_dfx_hints(owned_elements, owned_transactions, function_ref)
         for hint in unique_hints:
             related_checks: list[dict[str, Any]] = []
@@ -1482,6 +1779,13 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
                 ))
             if focus:
                 focuses.add(focus_key)
+            test_point = str(case.get("test_point", "")).strip()
+            if not test_point:
+                issues.append(_issue(
+                    "missing_test_point", "repairable", "case-plan.json",
+                    f"case {case_id} lacks its case-level test point",
+                    "use the observed relationship test-point hint", function_ref=function_ref, case_id=case_id,
+                ))
             function_name = str(functions.get(function_ref, {}).get("name", "")).strip()
             if function_name and function_name in str(case.get("title", "")):
                 issues.append(_issue("redundant_title", "repairable", "case-plan.json", f"case {case_id} repeats its function name inside the scenario title", "retain only the concrete scenario in the plan title", function_ref=function_ref, case_id=case_id))
@@ -1606,59 +1910,75 @@ def inspect_plan(run_dir: Path) -> list[dict[str, str]]:
             function_ref=str(transactions.get(transaction_ref, {}).get("function_ref", "")),
         ))
 
-    independent_by_case: dict[str, list[str]] = {}
+    independent_by_case: dict[str, dict[str, list[str]]] = {}
     for transaction_ref, transaction in transactions.items():
         function_ref = str(transaction.get("function_ref", ""))
         for index, check in enumerate(transaction.get("checks", []), 1):
-            element_ref = str(check.get("element_ref", ""))
-            element = elements.get(element_ref, {})
-            requirements = [row for row in _matching_requirements(element, check) if row.get("independent_case")]
-            if not requirements:
+            matches = [
+                row for row in _matching_bound_requirements(elements, check)
+                if row.get("requirement", {}).get("independent_case")
+            ]
+            if not matches:
                 continue
-            if len(requirements) > 1:
-                issues.append(_issue(
-                    "ambiguous_exploration_branch", "repairable", "case-plan.json",
-                    f"check {(transaction_ref, index)} matches multiple independent requirements",
-                    "split the observed branches before planning", function_ref=function_ref,
-                ))
-                continue
-            requirement = requirements[0]
-            label = f"{requirement.get('kind')} {element.get('name') or element_ref}={requirement.get('value')}"
+            labels = [
+                f"{row['requirement'].get('kind')} {row['element'].get('name') or row['element_ref']}={row['requirement'].get('value')}"
+                for row in matches
+            ]
             assignment = assignment_by_check.get((transaction_ref, index), {})
             case_id = str(assignment.get("case_id", "")) if assignment.get("disposition") == "case" else ""
             if not case_id:
                 issues.append(_issue(
                     "independent_branch_not_case", "repairable", "case-plan.json",
-                    f"{label} must produce its own executable case", "assign this observed branch to one case",
+                    f"{labels} must produce one executable relationship case", "assign this observed branch relationship to one case",
                     function_ref=function_ref,
                 ))
                 continue
-            independent_by_case.setdefault(case_id, []).append(label)
-            expected_strategy = str(requirement.get("strategy", "baseline")).lower()
+            signature = _scenario_signature(function_ref, check)
+            independent_by_case.setdefault(case_id, {}).setdefault(signature, []).extend(labels)
+            planned_case = planned_cases.get(case_id, {})
+            planned_signature = str(planned_case.get("scenario_signature", "")).strip()
+            if planned_signature and planned_signature != signature:
+                issues.append(_issue(
+                    "scenario_signature_mismatch", "repairable", "case-plan.json",
+                    f"case {case_id} does not match its assigned observed relationship",
+                    "restore the runtime-derived relationship signature", function_ref=function_ref, case_id=case_id,
+                ))
+            expected_test_point = _test_point_hint(elements, check)
+            if planned_signature == signature and str(planned_case.get("test_point", "")).strip() != expected_test_point:
+                issues.append(_issue(
+                    "test_point_mismatch", "repairable", "case-plan.json",
+                    f"case {case_id} test point differs from its observed relationship",
+                    "restore the runtime-derived case-level test point", function_ref=function_ref, case_id=case_id,
+                ))
+            dfx_requirements = [
+                row["requirement"] for row in matches
+                if str(row["requirement"].get("strategy", "baseline")).lower() == "dfx"
+            ]
+            governing = dfx_requirements[0] if dfx_requirements else matches[0]["requirement"]
+            expected_strategy = str(governing.get("strategy", "baseline")).lower()
             if str(planned_cases.get(case_id, {}).get("strategy", "")).lower() != expected_strategy:
                 issues.append(_issue(
                     "branch_strategy_mismatch", "repairable", "case-plan.json",
-                    f"{label} must use {expected_strategy} strategy", "align this intent with its predeclared exploration strategy",
+                    f"{labels} must use {expected_strategy} strategy", "align this intent with its predeclared exploration strategy",
                     function_ref=function_ref, case_id=case_id,
                 ))
-            planned_case = planned_cases.get(case_id, {})
             if expected_strategy == "dfx" and (
-                str(planned_case.get("dfx_dimension", "")) != str(requirement.get("dfx_dimension", ""))
-                or str(planned_case.get("dfx_scenario", "")) != str(requirement.get("dfx_scenario", ""))
+                str(planned_case.get("dfx_dimension", "")) != str(governing.get("dfx_dimension", ""))
+                or str(planned_case.get("dfx_scenario", "")) != str(governing.get("dfx_scenario", ""))
             ):
                 issues.append(_issue(
                     "branch_dfx_mismatch", "repairable", "case-plan.json",
-                    f"{label} DFX metadata differs from the predeclared requirement",
+                    f"{labels} DFX metadata differs from the predeclared requirement",
                     "copy the requirement's DFX dimension and scenario into this intent",
                     function_ref=function_ref, case_id=case_id,
                 ))
-    for case_id, labels in independent_by_case.items():
-        if len(labels) > 1:
+    for case_id, relationships in independent_by_case.items():
+        if len(relationships) > 1:
             function_ref = case_owners.get(case_id, "")
             issues.append(_issue(
                 "combined_independent_branches", "repairable", "case-plan.json",
-                f"case {case_id} combines independent branches: {labels}",
-                "create one case for each independent exploration branch",
+                f"case {case_id} combines distinct independent branches/observed relationships: {list(relationships.values())}",
+                "create one case for each distinct observed relationship signature",
                 function_ref=function_ref, case_id=case_id,
             ))
     return issues
@@ -1724,6 +2044,11 @@ def _action_satisfies_check(action: str, check: dict[str, Any]) -> bool:
         value = str(check.get(field, "")).strip()
         if value:
             tokens.append(value)
+    for binding in check.get("branch_bindings", []):
+        if binding.get("kind") in {"option_value", "toggle_state", "configuration_value", "state"}:
+            value = str(binding.get("value", "")).strip()
+            if value:
+                tokens.append(value)
     return all(token in action for token in dict.fromkeys(tokens))
 
 
@@ -1783,7 +2108,7 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
             issues.append(_issue("function_order", "repairable", "function-cases.json", f"function {function_ref} is split into multiple blocks", "move its cases into one contiguous block", **context))
         previous_function = function_ref
         if not title or (function_name and not title.startswith(function_name + "-")):
-            issues.append(_issue("invalid_title", "repairable", "function-cases.json", f"case {case_id} title must be '功能点-具体场景'", "repair this title", **context))
+            issues.append(_issue("invalid_title", "repairable", "function-cases.json", f"case {case_id} title must be '功能名称-具体场景'", "repair this title", **context))
         for field in ("priority", "test_type", "test_data"):
             if not str(case.get(field, "")).strip():
                 issues.append(_issue("empty_field", "repairable", "function-cases.json", f"case {case_id} has empty {field}", "complete this field with concrete content", **context))
@@ -1808,6 +2133,13 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
                 f"case {case_id} does not preserve its planned primary verification focus",
                 "restore the planned focus and make the paired step express that behavior",
                 **context,
+            ))
+        planned_test_point = str(planned_case.get("test_point", "")).strip()
+        if not planned_test_point or str(case.get("test_point", "")).strip() != planned_test_point:
+            issues.append(_issue(
+                "test_point_mismatch", "repairable", "function-cases.json",
+                f"case {case_id} does not preserve its planned case-level test point",
+                "restore the runtime-derived test point", **context,
             ))
         steps = case.get("steps")
         if not isinstance(steps, list) or not steps:
@@ -2129,16 +2461,31 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
             case["fact_refs"] = _derive_case_fact_refs(
                 function_ref, str(case.get("page_ref", "")), by_case.get(case_id, []), transactions,
             )
+            source_checks: list[dict[str, Any]] = []
+            for assignment in by_case.get(case_id, []):
+                transaction = transactions.get(str(assignment.get("transaction_ref", "")), {})
+                try:
+                    source_checks.append(transaction.get("checks", [])[int(assignment.get("check_index", 0)) - 1])
+                except (IndexError, TypeError, ValueError):
+                    continue
+            signatures = list(dict.fromkeys(
+                _scenario_signature(function_ref, check) for check in source_checks
+            ))
+            if len(signatures) == 1:
+                case["scenario_signature"] = signatures[0]
+            test_points = list(dict.fromkeys(
+                _test_point_hint(elements, check) for check in source_checks if _test_point_hint(elements, check)
+            ))
+            if len(test_points) == 1:
+                case["test_point"] = test_points[0]
+            elif not str(case.get("test_point", "")).strip():
+                case["test_point"] = "；".join(test_points) or str(case.get("title", "")).strip()
+            if len(source_checks) == 1 and source_checks[0].get("branch_bindings"):
+                case["branch_bindings"] = list(source_checks[0].get("branch_bindings", []))
             if not str(case.get("verification_focus", "")).strip():
                 focus_hints: list[str] = []
-                for assignment in by_case.get(case_id, []):
-                    transaction = transactions.get(str(assignment.get("transaction_ref", "")), {})
-                    try:
-                        check = transaction.get("checks", [])[int(assignment.get("check_index", 0)) - 1]
-                    except (IndexError, TypeError, ValueError):
-                        continue
-                    element = elements.get(str(check.get("element_ref", "")), {})
-                    focus_hints.append(_verification_focus_hint(element, check))
+                for check in source_checks:
+                    focus_hints.append(_relationship_verification_focus_hint(elements, check))
                 if focus_hints:
                     case["verification_focus"] = "；".join(dict.fromkeys(focus_hints))
     return value
@@ -2293,7 +2640,10 @@ def _assign_case_sources(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]
                     "check_index": int(source.get("check_index", 0)),
                 }
         case["fact_refs"] = list(planned.get("fact_refs", []))
-        for field in ("requirement_id", "strategy", "dfx_dimension", "dfx_scenario", "verification_focus"):
+        for field in (
+            "requirement_id", "strategy", "dfx_dimension", "dfx_scenario", "verification_focus",
+            "test_point", "scenario_signature", "branch_bindings",
+        ):
             case[field] = planned.get(field, case.get(field, ""))
     value["source_plan"] = "case-plan.json"
     value["source_plan_digest"] = _semantic_content_digest(plan)

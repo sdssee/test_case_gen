@@ -22,7 +22,26 @@ run-dir/
 
 事件类型只有 `scope`、`page`、`function`、`element`、`transaction`、`test_object`、`open_item`。新事实只需提交 `kind` 和 `data`，运行时自动生成 `fact_id`；同批事件可声明 `local_ref`，并在后续字段中用 `@local_ref` 建立关系。跨批次使用调用方稳定生成的 `client_ref`，后续既可用相同 `client_ref` 合并更新，也可用 `@client_ref` 建立关系。`client_ref` 只做精确匹配，不做名称或文案模糊去重。更新既有事实也可使用运行时已返回的 `fact_id`。误放在 `data` 内的 `fact_id/status/client_ref/local_ref` 在新负载写入前自动提升到事件外层；内外值冲突则整批不落盘。同一 `fact_id` 的最后有效事件形成当前事实。
 
-页面事实必须记录实际观察到的 `menu_path` 数组和页面名称。元素类型统一为 `input/select/trigger/toggle/container`；运行时兼容常见页面模型别名、对象或字符串形式的输入类与选项，并从非空 `options` 推断有限选项。未知交互类型或未说明动态来源的空选择控件会被标记为登记不完整。输入元素可声明 `valid_input_classes`，有明确结构化格式时声明 `input_format/input_formats`；运行时据此追加精简的 `exploration_requirements`，它是交互前清单，不是新的产物或义务队列。每个事务检查点必须记录 `result`、结构化 `result_anchor`、主验证 `element_ref` 和全部 `used_element_refs`；输入检查同时记录 `input_class`，具体动作可用 `action_tokens` 固化。稳定断言优先使用 `result_anchor.stable_tokens`，实际样本值可保留在事实中但不得误作稳定预期。已完成检查立即写入，尚未执行的既定分支在checkpoint汇总；缺少可观察锚点、声明但未使用的控件、复用同一物理动作的独立分支或不完整触发动作时事务不写入。最后一次事务后再提交一次稳定页面扫描并明确 `unhandled_element_refs: []`；相同扫描幂等吸收，新事务会使旧扫描失效。用例导航由页面事实生成。进程中断时只自动丢弃无法解析的最后一个未完整行，中间行损坏仍立即报错。
+页面事实必须记录实际观察到的 `menu_path` 数组和页面名称。元素类型统一为 `input/select/trigger/toggle/container`；运行时兼容常见页面模型别名、对象或字符串形式的输入类与选项，并从非空 `options` 推断有限选项。未知交互类型或未说明动态来源的空选择控件会被标记为登记不完整。输入元素可声明 `valid_input_classes`，有明确结构化格式时声明 `input_format/input_formats`；运行时据此追加精简的 `exploration_requirements`，它是交互前清单，不是新的产物或义务队列。每个事务检查点必须记录 `result`、结构化 `result_anchor`、主交互 `element_ref` 和全部 `used_element_refs`；输入检查同时记录 `input_class`。相关控件共同决定本次结果时用可选 `branch_bindings` 记录 `{element_ref, kind, value}`；唯一输入类和唯一有限选项由运行时自动归一，多个同类参与控件才需显式绑定。普通辅助控件不进入绑定，也不能完成独立分支。具体动作可用 `action_tokens` 固化。稳定断言优先使用 `result_anchor.stable_tokens`，实际样本值可保留在事实中但不得误作稳定预期。已完成检查立即写入，尚未执行的既定分支在checkpoint汇总；缺少可观察锚点、声明但未使用的控件、复用同一物理关系的独立分支或不完整触发动作时事务不写入。最后一次事务后再提交一次稳定页面扫描并明确 `unhandled_element_refs: []`；相同扫描幂等吸收，新事务会使旧扫描失效。用例导航由页面事实生成。进程中断时只自动丢弃无法解析的最后一个未完整行，中间行损坏仍立即报错。
+
+一个受约束关联检查示例（名称和值仅说明契约，不预置业务）：
+
+```json
+{
+  "element_ref": "EL-TARGET",
+  "used_element_refs": ["EL-TARGET", "EL-MODE", "EL-RUN"],
+  "trigger_element_ref": "EL-RUN",
+  "input_class": "valid_type_a",
+  "option_value": "模式一",
+  "branch_bindings": [
+    {"element_ref": "EL-TARGET", "kind": "input_class", "value": "valid_type_a"},
+    {"element_ref": "EL-MODE", "kind": "option_value", "value": "模式一"}
+  ],
+  "action": "输入受控类型A数据，选择模式一并点击执行",
+  "result": "显示模式一对应的处理结果",
+  "result_anchor": {"assertion": "contains", "stable_tokens": ["处理结果"]}
+}
+```
 
 一个有限选项功能事务示例（仅说明契约，不代表预置功能）：
 
@@ -96,7 +115,7 @@ run-dir/
 }
 ```
 
-计划只写测试意图和唯一检查点分配账本；`fact_refs`、元素覆盖、功能覆盖和DFX关联由系统派生，不要求模型重复维护。每个Case包含唯一 `verification_focus`；缺省时运行时根据主验证元素、独立分支和观察结果派生事实化建议，模型只在需要表达业务差异时优化。每个有限选项和每个实测有效输入等价类分别对应独立 baseline Case；空值、无效格式、边界等已声明且实测的分支分别对应独立 DFX Case。不合并到一个 Case，也不默认做跨维度组合。页面自动化入口由运行时归一为UI；同类稳定性风险聚合为一个风险并保留受影响功能。按钮、提交或触发引用本身不是性能依据；只有实测加载、异步、长任务、超时、耗时或需求性能目标时才生成一条轻量响应场景，量化目标必须带 `target_basis` 和有效 `target_basis_refs`，不按Case重复。确无适用专项时保留真实不适用原因。
+计划只写测试意图和唯一检查点分配账本；`fact_refs`、`scenario_signature`、Case级 `test_point`、元素覆盖、功能覆盖和DFX关联由系统派生，不要求模型重复维护。每个Case包含唯一 `verification_focus`；缺省时运行时根据同一实测检查的关联分支和观察结果派生事实化建议。每个实测有效关联分别对应独立 baseline Case；没有关联时每个有限选项和每个实测有效输入等价类仍分别对应独立 baseline Case。空值、无效格式、边界等已声明且实测的分支分别对应独立 DFX Case。一个关联Case只共同覆盖其明确绑定的分支，不默认做跨维度组合。页面自动化入口由运行时归一为UI；同类稳定性风险聚合为一个风险并保留受影响功能。按钮、提交或触发引用本身不是性能依据；只有实测加载、异步、长任务、超时、耗时或需求性能目标时才生成一条轻量响应场景，量化目标必须带 `target_basis` 和有效 `target_basis_refs`，不按Case重复。确无适用专项时保留真实不适用原因。
 计划通过内部 `write-plan` 按功能 upsert；结构或映射错误在本次生成动作中局部修正，不把错误计划留给最终 Review。精确重复提交返回成功且不改写文件。
 
 ## function-cases.json
@@ -123,7 +142,7 @@ run-dir/
 }
 ```
 
-模型提交步骤时只写业务 `action+expected`；写入器根据计划统一补齐标题、测试类型和优先级，根据页面事实注入使用 `-` 连接的完整导航，再按 `check_assignments` 顺序注入一个内部 `source_check` 和计划中的 `verification_focus`，并从主验证和辅助使用控件派生 `fact_refs`。结构化 `result_anchor` 优先校验稳定tokens；同时存在稳定tokens和带计数、百分比、耗时或进度的样本值时，样本值不得固化为预期。命名测试数据引用采用 `TEST_*`，且前置条件必须说明同名受控来源。内部来源不导出Excel，主验证目标用于场景矩阵、用例备注和一次性语义Review。
+模型提交步骤时只写业务 `action+expected`；写入器根据计划统一补齐标题、Case级 `test_point`、测试类型和优先级，根据页面事实注入使用 `-` 连接的完整导航，再按 `check_assignments` 顺序注入一个内部 `source_check` 和计划中的 `verification_focus`，并从关联验证、主交互和辅助使用控件派生 `fact_refs`。结构化 `result_anchor` 优先校验稳定tokens；同时存在稳定tokens和带计数、百分比、耗时或进度的样本值时，样本值不得固化为预期。动作必须保留同一关联检查中的具体选项，预期不得借用其他关联的观察结果。命名测试数据引用采用 `TEST_*`，且前置条件必须说明同名受控来源。内部来源不导出Excel，Case级测试点和主验证目标用于场景矩阵、功能用例和一次性语义Review。
 用例通过内部 `write-cases` 按功能 upsert；标题、菜单路径、配对步骤、具体数据、功能顺序和事实引用在生成时完成约束。同一功能再次提交时只替换该功能块，其他功能保持不变。
 
 ## review.json

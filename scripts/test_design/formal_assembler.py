@@ -466,7 +466,7 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
             rows["测试场景矩阵"].append({
                 "场景 ID": _text(case.get("case_id")),
                 "Story ID/需求 ID": _text(case.get("requirement_id") or requirement_id),
-                "功能点": _text(function.get("name")),
+                "功能点": _text(case.get("test_point") or function.get("name")),
                 "测试维度": _text(case.get("strategy")),
                 "DFX维度": _text(case.get("dfx_dimension")),
                 "DFX场景": _text(case.get("dfx_scenario")),
@@ -494,7 +494,7 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
             "用例 ID": _text(case.get("case_id")),
             "Story ID/需求 ID": _text(case.get("requirement_id") or requirement_by_function.get(function_id)),
             "模块": _text(scope.get("module_path")),
-            "功能点": functions.get(function_id, function_id),
+            "功能点": _text(case.get("test_point") or functions.get(function_id, function_id)),
             "用例标题": _text(case.get("title")),
             "优先级": _text(case.get("priority") or "P1"),
             "测试类型": _text(case.get("test_type") or "功能测试"),

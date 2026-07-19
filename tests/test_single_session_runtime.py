@@ -595,11 +595,18 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertEqual("TC-VIEW-007", ws.cell(8, 1).value)
         self.assertIsNone(ws.cell(9, 1).value)
         self.assertGreaterEqual(ws.row_dimensions[2].height, 40)
+        written_first = load_cases(self.run_dir)["cases"][0]
+        self.assertEqual(written_first["test_point"], ws.cell(2, function_headers["功能点"]).value)
+        self.assertNotEqual("告警视图模式", ws.cell(2, function_headers["功能点"]).value)
         matrix = workbook["测试场景矩阵"]
         matrix_text = "\n".join(str(matrix.cell(row, column).value or "") for row in range(2, matrix.max_row + 1) for column in range(1, matrix.max_column + 1))
         self.assertNotIn("TX-VIEW", matrix_text)
         self.assertNotIn("EL-VIEW", matrix_text)
         matrix_headers = {cell.value: cell.column for cell in matrix[1]}
+        self.assertEqual(
+            ws.cell(2, function_headers["功能点"]).value,
+            matrix.cell(2, matrix_headers["功能点"]).value,
+        )
         self.assertEqual("P1", matrix.cell(4, matrix_headers["优先级"]).value)
         self.assertEqual("中", matrix.cell(4, matrix_headers["风险等级"]).value)
         self.assertEqual("视图模式：详细", matrix.cell(4, matrix_headers["输入数据/状态条件"]).value)

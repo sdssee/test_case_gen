@@ -61,8 +61,8 @@ def validate_workbook(path: Path) -> int:
         if not case_id or case_id in ids:
             raise ValueError(f"empty or duplicate case id at row {row}")
         ids.add(case_id)
-        if not values["功能点"] or not values["用例标题"].startswith(values["功能点"] + "-"):
-            raise ValueError(f"case title is empty or not prefixed by function at row {row}")
+        if not values["功能点"] or not values["用例标题"]:
+            raise ValueError(f"case test point or title is empty at row {row}")
         steps = values["操作步骤"]
         expected = values["预期结果"]
         if not steps or not expected or not re.search(r"(?m)^1\.\s+", steps) or not re.search(r"(?m)^1\.\s+", expected):

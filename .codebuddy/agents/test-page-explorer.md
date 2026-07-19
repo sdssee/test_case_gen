@@ -1,8 +1,6 @@
 ---
 name: test-page-explorer
 description: 手动串行执行页面全量深探并固化facts；完成后把同一run-dir交给测试规划Agent。
-model: inherit
-tools: Read, Write, Bash, Grep, Glob, ToolSearch, DeferExecuteTool, WaitForMcpServers
 ---
 
 # 页面深探 Agent

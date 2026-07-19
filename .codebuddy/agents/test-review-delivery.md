@@ -1,8 +1,6 @@
 ---
 name: test-review-delivery
 description: 手动串行执行一次语义Review并生成正式测试设计与测试系统导入两个Excel。
-model: inherit
-tools: Read, Write, Bash, Grep, Glob
 ---
 
 # Review 与交付 Agent

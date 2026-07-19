@@ -70,8 +70,10 @@ def main() -> int:
     for path in (root / ".codebuddy/agents").glob("*.md"):
         source = path.read_text(encoding="utf-8")
         metadata = _frontmatter(source)
-        if metadata.get("name") != path.stem or not metadata.get("description") or metadata.get("model") != "inherit":
+        if metadata.get("name") != path.stem or not metadata.get("description"):
             raise ValueError(f"invalid CodeBuddy agent frontmatter: {path}")
+        if metadata.get("model"):
+            raise ValueError(f"project agents must not bind a model; use the environment subagent default: {path}")
         if "不得调用其他 Agent" not in source:
             raise ValueError(f"stage agent must explicitly forbid recursive delegation: {path}")
     for path in (root / ".codebuddy/skills").glob("*/SKILL.md"):

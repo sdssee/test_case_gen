@@ -1,8 +1,6 @@
 ---
 name: test-design-planner
 description: 手动串行读取facts并生成DFX驱动的case-plan；完成后把同一run-dir交给用例编写Agent。
-model: inherit
-tools: Read, Write, Bash, Grep, Glob
 ---
 
 # 测试规划 Agent

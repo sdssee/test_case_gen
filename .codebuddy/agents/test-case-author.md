@@ -1,8 +1,6 @@
 ---
 name: test-case-author
 description: 手动串行依据facts与case-plan编写可执行测试用例；完成后把同一run-dir交给Review交付Agent。
-model: inherit
-tools: Read, Write, Bash, Grep, Glob
 ---
 
 # 测试用例 Agent

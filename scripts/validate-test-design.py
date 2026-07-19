@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import py_compile
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -13,12 +14,28 @@ REQUIRED = [
     "docs/test-design/rules/page-discovery.md", "docs/test-design/rules/case-design.md",
     "docs/test-design/rules/artifact-contract.md",
     "docs/test-design/codebuddy-test-design-template.xlsx", "docs/test-design/测试用例模板.xlsx",
+    ".codebuddy/agents/test-page-explorer.md", ".codebuddy/agents/test-design-planner.md",
+    ".codebuddy/agents/test-case-author.md", ".codebuddy/agents/test-review-delivery.md",
+    ".codebuddy/skills/test-page-exploration/SKILL.md", ".codebuddy/skills/test-design-planning/SKILL.md",
+    ".codebuddy/skills/test-case-authoring/SKILL.md", ".codebuddy/skills/test-review-delivery/SKILL.md",
 ]
 REMOVED_NAMES = {
     "page-discovery.csv", "page-element-inventory.csv", "selection-option-observations.csv",
     "configuration-variant-observations.csv", "interaction-branch-observations.csv",
     "test-data-lifecycle.csv", "element-case-plan.csv", "function_cases_manifest.json",
 }
+
+
+def _frontmatter(source: str) -> dict[str, str]:
+    match = re.match(r"\A---\s*\n(.*?)\n---\s*\n", source, re.DOTALL)
+    if not match:
+        raise ValueError("missing YAML frontmatter")
+    result: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            result[key.strip()] = value.strip()
+    return result
 
 
 def main() -> int:
@@ -44,13 +61,36 @@ def main() -> int:
     agents = (root / "AGENTS.md").read_text(encoding="utf-8")
     if "TD-GATE" in agents or "TEST-DESIGN-GENERATED" in agents:
         raise ValueError("AGENTS.md still contains generated legacy gate rules")
+    expected_agents = {
+        "test-page-explorer", "test-design-planner", "test-case-author", "test-review-delivery",
+    }
+    actual_agents = {path.stem for path in (root / ".codebuddy/agents").glob("*.md")}
+    if actual_agents != expected_agents:
+        raise ValueError(f"manual stage agents differ from the final architecture: {sorted(actual_agents)}")
+    for path in (root / ".codebuddy/agents").glob("*.md"):
+        source = path.read_text(encoding="utf-8")
+        metadata = _frontmatter(source)
+        if metadata.get("name") != path.stem or not metadata.get("description") or metadata.get("model") != "inherit":
+            raise ValueError(f"invalid CodeBuddy agent frontmatter: {path}")
+        if "不得调用其他 Agent" not in source:
+            raise ValueError(f"stage agent must explicitly forbid recursive delegation: {path}")
+    for path in (root / ".codebuddy/skills").glob("*/SKILL.md"):
+        source = path.read_text(encoding="utf-8")
+        metadata = _frontmatter(source)
+        if metadata.get("name") != path.parent.name or not metadata.get("description"):
+            raise ValueError(f"invalid CodeBuddy skill frontmatter: {path}")
+        if "TODO" in source or "TBD" in source:
+            raise ValueError(f"unfinished CodeBuddy skill: {path}")
+    router = (root / ".codebuddy/skills/test-design/SKILL.md").read_text(encoding="utf-8")
+    if "Agent 不可用" not in router or "execute_request" not in router:
+        raise ValueError("test-design router lacks the same-quality Agent fallback")
     schema = json.loads((root / "docs/test-design/schemas/product-facts.schema.json").read_text(encoding="utf-8"))
     item_required = schema["properties"]["facts"]["additionalProperties"]["items"]["required"]
     if "evidence" in item_required:
         raise ValueError("product fact archive still requires evidence")
     for path in (root / "scripts").rglob("*.py"):
         py_compile.compile(str(path), doraise=True)
-    print("OK: compact single-session architecture is structurally valid.")
+    print("OK: compact manual-stage-agent architecture and single-session fallback are structurally valid.")
     return 0
 
 

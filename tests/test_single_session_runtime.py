@@ -208,6 +208,50 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertEqual(before["module_path"], after["module_path"])
         self.assertEqual("测试负责人", after["owner"])
 
+    def test_common_model_field_aliases_are_normalized_before_dfx_derivation(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "aliases"
+            ensure_run(run_dir, "工具>诊断")
+            append_events(run_dir, [
+                {"kind": "page", "fact_id": "PAGE", "data": {
+                    "page_name": "诊断", "navigation_path": ["工具", "诊断"],
+                }},
+                {"kind": "function", "fact_id": "FN", "data": {
+                    "function_name": "协议诊断",
+                }},
+                {"kind": "element", "fact_id": "EL", "data": {
+                    "page_ref": "PAGE", "function_ref": "FN", "visible_name": "协议版本",
+                    "element_type": "dropdown", "interaction_type": "actionable",
+                    "option_values": [{"label": "版本甲"}, {"label": "版本乙"}],
+                }},
+                {"kind": "open_item", "fact_id": "OPEN", "data": {
+                    "category": "observed_risk", "description": "外部环境可能限制执行",
+                    "affected_functions": ["FN"], "material": False,
+                }},
+            ])
+            facts = compile_facts(run_dir)
+            self.assertEqual("诊断", facts["pages"][0]["name"])
+            self.assertEqual(["工具", "诊断"], facts["pages"][0]["menu_path"])
+            self.assertEqual("协议诊断", facts["functions"][0]["name"])
+            element = facts["elements"][0]
+            self.assertEqual("select", element["type"])
+            self.assertEqual(["版本甲", "版本乙"], element["options"])
+            self.assertEqual(
+                ["版本甲", "版本乙"],
+                [row["value"] for row in element["exploration_requirements"]],
+            )
+            self.assertEqual(["FN"], facts["open_items"][0]["affected_function_refs"])
+
+    def test_alias_conflicts_are_rejected_before_any_event_is_appended(self) -> None:
+        events_path = artifact_paths(self.run_dir)["events"]
+        before = events_path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "conflicts with canonical field"):
+            append_events(self.run_dir, [{"kind": "element", "data": {
+                "page_ref": "PAGE-LIST", "function_ref": "FN-VIEW", "name": "模式",
+                "type": "input", "element_type": "select",
+            }}])
+        self.assertEqual(before, events_path.read_bytes())
+
     def test_fact_compilation_keeps_first_discovery_order(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             run_dir = Path(value) / "order"

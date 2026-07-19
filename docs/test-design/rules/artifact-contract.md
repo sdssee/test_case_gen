@@ -1,5 +1,7 @@
 # 产物契约
 
+4 个阶段 Agent 与单会话降级共用本契约、同一 run-dir 和同一标准 CLI。阶段切换只由固化产物完成，不依赖 Agent 会话记忆；Agent 不可用不得成为跳过阶段或降低质量的理由。
+
 ## 最小运行目录
 
 新运行目录固定为 `docs/test-design/current/<run-id>/`；已存在 `events.jsonl` 或 `facts.json` 的历史运行可以原地恢复。

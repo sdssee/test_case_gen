@@ -1,5 +1,7 @@
 # 专题规则索引
 
+无论当前阶段由手动 Agent 还是单会话降级 Skill 执行，都只加载下列对应专题；不得因执行者不同复制另一套规则。
+
 - 页面访问、浏览器、桌面窗口：读取 `page-discovery.md` 与 `data-safety.md`。
 - 写入或读取阶段文件：读取 `artifact-contract.md`。
 - 用例规划和正文：读取 `dfx-test-strategy.md` 与 `case-design.md`。

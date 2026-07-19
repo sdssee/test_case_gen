@@ -13,31 +13,30 @@
 
 ## Skill、规则与运行方式
 
-用户直接调用 `.codebuddy/skills/test-design/SKILL.md` 并提供测试目标。Skill 自动绑定或恢复内部运行目录，然后直接开始页面扫描，不需要用户执行初始化命令。
+用户直接调用 `.codebuddy/skills/test-design/SKILL.md` 并提供测试目标。Skill 自动绑定或恢复内部运行目录，不需要用户执行初始化命令。执行可选择 4 个手动串行 Agent；CodeBuddy 无法调用 Agent 时，当前会话执行对应阶段 Skill，使用同一套 CLI 和质量规则继续。
 
 规则分层：
 
 - `.codebuddy/rules/test-design-rule.md`：不可违反的简明规则。
+- `.codebuddy/agents/`：4 个可选的手动串行阶段 Agent。
+- `.codebuddy/skills/test-*/SKILL.md`：Agent 与单会话降级共同使用的阶段 Skill。
 - `docs/test-design/rules/README.md`：按当前阶段加载专题规则。
 - `docs/test-design/rules/page-discovery.md`：连续页面深探。
 - `docs/test-design/rules/dfx-test-strategy.md`：DFX 左移策略。
 - `docs/test-design/rules/case-design.md`：计划和用例正文。
 - `docs/test-design/rules/excel-deliverable.md`：双 Excel 交付。
 
-整个任务只在一个会话和一个浏览器上下文中运行，不创建 Agent，也不依赖 Hook。
+页面深探始终保持一个连续浏览器上下文。Agent 仅用于隔离阶段上下文，由用户按顺序手动调用；不自动编排、不并行、不递归派生，也不依赖 Hook。Agent 不可用不会改变产物链或降低质量。
 
 ## 执行流程
 
 ```text
-调用 Skill并理解范围
-  → 扫描页面、执行连续功能事务、操作后局部重扫
-  → 页面checkpoint集中刷新 facts.json
-  → 自动形成事实计划骨架，识别独立功能并承接已实探DFX分支
-  → 为每个Case派生唯一主验证目标，集中形成性能、风险与自动化结论
-  → 每个实测有效关联形成baseline意图；无关联时选项/有效输入类分别成例，空值/格式/边界形成DFX意图
-  → 按计划和功能upsert配对步骤 function-cases.json
-  → 一次跨产物完整性与模型语义 Review
-  → 独立生成正式测试设计.xlsx和测试系统导入.xlsx
+调用 test-design Skill 并理解范围
+  → test-page-explorer（或 test-page-exploration Skill）
+  → test-design-planner（或 test-design-planning Skill）
+  → test-case-author（或 test-case-authoring Skill）
+  → test-review-delivery（或 test-review-delivery Skill）
+  → 返回正式测试设计.xlsx和测试系统导入.xlsx
 ```
 
 扫描和事务不是两个割裂阶段。进入页面先扫描，发现元素后立即执行相关功能事务，页面变化后局部重扫；新元素动态加入当前或后续事务。最终全量扫描稳定且没有未处理元素时结束深探。
@@ -56,7 +55,18 @@
 | review | facts、plan、cases | `review.json` |
 | delivery | cases、两个模板 | 两个 Excel |
 
-独立性来自文件契约，不来自多 Agent。证据只在调试需要时可选生成，后续阶段完全不读取。
+独立性来自文件契约，而不是 Agent 内存。每个 Agent 只读上游固化产物并写自己的唯一产物；单会话降级也遵守同一边界。证据只在调试需要时可选生成，后续阶段完全不读取。
+
+## 4 个阶段 Agent 与降级
+
+| 顺序 | Agent | 对应 Skill | 完成标志 |
+| --- | --- | --- | --- |
+| 1 | `test-page-explorer` | `test-page-exploration` | `facts.json` 的 checkpoint ready |
+| 2 | `test-design-planner` | `test-design-planning` | 所有事实功能与检查已进入计划 |
+| 3 | `test-case-author` | `test-case-authoring` | 计划 Case 与已写 Case 一致 |
+| 4 | `test-review-delivery` | `test-review-delivery` | Review 有效且两个 Excel 均生成 |
+
+这些 Agent 不生成任务包、分片、观察 CSV 或返工队列。一个 Agent 失败时，继续在当前会话调用其对应 Skill；阶段输入、输出和校验完全相同，因此降级不会绕过规则。错误最多局部修正当前功能或 Case 一次，不形成自动重试风暴。
 
 ## Review 如何避免事后拒绝
 

@@ -70,6 +70,37 @@ REVIEW_SECTIONS = ("cases", "performance", "risks", "automation", "elements", "c
 DATA_REFERENCE_PATTERN = re.compile(r"\bTEST_[A-Z][A-Z0-9_]{2,}\b")
 AMBIGUOUS_EXPECTED = re.compile(r"(?:可能|一般情况下|应当正常|或自动|不接受.{0,20}或|成功或失败)")
 
+# Accept the small set of field names commonly emitted by page models.  The
+# aliases are normalized before any DFX or transaction validation, so every
+# caller reaches one canonical contract instead of relying on late repair.
+KIND_FIELD_ALIASES: dict[str, dict[str, str]] = {
+    "page": {
+        "page_name": "name",
+        "visible_name": "name",
+        "navigation_path": "menu_path",
+    },
+    "function": {
+        "function_name": "name",
+        "visible_name": "name",
+    },
+    "element": {
+        "element_type": "type",
+        "interaction_type": "interaction_mode",
+        "visible_name": "name",
+        "element_name": "name",
+        "option_values": "options",
+        "valid_classes": "valid_input_classes",
+    },
+    "transaction": {
+        "transaction_kind": "transaction_type",
+        "affected_function_ref": "function_ref",
+        "affected_element_refs": "element_refs",
+    },
+    "open_item": {
+        "affected_functions": "affected_function_refs",
+    },
+}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -164,7 +195,7 @@ def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
     data = item.get("data", {})
     if not isinstance(data, dict):
         raise ValueError("event.data must be an object")
-    data = dict(data)
+    data = _normalize_kind_fields(kind, data)
     if kind == "function":
         profile = str(data.get("interaction_profile", "")).strip().lower()
         if profile and profile not in INTERACTION_PROFILES:
@@ -248,6 +279,23 @@ def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
     item.setdefault("observed_at", _now())
     item.setdefault("status", "active")
     return item
+
+
+def _normalize_kind_fields(kind: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Promote supported model aliases and reject conflicting duplicate fields."""
+    normalized = dict(data)
+    for alias, canonical in KIND_FIELD_ALIASES.get(kind, {}).items():
+        if alias not in normalized:
+            continue
+        alias_value = normalized.pop(alias)
+        canonical_value = normalized.get(canonical)
+        if canonical_value not in (None, "", []) and canonical_value != alias_value:
+            raise ValueError(
+                f"{kind} field {alias!r} conflicts with canonical field {canonical!r}"
+            )
+        if canonical_value in (None, "", []):
+            normalized[canonical] = alias_value
+    return normalized
 
 
 def _normalize_event_envelope(event: dict[str, Any]) -> dict[str, Any]:

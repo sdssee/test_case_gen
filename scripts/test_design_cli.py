@@ -32,13 +32,14 @@ for stream_name in ("stdin", "stdout", "stderr"):
 
 def _payload(path: Path | None) -> object:
     if path:
+        resolved = path.resolve()
+        temp_root = Path(tempfile.gettempdir()).resolve()
+        if resolved.parent != temp_root or not resolved.name.startswith("test-design-"):
+            raise ValueError("JSON payload files must use the system temp directory and test-design- prefix")
         try:
-            return json.loads(path.read_text(encoding="utf-8-sig"))
+            return json.loads(resolved.read_text(encoding="utf-8-sig"))
         finally:
-            resolved = path.resolve()
-            temp_root = Path(tempfile.gettempdir()).resolve()
-            if resolved.parent == temp_root and resolved.name.startswith("test-design-"):
-                resolved.unlink(missing_ok=True)
+            resolved.unlink(missing_ok=True)
     if sys.stdin.isatty():
         raise ValueError("provide --file or pipe JSON through stdin")
     return json.load(sys.stdin)

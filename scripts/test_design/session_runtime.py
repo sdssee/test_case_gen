@@ -59,11 +59,16 @@ ELEMENT_TYPE_ALIASES = {
     "container": {"tab", "drawer", "dialog", "accordion", "页签", "抽屉", "弹窗", "折叠面板"},
 }
 NEGATIVE_INPUT_CLASSES = {"empty", "invalid", "invalid_format", "duplicate", "boundary_min", "boundary_max"}
+INTERACTION_MODES = {"actionable", "disabled", "container", "display_only"}
+INTERACTION_PROFILES = {
+    "read_query", "write_mutation", "async_task", "batch_transfer", "data_render", "local_static",
+}
 ANGLE_PLACEHOLDER = re.compile(r"<[^<>\r\n]{1,80}>")
 PRIORITY_ALIASES = {"最高": "P0", "高": "P1", "中": "P2", "低": "P3", "high": "P1", "medium": "P2", "low": "P3"}
 EVENT_ENVELOPE_FIELDS = ("fact_id", "status", "client_ref", "local_ref")
 REVIEW_SECTIONS = ("cases", "performance", "risks", "automation", "elements", "cross_sheet")
 DATA_REFERENCE_PATTERN = re.compile(r"\bTEST_[A-Z][A-Z0-9_]{2,}\b")
+AMBIGUOUS_EXPECTED = re.compile(r"(?:可能|一般情况下|应当正常|或自动|不接受.{0,20}或|成功或失败)")
 
 
 def _now() -> str:
@@ -160,6 +165,12 @@ def _prepare_event(event: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("event.data must be an object")
     data = dict(data)
+    if kind == "function":
+        profile = str(data.get("interaction_profile", "")).strip().lower()
+        if profile and profile not in INTERACTION_PROFILES:
+            raise ValueError(f"function interaction_profile must be one of {sorted(INTERACTION_PROFILES)}")
+        if profile:
+            data["interaction_profile"] = profile
     if kind == "element":
         data = _normalize_element(data)
         # Exploration branches are a deterministic DFX decision made when the
@@ -459,12 +470,28 @@ def _normalize_element(element: dict[str, Any]) -> dict[str, Any]:
         data["input_formats"] = input_formats
 
     known = canonical in ELEMENT_TYPE_ALIASES
-    if data.get("interactive", True) is False:
+    requested_mode = str(data.get("interaction_mode", "")).strip().lower()
+    if requested_mode and requested_mode not in INTERACTION_MODES:
+        raise ValueError(f"element interaction_mode must be one of {sorted(INTERACTION_MODES)}")
+    if requested_mode:
+        mode = requested_mode
+    elif data.get("disabled") is True:
+        mode = "disabled"
+    elif data.get("interactive", True) is False:
+        mode = "display_only"
+    elif canonical == "container":
+        mode = "container"
+    else:
+        mode = "actionable"
+    data["interaction_mode"] = mode
+    data["interactive"] = mode == "actionable"
+
+    if mode != "actionable":
         data["classification_status"] = "not_interactive"
     elif not known:
         data["classification_status"] = "unknown"
-    elif canonical == "select" and not normalized_options and data.get("dynamic_options") is not True:
-        data["classification_status"] = "incomplete"
+    elif canonical == "select" and not normalized_options:
+        data["classification_status"] = "awaiting_options" if data.get("dynamic_options") is True else "incomplete"
     else:
         data["classification_status"] = "classified"
     return data
@@ -509,7 +536,7 @@ def _derive_exploration_requirements(element: dict[str, Any]) -> list[dict[str, 
         if isinstance(configured_classes, str):
             configured_classes = [configured_classes]
         valid_classes = list(dict.fromkeys(_normalize_input_class(value) for value in configured_classes if str(value).strip()))
-        for valid_class in valid_classes or ["valid"]:
+        for valid_class in [value for value in (valid_classes or ["valid"]) if value not in NEGATIVE_INPUT_CLASSES]:
             normalized = valid_class
             requirements.append({
                 "kind": "input_class", "value": normalized, "strategy": "baseline",
@@ -569,7 +596,14 @@ def _derive_exploration_requirements(element: dict[str, Any]) -> list[dict[str, 
             "kind": "option_value", "value": str(default), "strategy": "baseline",
             "reason": "单因素配置的默认或未配置基线",
         })
-    return requirements
+    unique: dict[tuple[str, str], dict[str, Any]] = {}
+    for requirement in requirements:
+        key = (str(requirement.get("kind", "")), str(requirement.get("value", "")))
+        previous = unique.get(key)
+        if previous and previous.get("strategy") == "DFX":
+            continue
+        unique[key] = requirement
+    return list(unique.values())
 
 
 def _input_class_matches(required: str, observed: set[str]) -> bool:
@@ -720,7 +754,10 @@ def _humanize_branch(value: Any, element: dict[str, Any] | None = None) -> str:
     aliases = {
         "valid": "有效值", "empty": "必填空值", "invalid": "无效值",
         "invalid_format": "无效格式", "boundary_min": "下边界", "boundary_max": "上边界",
-        "duplicate": "重复值",
+        "duplicate": "重复值", "valid_name": "有效名称", "valid_nonexistent_name": "有效且不存在的名称",
+        "valid_text": "有效文本", "valid_number": "有效数字", "valid_integer": "有效整数",
+        "valid_domain": "有效域名", "valid_hostname": "有效主机名", "valid_ip": "有效IP地址",
+        "valid_ipv4": "有效IPv4地址", "valid_ipv6": "有效IPv6地址", "valid_url": "有效URL",
     }
     if text in aliases:
         return aliases[text]
@@ -804,6 +841,47 @@ def _validate_new_transactions(run_dir: Path, items: list[dict[str, Any]]) -> No
                 raise ValueError(f"transaction check {index} action omits its submit/execute trigger")
 
 
+def _validate_new_elements(run_dir: Path, items: list[dict[str, Any]]) -> None:
+    """Reject incomplete actionable controls at registration/update time.
+
+    This is intentionally small: it validates ownership and observable semantics
+    while the page is still open, instead of discovering the same defect during
+    checkpoint or Review.
+    """
+    latest = {str(event.get("fact_id", "")): _prepare_event(event) for event in load_events(run_dir)}
+    latest.update({str(item.get("fact_id", "")): item for item in items})
+    function_refs = {
+        fact_id for fact_id, event in latest.items()
+        if event.get("kind") == "function" and event.get("status", "active") not in NON_ACTIONABLE_STATUSES
+    }
+    page_refs = {
+        fact_id for fact_id, event in latest.items()
+        if event.get("kind") == "page" and event.get("status", "active") not in NON_ACTIONABLE_STATUSES
+    }
+    for item in items:
+        if item.get("kind") != "element":
+            continue
+        data = item.get("data", {})
+        mode = str(data.get("interaction_mode", ""))
+        page_ref = str(data.get("page_ref", "")).strip()
+        function_ref = str(data.get("function_ref", "")).strip()
+        if page_refs and page_ref not in page_refs:
+            raise ValueError("element must bind to an observed page before it is registered")
+        if mode == "actionable" and function_refs and function_ref not in function_refs:
+            raise ValueError("actionable element must bind to one observed business function before interaction")
+        if data.get("icon_only") is True:
+            semantic_source = str(data.get("semantic_source", "")).strip().lower()
+            if not str(data.get("name", "")).strip() or semantic_source not in {
+                "visible_text", "aria", "title", "tooltip", "hover",
+            }:
+                raise ValueError("icon-only control requires a semantic name and visible_text/aria/title/tooltip/hover source")
+            if semantic_source == "hover" and not str(data.get("hover_text", "")).strip():
+                raise ValueError("hover-identified control requires the observed hover_text; hover does not count as operation")
+        if mode == "container" and data.get("has_interactive_descendants") is True:
+            if data.get("child_elements_registered") is not True:
+                raise ValueError("composite container must register its interactive descendants after expansion")
+
+
 def ensure_run(
     run_dir: Path,
     module_path: str,
@@ -860,6 +938,10 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
     paths = artifact_paths(run_dir)
     raw_items = [_normalize_event_envelope(dict(event)) for event in events]
     existing_events = load_events(run_dir)
+    existing_by_id: dict[str, dict[str, Any]] = {}
+    for existing in existing_events:
+        prepared_existing = _prepare_event(existing)
+        existing_by_id[str(prepared_existing.get("fact_id", ""))] = prepared_existing
     client_refs: dict[str, tuple[str, str]] = {}
     for existing in existing_events:
         client_ref = str(existing.get("client_ref", "")).strip()
@@ -881,6 +963,12 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
             if provided and provided != existing_ref[0]:
                 raise ValueError(f"client_ref {client_ref!r} is already bound to fact_id {existing_ref[0]!r}")
             raw["fact_id"] = existing_ref[0]
+        target_id = str(raw.get("fact_id", "")).strip()
+        previous = existing_by_id.get(target_id)
+        if previous and str(raw.get("kind", "")).strip() == previous.get("kind"):
+            raw_data = raw.get("data", {})
+            if isinstance(raw_data, dict):
+                raw["data"] = {**previous.get("data", {}), **raw_data}
         provided_id = bool(str(raw.get("fact_id", "")).strip())
         item = _prepare_event(raw)
         if not provided_id:
@@ -987,6 +1075,7 @@ def append_events(run_dir: Path, events: Iterable[dict[str, Any]]) -> list[dict[
 
     if not appended:
         return returned
+    _validate_new_elements(run_dir, appended)
     _validate_new_transactions(run_dir, appended)
     paths["events"].parent.mkdir(parents=True, exist_ok=True)
     payload = "".join(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in appended)
@@ -1242,8 +1331,16 @@ def inspect_discovery(run_dir: Path, facts: dict[str, Any] | None = None) -> lis
     test_object_refs = {str(row.get("fact_id")) for row in facts.get("test_objects", [])}
     transaction_by_element: dict[str, list[dict[str, Any]]] = {ref: [] for ref in element_refs}
     for transaction in facts.get("transactions", []):
-        for ref in _transaction_check_refs(transaction):
-            transaction_by_element.setdefault(ref, []).append(transaction)
+        for check in transaction.get("checks", []):
+            completion_refs = {str(check.get("element_ref", "")).strip()}
+            completion_refs.add(str(check.get("trigger_element_ref", "")).strip())
+            completion_refs.update(
+                str(binding.get("element_ref", "")).strip()
+                for binding in check.get("branch_bindings", [])
+                if isinstance(binding, dict)
+            )
+            for ref in completion_refs - {""}:
+                transaction_by_element.setdefault(ref, []).append(transaction)
     for page in facts.get("pages", []):
         menu_path = page.get("menu_path")
         if not isinstance(menu_path, list) or not menu_path or any(not str(part).strip() for part in menu_path):
@@ -1257,17 +1354,18 @@ def inspect_discovery(run_dir: Path, facts: dict[str, Any] | None = None) -> lis
         if function_ref and function_ref not in function_refs:
             issues.append(_issue("broken_reference", "blocker", "facts.json", f"element {ref} references unknown function {function_ref}", "correct this element relation"))
         classification = str(element.get("classification_status", ""))
-        if element.get("interactive", True) and classification in {"unknown", "incomplete", ""}:
+        actionable = element.get("interaction_mode", "actionable") == "actionable"
+        if actionable and classification in {"unknown", "incomplete", "awaiting_options", ""}:
             repair = "record the control's actual semantic type"
             if _canonical_element_type(element.get("type")) == "select":
-                repair = "expand the control and record its finite options, or explicitly mark dynamic_options"
+                repair = "expand the control under its current trigger condition and record the observed options"
             issues.append(_issue(
                 "unclassified_interactive_element", "blocker", "facts.json",
                 f"interactive element {ref} is not completely classified",
                 repair,
             ))
         if (
-            element.get("interactive", True)
+            actionable
             and (_is_input_element(element) or element.get("option_set") == "finite")
             and not element.get("exploration_requirements")
         ):
@@ -1277,7 +1375,7 @@ def inspect_discovery(run_dir: Path, facts: dict[str, Any] | None = None) -> lis
                 "repair this element registration before continuing interaction",
             ))
         if (
-            element.get("interactive", True)
+            actionable
             and element.get("status") not in NON_ACTIONABLE_STATUSES
             and not transaction_by_element.get(ref)
             and not element.get("exploration_requirements")
@@ -1468,6 +1566,83 @@ def _has_observable_wait(facts: dict[str, Any]) -> bool:
     return bool(_observable_wait_refs(facts))
 
 
+def _interaction_profiles(facts: dict[str, Any]) -> dict[str, str]:
+    """Classify function-level performance applicability from facts, not Case text."""
+    transactions_by_function: dict[str, list[dict[str, Any]]] = {}
+    for transaction in facts.get("transactions", []):
+        transactions_by_function.setdefault(str(transaction.get("function_ref", "")), []).append(transaction)
+    result: dict[str, str] = {}
+    for function in facts.get("functions", []):
+        function_ref = str(function.get("fact_id", ""))
+        explicit = str(function.get("interaction_profile", "")).strip().lower()
+        if explicit in INTERACTION_PROFILES:
+            result[function_ref] = explicit
+            continue
+        transactions = transactions_by_function.get(function_ref, [])
+        types = {str(row.get("transaction_type", "")).strip().lower() for row in transactions}
+        if any(
+            check.get("intermediate_states") or str(check.get("completion_state", "")).strip()
+            for row in transactions for check in row.get("checks", [])
+        ) or types & {"async", "asynchronous", "long_task", "long-running"}:
+            profile = "async_task"
+        elif types & {"create", "edit", "delete", "configuration", "save", "write", "mutation"}:
+            profile = "write_mutation"
+        elif types & {"batch", "import", "export", "upload", "download", "transfer"}:
+            profile = "batch_transfer"
+        elif types & {"render", "chart", "dashboard", "visualization"}:
+            profile = "data_render"
+        elif transactions:
+            # An observed interactive page transaction normally crosses a service
+            # boundary.  Unknown business names are therefore still performance
+            # applicable without inventing a numeric SLA.
+            profile = "read_query"
+        else:
+            profile = "local_static"
+        result[function_ref] = profile
+    return result
+
+
+def _default_performance_scenarios(
+    facts: dict[str, Any], function_names: dict[str, str],
+) -> list[dict[str, Any]]:
+    profiles = _interaction_profiles(facts)
+    grouped: dict[str, list[str]] = {}
+    for function_ref, profile in profiles.items():
+        if profile != "local_static":
+            grouped.setdefault(profile, []).append(function_ref)
+    labels = {
+        "read_query": ("查询与读取响应", "响应时间、吞吐、错误率、资源利用率"),
+        "write_mutation": ("写入响应与一致性", "响应时间、成功率、错误率、资源利用率、提交后数据一致性"),
+        "async_task": ("异步任务完成与超时恢复", "受理时间、完成时间、成功率、超时率、恢复状态"),
+        "batch_transfer": ("批量传输吞吐与稳定性", "吞吐、完成时间、成功率、错误率、资源利用率"),
+        "data_render": ("数据加载与渲染响应", "加载时间、渲染完成时间、错误率、资源利用率"),
+    }
+    scenarios: list[dict[str, Any]] = []
+    for profile, refs in grouped.items():
+        test_type, metrics = labels[profile]
+        names = [function_names.get(ref, ref) for ref in refs]
+        scenarios.append({
+            "source": "interaction_profile",
+            "interaction_profile": profile,
+            "function_ref": refs[0] if len(refs) == 1 else "",
+            "affected_function_refs": refs,
+            "basis_refs": refs,
+            "flow": "；".join(names),
+            "test_type": test_type,
+            "concurrency": "基线档、预期峰值档、容量探索档",
+            "throughput": "记录各负载档实际完成量并形成基线",
+            "response_time": "未提供量化目标；记录P50、P95、P99实际基线",
+            "data_scale": "覆盖日常规模、预期峰值规模与容量探索规模",
+            "duration": "每个负载档运行至指标稳定并保留完整观察窗口",
+            "metrics": metrics,
+            "pass_criteria": "无功能错误、无持续资源异常，并形成可比较的实际性能基线",
+            "data_strategy": "复用功能验证的受控数据，按负载档扩展数据量",
+            "risk": "环境与依赖差异会影响基线，结果需标注实际环境",
+            "included": "是",
+        })
+    return scenarios
+
+
 def _risk_theme(value: Any) -> str:
     """Group common risk causes without product- or page-specific wording."""
     text = re.sub(r"\s+", "", str(value or "")).lower()
@@ -1536,6 +1711,7 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
     pages = {str(row["fact_id"]): row for row in facts.get("pages", [])}
     elements = facts.get("elements", [])
     transactions = facts.get("transactions", [])
+    interaction_profiles = _interaction_profiles(facts)
     functions: list[dict[str, Any]] = []
     for function in facts.get("functions", []):
         function_ref = str(function["fact_id"])
@@ -1632,6 +1808,7 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
         functions.append({
             "function_ref": function_ref,
             "name": str(function.get("name", "")),
+            "interaction_profile": interaction_profiles.get(function_ref, "local_static"),
             "page_refs": page_refs,
             "elements": [{key: row.get(key) for key in ("fact_id", "name", "type", "constraints", "trigger_condition", "options") if row.get(key) is not None} for row in owned_elements],
             "transactions": [{"transaction_ref": str(row["fact_id"]), "transaction_type": row.get("transaction_type"), "checks": len(row.get("checks", []))} for row in owned_transactions],
@@ -1655,7 +1832,8 @@ def build_plan_skeleton(run_dir: Path) -> dict[str, Any]:
             "performance": {
                 "observable_wait": _has_observable_wait(facts),
                 "observed_wait_refs": _observable_wait_refs(facts),
-                "rule": "按钮或提交动作本身不是性能依据；只有实测加载、异步、长任务、超时、耗时或需求性能目标时写场景，未提供量化目标时不得发明秒数",
+                "interaction_profiles": interaction_profiles,
+                "rule": "按功能交互画像聚合三档性能基线；只有local_static可不适用，未提供SLA时记录实际基线且不得发明阈值",
             },
             "risk": {
                 "observed_open_items": [
@@ -2148,6 +2326,12 @@ def inspect_cases(run_dir: Path) -> list[dict[str, str]]:
         for index, step in enumerate(steps, 1):
             if not isinstance(step, dict) or not str(step.get("action", "")).strip() or not str(step.get("expected", "")).strip():
                 issues.append(_issue("invalid_steps", "repairable", "function-cases.json", f"case {case_id} step {index} lacks action or expected", "repair only this paired step", **context))
+            elif AMBIGUOUS_EXPECTED.search(str(step.get("expected", ""))):
+                issues.append(_issue(
+                    "ambiguous_expected", "repairable", "function-cases.json",
+                    f"case {case_id} step {index} contains multiple or uncertain outcomes",
+                    "replace it with the single result actually observed for this branch", **context,
+                ))
         if steps:
             page_ref = str(planned_case.get("page_ref", ""))
             page = pages.get(page_ref, {})
@@ -2350,6 +2534,36 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
     transactions = {str(row["fact_id"]): row for row in facts.get("transactions", [])}
     elements = {str(row["fact_id"]): row for row in facts.get("elements", [])}
     function_names = {str(row.get("fact_id", "")): str(row.get("name", "")) for row in facts.get("functions", [])}
+    assignments = [row for row in value.get("check_assignments", []) if isinstance(row, dict)]
+    assigned_checks: set[tuple[str, int]] = set()
+    for row in assignments:
+        try:
+            assigned_checks.add((str(row.get("transaction_ref", "")), int(row.get("check_index", 0))))
+        except (TypeError, ValueError):
+            continue
+    assigned_cases = {str(row.get("case_id", "")) for row in assignments if row.get("disposition") == "case"}
+    for function in value.get("functions", []):
+        function_ref = str(function.get("function_ref", ""))
+        remaining_checks = [
+            (transaction_ref, index)
+            for transaction_ref, transaction in transactions.items()
+            if str(transaction.get("function_ref", "")) == function_ref
+            for index, _ in enumerate(transaction.get("checks", []), 1)
+            if (transaction_ref, index) not in assigned_checks
+        ]
+        remaining_cases = [
+            str(case.get("case_id", "")) for case in function.get("cases", [])
+            if str(case.get("case_id", "")) and str(case.get("case_id", "")) not in assigned_cases
+        ]
+        if remaining_checks and len(remaining_checks) == len(remaining_cases):
+            for (transaction_ref, check_index), case_id in zip(remaining_checks, remaining_cases):
+                assignments.append({
+                    "transaction_ref": transaction_ref, "check_index": check_index,
+                    "disposition": "case", "case_id": case_id, "source": "deterministic_one_to_one",
+                })
+                assigned_checks.add((transaction_ref, check_index))
+                assigned_cases.add(case_id)
+    value["check_assignments"] = assignments
     by_case: dict[str, list[dict[str, Any]]] = {}
     for assignment in value.get("check_assignments", []):
         if assignment.get("disposition") == "case":
@@ -2379,7 +2593,7 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
     ]
     value["performance_scenarios"] = [
         row for row in value.get("performance_scenarios", [])
-        if not (isinstance(row, dict) and row.get("source") == "observed_wait")
+        if not (isinstance(row, dict) and row.get("source") in {"observed_wait", "interaction_profile"})
     ]
     profile_risk_candidates: list[dict[str, Any]] = []
     for function in value.get("functions", []):
@@ -2402,30 +2616,15 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
                 "status": "已识别",
             })
         function["automation_profile"] = profile
-    wait_refs = _observable_wait_refs(facts)
-    if wait_refs and not value.get("performance_scenarios"):
-        scope = facts.get("scope", {})
-        affected_function_refs = list(dict.fromkeys(str(row.get("function_ref", "")) for row in wait_refs if str(row.get("function_ref", ""))))
-        affected_names = [function_names.get(ref, ref) for ref in affected_function_refs]
-        value["performance_scenarios"] = [{
-            "source": "observed_wait",
-            "function_ref": affected_function_refs[0] if len(affected_function_refs) == 1 else "",
-            "basis_refs": wait_refs,
-            "flow": "；".join(affected_names) or str(scope.get("module_path") or "页面功能链路"),
-            "test_type": "单次响应与超时体验",
-            "concurrency": "单用户",
-            "throughput": "不适用",
-            "response_time": "未提供量化目标；记录实际响应时间",
-            "data_scale": "复用功能用例的受控数据",
-            "duration": "从触发操作至完成或超时",
-            "metrics": "开始时间、完成时间、加载状态、完成或超时反馈",
-            "pass_criteria": "操作完成或超时时页面给出明确、可恢复的反馈",
-            "data_strategy": "复用功能用例的受控数据",
-            "risk": "实际时延可能受环境和外部依赖影响",
-            "included": "是",
-        }]
-        value.pop("performance_not_applicable_reason", None)
-        value.pop("performance_basis_refs", None)
+    if not value.get("performance_scenarios"):
+        generated_performance = _default_performance_scenarios(facts, function_names)
+        if generated_performance:
+            value["performance_scenarios"] = generated_performance
+            value.pop("performance_not_applicable_reason", None)
+            value.pop("performance_basis_refs", None)
+        else:
+            value["performance_not_applicable_reason"] = "当前功能事实仅包含本地静态交互，无可独立执行的性能链路"
+            value["performance_basis_refs"] = function_basis
     if value.get("performance_scenarios"):
         value.pop("performance_not_applicable_reason", None)
         value.pop("performance_basis_refs", None)
@@ -2468,6 +2667,22 @@ def _normalize_plan(run_dir: Path, plan: dict[str, Any]) -> dict[str, Any]:
                     source_checks.append(transaction.get("checks", [])[int(assignment.get("check_index", 0)) - 1])
                 except (IndexError, TypeError, ValueError):
                     continue
+            governing_requirements: list[dict[str, Any]] = []
+            for check in source_checks:
+                matches = _matching_bound_requirements(elements, check)
+                dfx_matches = [
+                    row.get("requirement", {}) for row in matches
+                    if str(row.get("requirement", {}).get("strategy", "baseline")).lower() == "dfx"
+                ]
+                if dfx_matches:
+                    governing_requirements.extend(dfx_matches)
+                elif matches:
+                    governing_requirements.append(matches[0].get("requirement", {}))
+            if governing_requirements:
+                governing = governing_requirements[0]
+                case["strategy"] = str(governing.get("strategy", "baseline")).lower()
+                case["dfx_dimension"] = str(governing.get("dfx_dimension") or "DFT功能")
+                case["dfx_scenario"] = str(governing.get("dfx_scenario") or "正向流程")
             signatures = list(dict.fromkeys(
                 _scenario_signature(function_ref, check) for check in source_checks
             ))
@@ -2605,6 +2820,44 @@ def _assign_case_sources(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]
         str(function.get("function_ref", "")): str(function.get("name", ""))
         for function in plan.get("functions", [])
     }
+    transactions = {str(row.get("fact_id", "")): row for row in facts.get("transactions", [])}
+
+    def source_check(source: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        transaction = transactions.get(str(source.get("transaction_ref", "")), {})
+        try:
+            check = transaction.get("checks", [])[int(source.get("check_index", 0)) - 1]
+        except (IndexError, TypeError, ValueError):
+            check = {}
+        return transaction, check
+
+    def compile_core_step(source: dict[str, Any], supplied: dict[str, Any] | None) -> dict[str, Any]:
+        transaction, check = source_check(source)
+        step = dict(supplied or {})
+        step["action"] = str(step.get("action") or check.get("action") or "执行已实探的业务操作").strip()
+        step["expected"] = str(step.get("expected") or check.get("result") or "显示已实探的业务结果").strip()
+        transaction_type = str(transaction.get("transaction_type", "")).strip().lower()
+        if transaction_type in {"create", "edit", "delete", "configuration"}:
+            closures: list[tuple[str, str]] = []
+            if transaction_type in {"create", "edit", "configuration"}:
+                persistence = str(check.get("persistence_result") or transaction.get("persistence_result") or "").strip()
+                if persistence:
+                    closures.append(("重新打开或查询本次测试对象", persistence))
+            effect = str(check.get("effect_result") or transaction.get("effect_result") or "").strip()
+            if effect:
+                closures.append(("验证提交后的实际业务效果", effect))
+            if transaction_type in {"edit", "configuration"}:
+                recovery = str(check.get("recovery_result") or transaction.get("recovery_result") or "").strip()
+                if recovery:
+                    closures.append(("恢复本次修改并再次确认", recovery))
+            if transaction_type == "delete" and effect:
+                closures = [("再次查询本次测试对象", effect)]
+            for action, expected in closures:
+                if action not in step["action"]:
+                    step["action"] += f"；{action}"
+                if expected not in step["expected"]:
+                    step["expected"] += f"；{expected}"
+        return step
+
     for case in value.get("cases", []):
         case_id = str(case.get("case_id", ""))
         planned = planned_cases.get(case_id, {})
@@ -2618,8 +2871,13 @@ def _assign_case_sources(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]
         planned_title = str(planned.get("title", "")).strip()
         if function_name and planned_title:
             case["title"] = f"{function_name}-{planned_title}"
+        sources = assignments.get(case_id, [])
         steps = case.get("steps", []) if isinstance(case.get("steps"), list) else []
         core_steps = steps[1:] if steps and str(steps[0].get("action", "")).strip().startswith("进入") else steps
+        if len(core_steps) != len(sources):
+            core_steps = [compile_core_step(source, None) for source in sources]
+        else:
+            core_steps = [compile_core_step(source, step) for source, step in zip(sources, core_steps)]
         page = pages.get(str(planned.get("page_ref", "")), {})
         menu_path = "-".join(str(part).strip() for part in page.get("menu_path", []) if str(part).strip())
         page_anchor = str(page.get("result_anchor") or page.get("name") or "目标页面").strip()
@@ -2629,7 +2887,6 @@ def _assign_case_sources(run_dir: Path, cases: dict[str, Any]) -> dict[str, Any]
         }
         steps = [navigation] + core_steps
         case["steps"] = steps
-        sources = assignments.get(case_id, [])
         for step in steps:
             if isinstance(step, dict):
                 step.pop("source_check", None)
@@ -2733,7 +2990,6 @@ def inspect_cross_artifacts(run_dir: Path) -> list[dict[str, str]]:
     if set(planned) != written:
         issues.append(_issue("cross_case_set", "repairable", "function-cases.json", "planned and written case sets differ", "add or remove only the differing cases"))
     primary_covered_elements: set[str] = set()
-    auxiliary_covered_elements: set[str] = set()
     transactions = {str(row.get("fact_id", "")): row for row in facts.get("transactions", [])}
     for assignment in plan.get("check_assignments", []):
         transaction = transactions.get(str(assignment.get("transaction_ref", "")), {})
@@ -2745,8 +3001,13 @@ def inspect_cross_artifacts(run_dir: Path) -> list[dict[str, str]]:
         if assignment.get("disposition") == "case":
             if primary_ref:
                 primary_covered_elements.add(primary_ref)
-            auxiliary_covered_elements.update(
-                str(ref) for ref in check.get("used_element_refs", []) if str(ref).strip() and str(ref) != primary_ref
+            trigger_ref = str(check.get("trigger_element_ref", "")).strip()
+            if trigger_ref:
+                primary_covered_elements.add(trigger_ref)
+            primary_covered_elements.update(
+                str(binding.get("element_ref", "")).strip()
+                for binding in check.get("branch_bindings", [])
+                if isinstance(binding, dict) and str(binding.get("element_ref", "")).strip()
             )
     handled_non_case: set[str] = set()
     for assignment in plan.get("check_assignments", []):
@@ -2767,11 +3028,9 @@ def inspect_cross_artifacts(run_dir: Path) -> list[dict[str, str]]:
     }
     for element in facts.get("elements", []):
         element_ref = str(element.get("fact_id", ""))
-        if element.get("status") in NON_ACTIONABLE_STATUSES or element.get("interactive", True) is False:
+        if element.get("status") in NON_ACTIONABLE_STATUSES or element.get("interaction_mode", "actionable") != "actionable":
             continue
-        covered = element_ref in primary_covered_elements or (
-            not element.get("exploration_requirements") and element_ref in auxiliary_covered_elements
-        )
+        covered = element_ref in primary_covered_elements
         if not covered and element_ref not in handled_non_case and str(element.get("function_ref", "")) not in blocked_functions:
             issues.append(_issue(
                 "uncovered_element", "repairable", "function-cases.json",
@@ -2783,16 +3042,15 @@ def inspect_cross_artifacts(run_dir: Path) -> list[dict[str, str]]:
 
 
 def review_run(run_dir: Path, semantic_review: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Combine deterministic checks with one explicit model semantic audit."""
+    """Run one semantic audit plus compact cross-artifact integrity checks.
+
+    Discovery, planning and case construction constraints are enforced at their
+    own write boundaries. Review does not repeat those gates or create late work.
+    """
     facts = load_facts(run_dir)
     plan = load_plan(run_dir)
     cases = load_cases(run_dir)
-    deterministic_issues = (
-        inspect_discovery(run_dir, facts)
-        + inspect_plan(run_dir)
-        + inspect_cases(run_dir)
-        + inspect_cross_artifacts(run_dir)
-    )
+    deterministic_issues = inspect_cross_artifacts(run_dir)
     issues = list(deterministic_issues)
     unresolved = [
         item for item in facts.get("open_items", [])

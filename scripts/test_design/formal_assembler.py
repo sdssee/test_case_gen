@@ -97,6 +97,7 @@ def _humanize_branch(value: Any, descriptions: dict[str, Any] | None = None) -> 
         "valid_url": "有效URL", "valid_date": "有效日期", "valid_datetime": "有效日期时间",
         "valid_number": "有效数字", "valid_integer": "有效整数", "valid_decimal": "有效小数",
         "valid_port": "有效端口", "valid_phone": "有效电话号码",
+        "valid_name": "有效名称", "valid_nonexistent_name": "有效且不存在的名称", "valid_text": "有效文本",
     }
     if text in aliases:
         return aliases[text]
@@ -586,9 +587,15 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         primary_ref = str(check.get("element_ref", "")).strip()
         if primary_ref:
             case_by_fact.setdefault(primary_ref, []).append(case_id)
+        trigger_ref = str(check.get("trigger_element_ref", "")).strip()
+        if trigger_ref:
+            case_by_fact.setdefault(trigger_ref, []).append(case_id)
+        for binding in check.get("branch_bindings", []):
+            if isinstance(binding, dict) and _text(binding.get("element_ref")):
+                case_by_fact.setdefault(_text(binding.get("element_ref")), []).append(case_id)
         for ref in check.get("used_element_refs", []):
             ref = str(ref).strip()
-            if ref and ref != primary_ref:
+            if ref and ref not in {primary_ref, trigger_ref}:
                 auxiliary_case_by_fact.setdefault(ref, []).append(case_id)
     non_case_by_element: dict[str, list[str]] = {}
     non_case_status_by_element: dict[str, list[str]] = {}
@@ -612,9 +619,14 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
     results_by_element: dict[str, list[str]] = {}
     for transaction in transactions.values():
         for check in transaction.get("checks", []):
-            refs = {str(ref) for ref in check.get("used_element_refs", []) if str(ref).strip()}
+            refs = {
+                _text(binding.get("element_ref")) for binding in check.get("branch_bindings", [])
+                if isinstance(binding, dict) and _text(binding.get("element_ref"))
+            }
             if check.get("element_ref"):
                 refs.add(str(check.get("element_ref")))
+            if check.get("trigger_element_ref"):
+                refs.add(str(check.get("trigger_element_ref")))
             for ref in refs:
                 if _text(check.get("result")):
                     anchor = check.get("result_anchor") if isinstance(check.get("result_anchor"), dict) else {}
@@ -635,11 +647,15 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         menu_path = element.get("menu_path") or page.get("menu_path") or []
         element_label = "-".join(filter(None, [page_name, str(element.get("name", "")).strip()]))
         covered_case_ids = list(dict.fromkeys(case_by_fact.get(element_id, [])))
-        if not element.get("exploration_requirements"):
-            covered_case_ids = list(dict.fromkeys(covered_case_ids + auxiliary_case_by_fact.get(element_id, [])))
         non_case_reasons = list(dict.fromkeys(non_case_by_element.get(element_id, [])))
         related_cases = [case_by_id[case_id] for case_id in covered_case_ids if case_id in case_by_id]
         function_ref = str(element.get("function_ref", ""))
+        if function_ref not in requirement_by_function:
+            related_functions = list(dict.fromkeys(
+                _text(case.get("function_ref")) for case in related_cases if _text(case.get("function_ref"))
+            ))
+            if len(related_functions) == 1:
+                function_ref = related_functions[0]
         dispositions = set(non_case_status_by_element.get(element_id, []))
         if covered_case_ids:
             coverage_status = "已覆盖"
@@ -665,7 +681,7 @@ def build_sheet_rows(run_dir: Path) -> dict[str, list[dict[str, str]]]:
         auxiliary_ids = list(dict.fromkeys(auxiliary_case_by_fact.get(element_id, [])))
         note = _text(element.get("notes")) or "；".join(non_case_reasons)
         if coverage_status == "未覆盖" and not note:
-            note = "已登记元素尚未关联独立测试意图，需在最终Review中局部补充"
+            note = "已登记元素尚未形成主验证用例"
         elif coverage_status == "受阻" and not note:
             note = "受页面权限、数据或环境条件阻塞"
         if auxiliary_ids:
@@ -740,7 +756,7 @@ def assemble_formal_workbook(run_dir: Path, template: Path, output: Path) -> dic
     return counts
 
 
-def generate_import_workbook(run_dir: Path, template: Path, output: Path, module_path: str) -> int:
+def generate_import_workbook(run_dir: Path, template: Path, output: Path, module_path: Any) -> int:
     """Generate the import workbook directly from function-cases.json."""
     if not template.is_file():
         raise ValueError("import template must exist")
@@ -794,9 +810,11 @@ def generate_import_workbook(run_dir: Path, template: Path, output: Path, module
     return count
 
 
-def re_split_module(module_path: str) -> list[str]:
+def re_split_module(module_path: Any) -> list[str]:
     import re
-    return [value for value in re.split(r"\s*(?:>|/|\\|→)\s*", module_path) if value]
+    if isinstance(module_path, list):
+        return [str(value).strip() for value in module_path if str(value).strip()]
+    return [value for value in re.split(r"\s*(?:>|/|\\|→)\s*", str(module_path or "")) if value]
 
 
 def _verify_generated_deliverables(
@@ -909,21 +927,15 @@ def complete_deliverables(run_dir: Path, project_root: Path) -> dict[str, Any]:
     try:
         formal_template = project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
         import_template = project_root / "docs" / "test-design" / "测试用例模板.xlsx"
-        for attempt in range(2):
-            formal_candidate.unlink(missing_ok=True)
-            import_candidate.unlink(missing_ok=True)
-            try:
-                counts = assemble_formal_workbook(run_dir, formal_template, formal_candidate)
-                import_count = generate_import_workbook(
-                    run_dir, import_template, import_candidate, str(scope.get("module_path", "")),
-                )
-                _verify_generated_deliverables(
-                    run_dir, formal_candidate, import_candidate, import_count, formal_template, import_template,
-                )
-                break
-            except Exception:
-                if attempt == 1:
-                    raise
+        formal_candidate.unlink(missing_ok=True)
+        import_candidate.unlink(missing_ok=True)
+        counts = assemble_formal_workbook(run_dir, formal_template, formal_candidate)
+        import_count = generate_import_workbook(
+            run_dir, import_template, import_candidate, scope.get("module_path", ""),
+        )
+        _verify_generated_deliverables(
+            run_dir, formal_candidate, import_candidate, import_count, formal_template, import_template,
+        )
         os.replace(formal_candidate, formal)
         os.replace(import_candidate, import_file)
     finally:

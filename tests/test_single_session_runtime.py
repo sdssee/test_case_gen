@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from test_design.formal_assembler import SHEETS, complete_deliverables
+from test_design.formal_assembler import SHEETS, complete_deliverables, re_split_module
 from test_design.session_runtime import (
     append_events,
     artifact_paths,
@@ -240,6 +240,10 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertEqual({"ok": True}, _payload(path))
         self.assertFalse(path.exists())
 
+    def test_module_path_accepts_string_or_hierarchy_without_serializing_a_list(self) -> None:
+        self.assertEqual(["一级", "二级", "三级"], re_split_module("一级>二级/三级"))
+        self.assertEqual(["一级", "二级", "三级"], re_split_module(["一级", "二级", "三级"]))
+
     def test_exact_duplicate_event_is_absorbed_without_another_line(self) -> None:
         event = {"kind": "open_item", "fact_id": "OPEN-IDEMPOTENT", "data": {
             "category": "observed_risk", "description": "一次性记录", "material": False,
@@ -284,8 +288,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                 if suffix == "A":
                     self.assertEqual("continue", pipeline_status(run_dir)["state"])
             self.assertEqual(["FN-A", "FN-B"], [row["function_ref"] for row in load_plan(run_dir)["functions"]])
-            with self.assertRaisesRegex(ValueError, "no planned disposition"):
-                save_plan(run_dir, {
+            repaired = save_plan(run_dir, {
                     "schema_version": "2.0",
                     "performance_scenarios": [], "performance_not_applicable_reason": "无独立性能指标",
                     "risks": [], "risk_not_applicable_reason": "未发现风险",
@@ -294,6 +297,8 @@ class SingleSessionRuntimeTests(unittest.TestCase):
                     ]}],
                     "check_assignments": [],
                 })
+            auto = next(row for row in repaired["check_assignments"] if row.get("case_id") == "TC-A")
+            self.assertEqual("deterministic_one_to_one", auto.get("source"))
             navigation = {"action": "进入工具-双功能", "expected": "显示双功能页面"}
             for suffix in ("A", "B"):
                 save_cases(run_dir, {"schema_version": "2.0", "cases": [{
@@ -332,7 +337,7 @@ class SingleSessionRuntimeTests(unittest.TestCase):
 
     def test_recompile_without_business_changes_keeps_review_valid(self) -> None:
         self._write_plan_and_cases()
-        self.assertEqual(["FN-VIEW"], load_plan(self.run_dir)["performance_basis_refs"])
+        self.assertEqual("查询与读取响应", load_plan(self.run_dir)["performance_scenarios"][0]["test_type"])
         self.assertEqual(["页面控件定位变化"], [row["description"] for row in load_plan(self.run_dir)["risks"]])
         self.assertEqual("ready", review_run(self.run_dir, _semantic_review(self.run_dir))["status"])
         time.sleep(1.1)
@@ -517,16 +522,14 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "stale"):
             complete_deliverables(self.run_dir, ROOT)
 
-    def test_review_recomputes_discovery_instead_of_trusting_semantic_claims(self) -> None:
+    def test_invalid_fact_update_is_rejected_before_review(self) -> None:
         self._write_plan_and_cases()
-        append_events(self.run_dir, [{
-            "kind": "element", "fact_id": "EL-VIEW-MODE",
-            "data": {"type": "unclassified-widget"},
-        }])
-        compile_facts(self.run_dir)
-        review = review_run(self.run_dir, _semantic_review(self.run_dir))
-        self.assertEqual("blocked_by_fact", review["status"])
-        self.assertIn("unclassified_interactive_element", [row["code"] for row in review["deterministic"]["issues"]])
+        with self.assertRaisesRegex(ValueError, "actionable element"):
+            append_events(self.run_dir, [{
+                "kind": "element", "fact_id": "EL-VIEW-MODE",
+                "data": {"type": "unclassified-widget", "function_ref": "UNKNOWN"},
+            }])
+        self.assertEqual("ready", review_run(self.run_dir, _semantic_review(self.run_dir))["status"])
 
     def test_configuration_covers_default_and_each_single_factor_value(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -629,8 +632,8 @@ class SingleSessionRuntimeTests(unittest.TestCase):
         self.assertNotIn("跨产物", overview_text)
         self.assertNotIn("结构化用例", overview_text)
         performance = workbook["性能测试设计"]
-        self.assertEqual("PERF-N/A", performance.cell(2, 1).value)
-        self.assertIn("不包含可独立定义指标", "\n".join(str(cell.value or "") for cell in performance[2]))
+        self.assertEqual("PERF-001", performance.cell(2, 1).value)
+        self.assertIn("未提供量化目标", "\n".join(str(cell.value or "") for cell in performance[2]))
         risk = workbook["风险与待确认问题"]
         self.assertEqual("RISK-001", risk.cell(2, 1).value)
         self.assertIn("页面控件定位变化", "\n".join(str(cell.value or "") for cell in risk[2]))

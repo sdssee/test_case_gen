@@ -195,7 +195,7 @@ class QualityRuleTests(unittest.TestCase):
             self.assertEqual("任务执行", function["name"])
             self.assertEqual("UI", function["automation_profile"]["level"])
             self.assertIn("任务参数", function["cases"][0]["verification_focus"])
-            self.assertEqual("单次响应与超时体验", saved["performance_scenarios"][0]["test_type"])
+            self.assertEqual("异步任务完成与超时恢复", saved["performance_scenarios"][0]["test_type"])
             self.assertNotIn("performance_not_applicable_reason", saved)
             self.assertEqual(["外部服务响应波动"], [row["description"] for row in saved["risks"]])
             self.assertNotIn("risk_not_applicable_reason", saved)
@@ -246,7 +246,7 @@ class QualityRuleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "included conflicts"):
                 save_plan(run_dir, conflicting_legacy)
 
-    def test_trigger_reference_alone_does_not_force_a_performance_scenario(self) -> None:
+    def test_interactive_function_gets_a_light_performance_baseline_without_sla(self) -> None:
         with tempfile.TemporaryDirectory() as value:
             run_dir = Path(value) / "trigger-only"
             ensure_run(run_dir, "业务中心>操作页面")
@@ -271,8 +271,9 @@ class QualityRuleTests(unittest.TestCase):
                 }],
                 "check_assignments": [{"transaction_ref": "TX", "check_index": 1, "disposition": "case", "case_id": "TC-1"}],
             })
-            self.assertEqual([], saved["performance_scenarios"])
-            self.assertIn("performance_not_applicable_reason", saved)
+            self.assertEqual("查询与读取响应", saved["performance_scenarios"][0]["test_type"])
+            self.assertIn("未提供量化目标", saved["performance_scenarios"][0]["response_time"])
+            self.assertNotIn("performance_not_applicable_reason", saved)
 
     def test_persisted_facts_reject_unmasked_url_or_ip(self) -> None:
         with tempfile.TemporaryDirectory() as value:
@@ -579,6 +580,54 @@ class QualityRuleTests(unittest.TestCase):
             ]}
             with self.assertRaisesRegex(ValueError, "grouped local correction"):
                 save_cases(run_dir, cases)
+
+    def test_reserved_negative_input_classes_are_not_duplicated_as_baselines(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "negative-classes"
+            ensure_run(run_dir, "通用模块>表单")
+            element = append_events(run_dir, [{"kind": "element", "data": {
+                "name": "字段", "type": "input", "required": True,
+                "valid_input_classes": ["text", "empty", "invalid_format"], "input_format": "structured",
+            }}])[0]["data"]
+            requirements = element["exploration_requirements"]
+            keys = [(row["value"], row["strategy"]) for row in requirements]
+            self.assertEqual(1, sum(value == "empty" for value, _ in keys))
+            self.assertEqual(1, sum(value == "invalid_format" for value, _ in keys))
+            self.assertIn(("valid_text", "baseline"), keys)
+            self.assertIn(("empty", "DFX"), keys)
+
+    def test_icon_and_composite_semantics_are_completed_during_registration(self) -> None:
+        with tempfile.TemporaryDirectory() as value:
+            run_dir = Path(value) / "semantic-controls"
+            ensure_run(run_dir, "通用模块>列表")
+            append_events(run_dir, [
+                {"kind": "page", "fact_id": "PAGE", "data": {"name": "列表", "menu_path": ["通用模块", "列表"]}},
+                {"kind": "function", "fact_id": "FN", "data": {"name": "列表操作"}},
+            ])
+            with self.assertRaisesRegex(ValueError, "hover_text"):
+                append_events(run_dir, [{"kind": "element", "data": {
+                    "page_ref": "PAGE", "function_ref": "FN", "name": "刷新", "type": "button",
+                    "icon_only": True, "semantic_source": "hover",
+                }}])
+            with self.assertRaisesRegex(ValueError, "interactive descendants"):
+                append_events(run_dir, [{"kind": "element", "data": {
+                    "page_ref": "PAGE", "name": "分页区域", "type": "container",
+                    "has_interactive_descendants": True,
+                }}])
+            recorded = append_events(run_dir, [{"kind": "element", "data": {
+                "page_ref": "PAGE", "function_ref": "FN", "name": "刷新", "type": "button",
+                "icon_only": True, "semantic_source": "hover", "hover_text": "刷新",
+            }}])[0]
+            self.assertEqual("actionable", recorded["data"]["interaction_mode"])
+
+            container = append_events(run_dir, [{"kind": "element", "fact_id": "EL-CONTAINER", "data": {
+                "page_ref": "PAGE", "name": "分页区域", "type": "container",
+            }}])[0]
+            updated = append_events(run_dir, [{"kind": "element", "fact_id": "EL-CONTAINER", "data": {
+                "notes": "已完成局部重扫",
+            }}])[0]
+            self.assertEqual(container["data"]["interaction_mode"], updated["data"]["interaction_mode"])
+            self.assertEqual("container", updated["data"]["type"])
 
 
 if __name__ == "__main__":

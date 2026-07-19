@@ -81,6 +81,8 @@ def main() -> int:
         metadata = _frontmatter(source)
         if metadata.get("name") != path.parent.name or not metadata.get("description"):
             raise ValueError(f"invalid CodeBuddy skill frontmatter: {path}")
+        if metadata.get("context") == "fork" or metadata.get("model"):
+            raise ValueError(f"project skills must run inline without a fork-model dependency: {path}")
         if "TODO" in source or "TBD" in source:
             raise ValueError(f"unfinished CodeBuddy skill: {path}")
     router = (root / ".codebuddy/skills/test-design/SKILL.md").read_text(encoding="utf-8")

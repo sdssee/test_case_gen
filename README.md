@@ -68,7 +68,7 @@
 
 这些 Agent 不生成任务包、分片、观察 CSV 或返工队列。一个 Agent 失败时，继续在当前会话调用其对应 Skill；阶段输入、输出和校验完全相同，因此降级不会绕过规则。错误最多局部修正当前功能或 Case 一次，不形成自动重试风暴。
 
-项目 Agent 不绑定或继承具体模型，由 CodeBuddy 选择当前环境可调用的子 Agent 默认模型，避免主会话使用自定义模型时出现 `AGENT_INVOKABLE_CUSTOM_MODEL_NOT_FOUND`。模型选择由用户环境统一配置，项目不写死厂商或模型别名。
+项目 Agent 不绑定或继承具体模型，阶段 Skill 也不使用 `context: fork`，由 CodeBuddy 选择当前环境可调用的模型。模型选择由用户环境统一配置，项目不写死厂商或模型别名。如果 `/init`、普通 Skill 和 Agent 同时报 `AGENT_INVOKABLE_CUSTOM_MODEL_NOT_FOUND`，说明当前会话保留了已经从模型列表移除的自定义模型；应在 CodeBuddy 切换到实际可用模型并新建会话，项目无法安全替代内网模型配置。
 
 ## Review 如何避免事后拒绝
 

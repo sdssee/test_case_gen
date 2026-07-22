@@ -1,3 +1,8 @@
+param(
+  [ValidateSet("Fast", "Full")]
+  [string]$Mode = "Full"
+)
+
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
@@ -7,7 +12,7 @@ if (-not (Test-Path $python)) {
   $python = "python"
 }
 
-& $python (Join-Path $scriptDir "validate-test-design.py")
+& $python (Join-Path $scriptDir "validate-test-design.py") --mode $Mode
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }

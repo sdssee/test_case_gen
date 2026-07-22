@@ -1,3 +1,9 @@
 dist/
 dist-test/
 .upgrade-backups/
+~$*.xlsx
+**/~$*.xlsx
+__pycache__/
+*.pyc
+.workbuddy/
+.codex-tmp/

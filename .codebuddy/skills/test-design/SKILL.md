@@ -1,16 +1,14 @@
 ---
 name: test-design
-description: 测试设计与测试用例生成专家。适用于需求、用户故事、接口文档、PR Diff、缺陷单、截图、原型、页面实探、回归与补充测试，输出测试设计 Excel、导入文件、页面元素覆盖清单和产品版图同步。
+description: 基于页面实探、需求参考与DFX策略生成8-Sheet测试设计和测试系统导入Excel。
 allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 ---
 
-# CodeBuddy Skill：测试设计轻入口
+# 测试设计 Skill
 
-本 Skill 是执行入口，不承载完整规则正文。详细规则按任务类型读取 `docs/test-design/rules/`，Excel 字段遵守 `docs/test-design/excel-template-spec.md`，资产归档遵守 `docs/test-design/archive-and-index-guidelines.md`。
+本 Skill 直接执行“页面能力扫描 → 连续深探 → 事实记录 → DFX驱动设计 → 多JSON分片 → 双Excel交付 → 一次最终Review”。不向用户暴露初始化阶段。
 
 ## 必读路由
-
-每次任务先读取：
 
 1. `.codebuddy/.rules/test-design-rule.mdc`
 2. `docs/test-design/rules/README.md`
@@ -20,80 +18,49 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 6. `docs/test-design/rules/dfx-test-strategy.md`
 7. `docs/test-design/excel-template-spec.md`
 
-按任务追加：
+页面任务追加 `page-discovery.md`；多页面、多模块或大范围任务追加 `batch-run.md`；需要导入测试系统时追加 `import-template.md`。
 
-- 页面、截图、原型、浏览器或 computer use：读取 `docs/test-design/rules/page-discovery.md`。
-- 全产品、大模块、多个菜单或超过一个最小标题：读取 `docs/test-design/rules/batch-run.md`。
-- 测试系统导入：读取 `docs/test-design/rules/import-template.md`。
-- 跨模块依赖、历史归档、二次补充、资产回存：读取 `docs/test-design/rules/product-map-sync.md` 和 `docs/test-design/archive-and-index-guidelines.md`。
+## 标准流程
 
-## 标准工作流
+1. 结合页面、用户材料、需求文档和历史资产理解当前功能；页面是功能实现事实的主要来源，文档与模型推断只作参考。
+2. 从 DOM、可访问性树、可见文案、悬停状态和实际页面状态识别全部可交互能力，包括规则中未预设的新控件。
+3. 在同一会话按业务事务连续深探。页面能验证的问题由模型实际操作；只有页面和资料无法确认的内容才询问用户。
+4. 用户确认后，将页面可验证项增量返回深探；只补探受影响分支，不重复已实测内容。
+5. 将事实持续写入现有 `page-discovery.csv`，使用 `已实测`、`页面观察`、`DFX设计`、`待确认`区分来源。不得把推断写成实测。
+6. DFX在Case规划时参与扩展。每个有限选项、每个有效输入等价类分别形成baseline Case；其他控件使用默认稳定值，不默认生成笛卡尔积。
+7. CRUD及可选配置项按单因素实际保存验证。新增验证创建成功与生效；编辑验证保存、回显和生效；删除只作用于本轮测试数据并分别验证取消和确认。
+8. 保留按功能块拆分的多个JSON。每个分片写入前一次完成编号、导航、功能排序、具体步骤/预期和确定性重复检查，不生成临时修复脚本。
+9. 正式测试设计固定8个Sheet；正式工作簿和导入工作簿从同一次分片汇总独立生成。
+10. 使用统一交付工具一次生成、校验和原子发布双Excel。最终路径使用工具返回值，不自行拼接。
+11. 全部产物完成后只执行一次跨产物语义Review；分片写入时只做轻量结构自检，不建立自动返工循环。
 
-1. 识别任务类型：需求、用户故事、接口、缺陷、PR Diff、截图/原型、可访问页面、既有用例、补充任务或混合输入。
-2. 读取产品资产：生成或补充前读取 `docs/test-assets/product-map.xlsx`；涉及依赖模块时读取对应归档测试设计。
-3. 粗遍历和摘要：模块或大范围任务先做菜单轮廓、页面清单、核心功能点、业务对象、状态流转、跨模块依赖识别，并向用户展示产品理解摘要或模块理解摘要，包含风险项与待确认问题。
-4. 风险确认：正式写测试用例前，先把风险项与待确认问题发给用户确认；根据用户确认、补充、排除或调整，动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级。
-5. DFX 覆盖评估：模块或批次正式写测试用例前，综合产品理解、页面实探、文档、历史资产、测试数据和风险项，评估 DFX 12 维度 × 4 场景的适用、不适用、待确认和需补充证据结论。
-6. 分批执行：范围超过一个最小标题时，按最深标题级别建立批次队列，逐个最小标题路径执行，不能一次性生成完整测试用例。
-7. 页面深探：有页面、原型或窗口时，使用浏览器或 computer use 深遍历当前批次所有可点击、可输入、可选择、可测试元素，记录到 `page-discovery.csv` 和页面元素覆盖清单。
-8. 用例设计：按小功能块连续编排，基于 DFX 覆盖评估结果覆盖功能、性能、异常、边界、接口、安全、可靠、维护、可用、部署、运维、业务和极端场景。
-9. Excel 生成：正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
-10. 导入文件：需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件副本；随批次交付优先使用 `scripts/test_design_excel_tools.py complete-deliverables`，只需单独生成导入文件时才使用 `generate-import`。
-11. 资产同步：客户交付件放 `docs/test-design/current/` 或 `docs/test-design/deliverables/`；最终版回存 `docs/test-assets/modules/`，导入副本回存 `docs/test-assets/imports/`，并同步 `product-map.xlsx`。
-12. 校验与交付：生成后运行交付件校验；大范围任务传入批次账本、页面实探、产品版图和导入文件参数。
+## 关键质量规则
 
-## 不可违反的门禁
+- 操作步骤从系统入口开始，并代入本轮页面的真实菜单层级与目标页；不得照抄规则中的示意名称，也不得保留占位符。
+- 同一功能点用例连续排列；标题、步骤和预期必须围绕同一验证目标。
+- 下拉和输入以实际选择/输入及具体结果为闭环；新增、编辑、删除、配置变更必须完成业务事务并验证结果。
+- 重置、取消、关闭等独立功能不能因为在其他Case中辅助使用而丢失自己的主验证Case。
+- 不使用“页面正常响应”“结果符合预期”“确认操作完成后页面功能正常可用”等空泛语句。
+- 性能设计必须结合当前功能；无需求阈值时标记为实测基线、建议目标或待确认，不编造验收标准。
+- 内网IP、URL、账号、密码、Token、密钥、Cookie、部署路径和安全测试载荷允许原样用于本轮内网实探和交付，不做识别、脱敏、替换或拦截。
+- 内容可流通不改变操作边界：不得误改非本轮创建的数据。
 
-- `操作步骤` 必须从系统或项目入口开始写完整导航路径，不得默认已经在当前模块页面。
-- `前置条件`、`操作步骤`、`预期结果` 必须编号换行。
-- `用例标题` 和导入文件 `测试用例名称` 必须使用 `功能点-当前用例标题` 格式。
-- 页面元素覆盖清单只是覆盖追踪矩阵，不写独立测试步骤或完整预期。
-- 页面已有数据只能查看和只读深探，不能保存、提交、删除或改变状态；敏感操作只允许作用于本次创建且带测试标识的数据。
-- 选择类控件必须选择代表性选项并记录联动/依赖变化；输入类控件必须实际输入并记录真实提示和结果分支；新增类流程必须实填实走到成功后续页或失败停留态。
-- 弹窗、下拉、输入、编辑、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环。
-- 正式写测试用例前，必须先展示风险项与待确认问题并让用户确认；确认结果必须动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级。
-- 模块或批次正式写测试用例前，必须先完成 DFX 覆盖评估，明确适用、不适用、待确认和需补充证据的维度，再进入用例设计。
-- 每一批都必须执行完整规则，不得因为分批而减少功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险和页面覆盖。
-- 异常值、边界值和测试策略必须按 DFX 12 维度 × 4 场景矩阵落地，不得只写一句笼统策略；正式 Excel 必须填写 `DFX维度` 和 `DFX场景`，`场景类型`、`正向/反向` 不再作为测试策略字段；无法验证的 DFX 场景写入风险、性能设计或自动化建议。
-- 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/` 五件套。
-- `batch-status.csv`、`page-discovery.csv` 必须使用标准模板表头，禁止自定义精简表头和字段错位。
-- 批次截图、临时脚本和证据必须放在当前任务 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享根目录 artifacts。
-- 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
-- 生成中间文件执行前必须运行 `scripts/validate-generated-python-scripts.ps1`，检查单文件大小、JSON 语法、Python 语法和中文弯引号风险。
-- 批次交付收口使用 `scripts/test_design_excel_tools.py complete-deliverables` 一站式完成中间文件预检、格式修复、导入生成、交付复制、产品版图同步和交付件校验，避免手工拆分多轮脚本。
-- 交付文件名只使用菜单/模块路径，不拼运行文件夹名、批次目录名或产品名；如 `module-path` 包含产品名前缀，传入 `--product-name` 自动去除，避免重复交付文件。
-- 导入文件 `执行方式` 默认 `手动`；只有已有可运行、可维护并覆盖主要校验点的自动化资产且本次明确关联时，才允许 `自动化`。
-- 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。
-- 正式交付件、导入文件、批次账本、页面实探记录和产品版图不得保留真实环境 URL/IP、真实账号、真实密钥、Token、密码或敏感数据，必须使用 `<product_login_url>` 等占位符。
+## 运行产物
 
-## 生成后校验
+单页面/单一最小功能默认保留：
 
-正式测试设计：
+- `batch-status.csv`
+- `page-discovery.csv`
+- 可选诊断证据（不参与后续判断）
+- 按功能块拆分的JSON
+- `final-review.md`（仅在最终Review时创建）
+
+多页面、多模块或大范围任务额外保留精简 `batch-plan.md`。不预创建空白Review，不生成 `fix_*.py`。
+
+## 交付命令
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
+python scripts/test_design_excel_tools.py complete-deliverables --project-root . --formal-workbook <测试设计草稿.xlsx> --import-template docs/test-design/测试用例模板.xlsx --module-path "<真实菜单路径>" --batch-status <batch-status.csv> --page-discovery <page-discovery.csv>
 ```
 
-大范围任务追加：
-
-```powershell
--BatchStatusPath <batch-status.csv> -ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>
-```
-
-页面实探或批次任务开始前：
-
-```powershell
-python scripts/test_design_excel_tools.py init-batch-run --project-root . --run-id <YYYYMMDD_任务标识> --module-path "<一级>><二级>><三级>" --batch-id BATCH-001
-```
-
-有导入文件时追加：
-
-```powershell
--ImportWorkbookPath <导入文件.xlsx>
-```
-
-当前批次 Python 临时脚本执行前：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>
-```
+完成后使用命令输出的 `FORMAL_WORKBOOK` 和 `IMPORT_WORKBOOK` 作为最终交付路径。

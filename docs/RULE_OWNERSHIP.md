@@ -18,10 +18,10 @@
 | 执行流程与自检步骤 | `.codebuddy/skills/test-design/SKILL.md`、`docs/test-design/rules/README.md` | `AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | `README.md` |
 | 页面实探与数据安全 | `docs/test-design/rules/page-discovery.md`、`docs/test-design/rules/data-safety.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md` | `README.md` |
 | Excel Sheet、字段、枚举、导入模板 | `docs/test-design/excel-template-spec.md`、`docs/test-design/rules/excel-deliverable.md`、`docs/test-design/rules/import-template.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md` | `README.md` |
-| 产品版图、资产归档、跨模块依赖 | `docs/test-design/archive-and-index-guidelines.md`、`docs/test-design/rules/product-map-sync.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | `README.md` |
-| 批次运行状态与质量门禁 | `docs/test-design/rules/batch-run.md`、`docs/test-assets/batch-runs/README.md`、`docs/test-assets/batch-runs/templates/` | Rule、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md`、`docs/test-design/archive-and-index-guidelines.md` | `README.md`、`docs/test-design/README.md` |
+| 产品版图、资产归档、跨模块依赖 | `docs/test-design/rules/product-map-sync.md`、`docs/test-assets/README.md` | Skill、Rule、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | `README.md`、历史参考文档 |
+| 批次断点与恢复 | `docs/test-design/rules/batch-run.md`、`docs/test-assets/batch-runs/README.md`、`docs/test-assets/batch-runs/templates/` | Rule、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | `README.md`、`docs/test-design/README.md` |
 | 交付件质量校验 | `scripts/validate-test-design-deliverable.py`、`scripts/validate-test-design-deliverable.ps1`、`scripts/validate-generated-python-scripts.py`、`scripts/validate-generated-python-scripts.ps1`、`scripts/test_design_excel_tools.py`、`docs/test-design/excel-template-spec.md` | `README.md`、`README_IMPORT.md`、Skill、`AGENTS.md`、`CODEBUDDY.md`、`docs/ARCHITECTURE.md` | Rule 中的脚本实现细节 |
-| 客户交付与内部资产边界 | `docs/test-design/archive-and-index-guidelines.md`、`docs/test-assets/README.md` | `README.md`、`README_IMPORT.md`、`docs/ARCHITECTURE.md` | Skill 中的长篇资产目录说明 |
+| 客户交付与内部资产边界 | `docs/test-design/rules/excel-deliverable.md`、`docs/test-assets/README.md` | `README.md`、`README_IMPORT.md`、`docs/ARCHITECTURE.md` | Skill 中的长篇资产目录说明 |
 | 外网到内网升级 | `docs/UPGRADE.md`、`UPGRADE_MANIFEST.md`、`scripts/new-framework-upgrade-package.ps1`、`scripts/upgrade-framework.ps1` | `README.md`、`README_IMPORT.md`、`docs/ARCHITECTURE.md` | Skill、Rule 中的长篇升级流程 |
 | 架构分层与维护边界 | `docs/ARCHITECTURE.md`、`docs/RULE_OWNERSHIP.md` | `README.md`、`README_IMPORT.md` | Skill、Rule |
 
@@ -35,7 +35,7 @@
 - Rule 保留不可违反的硬门禁和读取路由，目标低于 10000 字符；两个 Rule 文件必须完全一致。
 - `docs/test-design/rules/` 保存可按任务类型读取的详细规则，避免 CodeBuddy 加载 Skill 时超过 1 万字。
 - 模板字段、下拉框、导入文件、Excel 格式只在 `excel-template-spec.md` 中完整描述。
-- 资产归档、产品版图、跨模块依赖只在 `archive-and-index-guidelines.md` 中完整描述。
+- 资产归档、产品版图、跨模块依赖只在 `rules/product-map-sync.md` 和 `docs/test-assets/README.md` 中完整描述。
 
 ## 变更同步
 
@@ -44,7 +44,7 @@
 | 修改硬性测试质量规则 | 两个 Rule 文件、校验脚本 | Skill 自检摘要、AGENTS/CODEBUDDY 摘要 |
 | 修改执行流程 | Skill、校验脚本 | AGENTS/CODEBUDDY 摘要 |
 | 修改 Excel 字段或枚举 | Excel 模板、`excel-template-spec.md`、校验脚本 | Skill/Rule 中的摘要 |
-| 修改归档、批次运行状态或产品版图规则 | `archive-and-index-guidelines.md`、`docs/test-assets/batch-runs/README.md`、批次模板、校验脚本 | Skill/Rule/AGENTS/CODEBUDDY 摘要 |
+| 修改归档、批次运行状态或产品版图规则 | `rules/product-map-sync.md`、`docs/test-assets/README.md`、`docs/test-assets/batch-runs/README.md`、批次模板、校验脚本 | Skill/Rule/AGENTS/CODEBUDDY 摘要 |
 | 修改交付件质量校验 | `scripts/validate-test-design-deliverable.py`、`scripts/validate-test-design-deliverable.ps1`、`scripts/validate-generated-python-scripts.py`、`scripts/validate-generated-python-scripts.ps1`、`scripts/test_design_excel_tools.py`、`excel-template-spec.md`、校验脚本 | README/Skill/AGENTS/CODEBUDDY 摘要 |
 | 修改升级机制 | `docs/UPGRADE.md`、`UPGRADE_MANIFEST.md`、升级脚本、校验脚本 | README/README_IMPORT |
 | 修改架构分层 | `docs/ARCHITECTURE.md`、`docs/RULE_OWNERSHIP.md`、校验脚本 | README |

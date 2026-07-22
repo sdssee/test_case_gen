@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import uuid
 from copy import copy, deepcopy
 from datetime import date
 from pathlib import Path
@@ -22,13 +25,26 @@ except ImportError as exc:  # pragma: no cover - depends on local runtime packag
 
 
 FORMAL_FUNCTION_SHEET = "功能测试用例"
+FORMAL_SHEETS = [
+    "测试设计总览",
+    "需求用户故事拆解",
+    "测试场景矩阵",
+    "功能测试用例",
+    "性能测试设计",
+    "风险与待确认问题",
+    "自动化建议",
+    "页面元素覆盖清单",
+]
 IMPORT_MULTILINE_FIELDS = ["测试步骤描述", "测试步骤预期结果", "前置条件", "测试用例说明", "备注"]
 FORMAL_MULTILINE_FIELDS = {
+    "测试设计总览": ["测试范围", "不测范围", "主要风险", "准入条件", "准出条件", "待确认问题"],
+    "需求用户故事拆解": ["用户故事/需求描述", "业务价值", "验收标准", "业务规则", "前置条件", "后置影响", "待确认问题"],
+    "测试场景矩阵": ["测试对象/页面元素", "输入数据/状态条件", "观察点", "备注"],
     "功能测试用例": ["前置条件", "测试数据", "操作步骤", "预期结果", "备注"],
-    "性能测试设计": ["前置条件/数据准备", "执行步骤", "监控指标", "通过标准", "风险备注"],
+    "性能测试设计": ["业务链路", "监控指标", "通过标准", "造数策略", "风险说明"],
     "风险与待确认问题": ["描述", "影响范围", "建议处理方式"],
-    "自动化建议": ["建议说明", "前置条件", "维护要求"],
-    "页面元素覆盖清单": ["业务依据/规则来源", "待确认问题/备注"],
+    "自动化建议": ["依赖数据", "Mock 需求", "稳定性风险", "建议框架/工具", "备注"],
+    "页面元素覆盖清单": ["预期行为", "业务依据/规则来源", "待确认问题/备注"],
 }
 
 IMPORT_AUTO_FIELDS = {"测试用例系统编号", "作者"}
@@ -193,6 +209,21 @@ def module_names(module_path: str) -> list[str]:
     return (parts + [""] * 5)[:5]
 
 
+def import_module_names(module_path: str, product_name: str | None = None) -> list[str]:
+    """Map a real 1-N level path to import fields without changing file naming.
+
+    The current import template requires the first three module name columns. If
+    the real menu path is shallower, only the import fields reuse the deepest
+    known name; the canonical path and deliverable filename remain unchanged.
+    """
+    parts = canonical_module_parts(module_path, product_name)
+    if not parts:
+        parts = [module_path.strip() or "测试设计"]
+    while len(parts) < 3:
+        parts.append(parts[-1])
+    return (parts + [""] * 5)[:5]
+
+
 def canonical_module_parts(module_path: str, product_name: str | None = None) -> list[str]:
     parts = [part.strip() for part in module_path.replace("\\", ">").replace("/", ">").split(">") if part.strip()]
     if product_name and parts and parts[0] == product_name.strip():
@@ -256,6 +287,81 @@ def copy_workbook(source: Path, target: Path) -> None:
     shutil.copy2(source, target)
 
 
+def atomic_publish_copies(copies: list[tuple[Path, Path]]) -> None:
+    """Publish a set of files as one rollback-capable operation."""
+    token = uuid.uuid4().hex
+    staged: list[tuple[Path, Path]] = []
+    backups: list[tuple[Path, Path]] = []
+    published: list[Path] = []
+    try:
+        for source, target in copies:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            stage = target.with_name(f".{target.name}.{token}.tmp")
+            shutil.copy2(source, stage)
+            staged.append((stage, target))
+        for _, target in staged:
+            if target.exists():
+                backup = target.with_name(f".{target.name}.{token}.bak")
+                os.replace(target, backup)
+                backups.append((backup, target))
+        for stage, target in staged:
+            os.replace(stage, target)
+            published.append(target)
+    except Exception:
+        for target in published:
+            if target.exists():
+                target.unlink()
+        for backup, target in backups:
+            if backup.exists():
+                os.replace(backup, target)
+        raise
+    finally:
+        for stage, _ in staged:
+            if stage.exists():
+                stage.unlink()
+        for backup, _ in backups:
+            if backup.exists():
+                backup.unlink()
+
+
+def cleanup_excel_lock_files(directories: set[Path]) -> None:
+    for directory in directories:
+        if not directory.exists():
+            continue
+        for lock_file in directory.glob("~$*.xlsx"):
+            try:
+                lock_file.unlink()
+            except OSError:
+                # An open Excel workbook owns its lock file; never fail delivery for it.
+                pass
+
+
+def legacy_repeated_leaf_names(module_path: str, product_name: str | None = None) -> tuple[str, str] | None:
+    parts = canonical_module_parts(module_path, product_name)
+    if not parts or len(parts) >= 3:
+        return None
+    legacy_parts = parts + [parts[-1]] * (3 - len(parts))
+    legacy_stem = safe_filename(">".join(legacy_parts))
+    current_stem = safe_filename(">".join(parts))
+    if legacy_stem == current_stem:
+        return None
+    return f"{legacy_stem}_测试设计.xlsx", f"{legacy_stem}_导入用例.xlsx"
+
+
+def prepare_formal_workbook(template: Path, output: Path) -> None:
+    """Copy the formal template and clear example data before model filling."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(template, output)
+    wb = load_workbook(output)
+    missing = [name for name in FORMAL_SHEETS if name not in wb.sheetnames]
+    if missing:
+        raise ValueError(f"Formal template is missing required sheets: {missing}")
+    for sheet_name in FORMAL_SHEETS:
+        clear_data_rows(wb[sheet_name])
+    remove_workbook_tables_and_refresh_filters(wb)
+    wb.save(output)
+
+
 def write_mapped_row(ws, headers: dict[str, int], row_index: int, values: dict[str, str]) -> None:
     copy_row_style(ws, 2 if ws.max_row >= 2 else 1, row_index)
     for field, value in values.items():
@@ -289,7 +395,7 @@ def update_batch_status_paths(batch_status: Path, batch_id: str | None, archive_
         rows = list(reader)
     if not headers:
         raise ValueError(f"batch-status.csv has no header row: {batch_status}")
-    required = {"批次ID", "归档路径", "导入文件路径", "导入文件已生成"}
+    required = {"批次ID", "归档路径", "导入文件路径"}
     missing = sorted(required - set(headers))
     if missing:
         raise ValueError(f"batch-status.csv is missing required finalize columns: {missing}")
@@ -309,7 +415,10 @@ def update_batch_status_paths(batch_status: Path, batch_id: str | None, archive_
         )
         row["归档路径"] = archive_rel
         row["导入文件路径"] = import_rel
-        row["导入文件已生成"] = "是"
+        if "导入文件已生成" in row:
+            row["导入文件已生成"] = "是"
+        if "最后更新时间" in row:
+            row["最后更新时间"] = date.today().isoformat()
     with batch_status.open("w", encoding="utf-8-sig", newline="") as fp:
         writer = csv.DictWriter(fp, fieldnames=headers)
         writer.writeheader()
@@ -317,8 +426,38 @@ def update_batch_status_paths(batch_status: Path, batch_id: str | None, archive_
     return changes
 
 
+def preflight_finalize_metadata(
+    batch_status: Path | None,
+    batch_id: str | None,
+    product_map: Path | None,
+    page_discovery: Path | None,
+) -> None:
+    if product_map and not page_discovery:
+        raise ValueError("--product-map requires --page-discovery for product-map sync")
+    if page_discovery and not batch_status:
+        raise ValueError("--batch-status is required when --page-discovery is provided")
+    if page_discovery and not page_discovery.exists():
+        raise ValueError(f"page-discovery.csv not found: {page_discovery}")
+    if product_map and not product_map.exists():
+        raise ValueError(f"product-map.xlsx not found: {product_map}")
+    if not batch_status:
+        return
+    if not batch_status.exists():
+        raise ValueError(f"batch-status.csv not found: {batch_status}")
+    with batch_status.open("r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.DictReader(fp)
+        headers = reader.fieldnames or []
+        rows = list(reader)
+    required = {"批次ID", "归档路径", "导入文件路径"}
+    missing = sorted(required - set(headers))
+    if missing:
+        raise ValueError(f"batch-status.csv is missing required finalize columns: {missing}")
+    if not any(not batch_id or row.get("批次ID") == batch_id for row in rows):
+        raise ValueError(f"No matching batch row found for batch_id={batch_id!r}")
+
+
 def sync_batch_markdown_paths(batch_status: Path, changes: list[dict[str, str]]) -> None:
-    for markdown_name in ["batch-plan.md", "batch-review.md"]:
+    for markdown_name in ["batch-plan.md", "final-review.md", "batch-review.md"]:
         markdown_path = batch_status.resolve().parent / markdown_name
         if not markdown_path.exists():
             continue
@@ -370,15 +509,45 @@ def write_single_csv_row(path: Path, values: dict[str, str]) -> None:
         writer.writerow(row)
 
 
-def init_batch_run(project_root: Path, run_id: str, module_path: str, batch_id: str, product_name: str | None = None) -> Path:
+def migrate_page_discovery_fact_status(path: Path) -> None:
+    """Add provenance to historical discovery files without claiming old work was tested."""
+    if not path.exists():
+        return
+    with path.open("r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.DictReader(fp)
+        headers = reader.fieldnames or []
+        rows = list(reader)
+    if not headers:
+        raise ValueError(f"page-discovery.csv has no header row: {path}")
+    if "事实状态" not in headers:
+        insert_at = headers.index("是否已生成用例") if "是否已生成用例" in headers else len(headers)
+        headers.insert(insert_at, "事实状态")
+    for row in rows:
+        if row.get("事实状态"):
+            continue
+        row["事实状态"] = "待确认" if row.get("覆盖状态") == "待确认" else "页面观察"
+    with path.open("w", encoding="utf-8-sig", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def init_batch_run(
+    project_root: Path,
+    run_id: str,
+    module_path: str,
+    batch_id: str,
+    product_name: str | None = None,
+    large_scope: bool = False,
+) -> Path:
     run_dir = project_root / "docs" / "test-assets" / "batch-runs" / run_id
     templates_dir = project_root / "docs" / "test-assets" / "batch-runs" / "templates"
     required_templates = {
-        "batch-plan.md": templates_dir / "batch-plan-template.md",
         "batch-status.csv": templates_dir / "batch-status-template.csv",
-        "batch-review.md": templates_dir / "batch-review-template.md",
         "page-discovery.csv": templates_dir / "page-discovery-template.csv",
     }
+    if large_scope:
+        required_templates["batch-plan.md"] = templates_dir / "batch-plan-template.md"
     missing = [str(path) for path in required_templates.values() if not path.exists()]
     if missing:
         raise ValueError(f"Batch template files are missing: {missing}")
@@ -388,8 +557,9 @@ def init_batch_run(project_root: Path, run_id: str, module_path: str, batch_id: 
     scripts_dir = artifacts_dir / "scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)
 
+    created: dict[str, bool] = {}
     for target_name, template_path in required_templates.items():
-        copy_template_if_missing(template_path, run_dir / target_name)
+        created[target_name] = copy_template_if_missing(template_path, run_dir / target_name)
 
     product, modules = split_module_parts(module_path, product_name)
     level1 = modules[0] if len(modules) > 0 else ""
@@ -397,67 +567,60 @@ def init_batch_run(project_root: Path, run_id: str, module_path: str, batch_id: 
     level3 = modules[2] if len(modules) > 2 else ""
     leaf_path = ">".join(modules) or module_path
 
-    write_single_csv_row(
-        run_dir / "batch-status.csv",
-        {
-            "批次ID": batch_id,
-            "一级模块": level1,
-            "二级菜单": level2,
-            "三级菜单/页面域": level3,
-            "批次范围": leaf_path,
-            "状态": "待开始",
-            "页面数": "0",
-            "元素总数": "0",
-            "已覆盖元素数": "0",
-            "待确认元素数": "0",
-            "功能用例数": "0",
-            "性能场景数": "0",
-            "异常用例数": "0",
-            "边界用例数": "0",
-            "权限/状态用例数": "0",
-            "数据一致性用例数": "0",
-            "页面遍历完成": "否",
-            "功能用例完成": "否",
-            "性能设计完成": "否",
-            "异常边界权限覆盖完成": "否",
-            "页面元素覆盖完成": "否",
-            "产品版图已更新": "否",
-            "覆盖质量自检": "未通过",
-            "导入文件已生成": "否",
-            "最小标题路径": leaf_path,
-            "下一步动作": "开始页面实探并补充 page-discovery.csv",
-        },
-    )
-    write_single_csv_row(
-        run_dir / "page-discovery.csv",
-        {
-            "批次ID": batch_id,
-            "一级模块": level1,
-            "二级菜单": level2,
-            "三级菜单/页面域": level3,
-            "最小标题路径": leaf_path,
-            "菜单路径/URL": leaf_path,
-            "发现方式": "浏览器实探/页面资料",
-            "是否已生成用例": "否",
-            "覆盖状态": "待确认",
-            "备注": "按当前批次页面实探结果补充页面、元素、取值、联动和关联用例",
-        },
-    )
+    if created.get("batch-status.csv"):
+        write_single_csv_row(
+            run_dir / "batch-status.csv",
+            {
+                "批次ID": batch_id,
+                "一级模块": level1,
+                "二级菜单": level2,
+                "三级菜单/页面域": level3,
+                "最小标题路径": leaf_path,
+                "状态": "待开始",
+                "页面实探状态": "未开始",
+                "JSON分片状态": "未开始",
+                "功能用例数": "0",
+                "性能场景数": "0",
+                "最后更新时间": date.today().isoformat(),
+                "下一步动作": "开始页面实探并补充 page-discovery.csv",
+            },
+        )
+    if created.get("page-discovery.csv"):
+        write_single_csv_row(
+            run_dir / "page-discovery.csv",
+            {
+                "批次ID": batch_id,
+                "一级模块": level1,
+                "二级菜单": level2,
+                "三级菜单/页面域": level3,
+                "最小标题路径": leaf_path,
+                "菜单路径/URL": leaf_path,
+                "发现方式": "浏览器实探/页面资料",
+                "事实状态": "待确认",
+                "是否已生成用例": "否",
+                "覆盖状态": "待确认",
+                "备注": "按当前批次页面实探结果补充页面、元素、取值、联动和关联用例",
+            },
+        )
+    else:
+        migrate_page_discovery_fact_status(run_dir / "page-discovery.csv")
 
     init_note = (
-        "\n\n## 批次初始化\n"
+        "\n\n## 运行范围\n"
         f"- 产品/系统：{product}\n"
         f"- 模块路径：{leaf_path}\n"
         f"- 批次ID：{batch_id}\n"
         "- 执行要求：先补全 page-discovery.csv，再生成测试设计、导入文件和 batch-status.csv 覆盖数据。\n"
     )
-    for markdown_name in ["batch-plan.md", "batch-review.md"]:
+    for markdown_name in ["batch-plan.md"]:
         markdown_path = run_dir / markdown_name
+        if not markdown_path.exists():
+            continue
         text = markdown_path.read_text(encoding="utf-8-sig")
-        if "## 批次初始化" not in text:
+        if "## 运行范围" not in text:
             markdown_path.write_text(text.rstrip() + init_note, encoding="utf-8")
 
-    print(f"Initialized batch run: {run_dir}")
+    print(f"Ready: {run_dir}")
     return run_dir
 
 
@@ -562,7 +725,7 @@ def sync_product_map(
                 "前置状态/权限": row.get("角色/权限", ""),
                 "关联用例ID": row.get("关联用例ID", ""),
                 "覆盖状态": row.get("覆盖状态", ""),
-                "发现来源": row.get("发现方式", ""),
+                "发现来源": " / ".join(part for part in [row.get("事实状态", ""), row.get("发现方式", "")] if part),
                 "最后更新时间": today,
                 "备注": row.get("备注", ""),
             },
@@ -680,14 +843,10 @@ def finalize_deliverables(
     product_map: Path | None = None,
     page_discovery: Path | None = None,
     product_name: str | None = None,
-) -> None:
+) -> dict[str, Path]:
     project_root = project_root.resolve()
+    preflight_finalize_metadata(batch_status, batch_id, product_map, page_discovery)
     _, formal_name, import_name = deliverable_names(module_path, product_name)
-
-    apply_formal_workbook_styles(formal_workbook)
-    import_wb = load_workbook(import_workbook)
-    remove_workbook_tables_and_refresh_filters(import_wb)
-    import_wb.save(import_workbook)
 
     module_archive = project_root / "docs" / "test-assets" / "modules" / formal_name
     import_archive = project_root / "docs" / "test-assets" / "imports" / import_name
@@ -695,10 +854,45 @@ def finalize_deliverables(
     deliverable_formal = project_root / "docs" / "test-design" / "deliverables" / formal_name
     deliverable_import = project_root / "docs" / "test-design" / "deliverables" / import_name
 
-    for target in [module_archive, current_copy, deliverable_formal]:
-        copy_workbook(formal_workbook, target)
-    for target in [import_archive, deliverable_import]:
-        copy_workbook(import_workbook, target)
+    with tempfile.TemporaryDirectory(prefix="test-design-publish-") as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        prepared_formal = temp_dir / formal_name
+        prepared_import = temp_dir / import_name
+        apply_formal_workbook_styles(formal_workbook, prepared_formal)
+        shutil.copy2(import_workbook, prepared_import)
+        import_wb = load_workbook(prepared_import)
+        remove_workbook_tables_and_refresh_filters(import_wb)
+        import_wb.save(prepared_import)
+        atomic_publish_copies(
+            [
+                (prepared_formal, module_archive),
+                (prepared_formal, current_copy),
+                (prepared_formal, deliverable_formal),
+                (prepared_import, import_archive),
+                (prepared_import, deliverable_import),
+            ]
+        )
+
+    target_dirs = {
+        module_archive.parent,
+        current_copy.parent,
+        deliverable_formal.parent,
+        import_archive.parent,
+    }
+    cleanup_excel_lock_files(target_dirs)
+    legacy_names = legacy_repeated_leaf_names(module_path, product_name)
+    if legacy_names:
+        legacy_formal, legacy_import = legacy_names
+        for directory, name in [
+            (module_archive.parent, legacy_formal),
+            (current_copy.parent, legacy_formal),
+            (deliverable_formal.parent, legacy_formal),
+            (import_archive.parent, legacy_import),
+            (deliverable_import.parent, legacy_import),
+        ]:
+            stale = directory / name
+            if stale.exists():
+                stale.unlink()
 
     if batch_status:
         changes = update_batch_status_paths(
@@ -718,6 +912,14 @@ def finalize_deliverables(
             relative_project_path(project_root, module_archive),
             product_name,
         )
+    return {
+        "formal": deliverable_formal,
+        "import": deliverable_import,
+        "current_formal": current_copy,
+        "formal_archive": module_archive,
+        "import_archive": import_archive,
+        "deliverable_formal": deliverable_formal,
+    }
 
 
 def run_python_script(script: Path, args: list[str]) -> None:
@@ -738,37 +940,48 @@ def complete_deliverables(
     page_discovery: Path | None = None,
     product_name: str | None = None,
     scripts_path: Path | None = None,
-) -> None:
+) -> dict[str, Path]:
     project_root = project_root.resolve()
+    preflight_finalize_metadata(batch_status, batch_id, product_map, page_discovery)
     script_dir = Path(__file__).resolve().parent
     _, _, import_name = deliverable_names(module_path, product_name)
-    target_import = import_workbook or (project_root / "docs" / "test-assets" / "imports" / import_name)
-
     if scripts_path and scripts_path.exists():
         run_python_script(script_dir / "validate-generated-python-scripts.py", ["--path", str(scripts_path)])
 
-    apply_formal_workbook_styles(formal_workbook)
-    generate_import_workbook(formal_workbook, import_template, target_import, module_path, product_name)
-    finalize_deliverables(
-        project_root,
-        formal_workbook,
-        target_import,
-        module_path,
-        batch_status,
-        batch_id,
-        product_map,
-        page_discovery,
-        product_name,
-    )
+    with tempfile.TemporaryDirectory(prefix="test-design-complete-") as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        staged_formal = temp_dir / "formal.xlsx"
+        staged_import = temp_dir / import_name
+        apply_formal_workbook_styles(formal_workbook, staged_formal)
+        generate_import_workbook(staged_formal, import_template, staged_import, module_path, product_name)
+        staged_validator_args = ["--workbook", str(staged_formal), "--import-workbook", str(staged_import)]
+        if batch_status:
+            staged_validator_args.extend(["--batch-status", str(batch_status)])
+        if page_discovery:
+            staged_validator_args.extend(["--page-discovery", str(page_discovery)])
+        run_python_script(script_dir / "validate-test-design-deliverable.py", staged_validator_args)
+        paths = finalize_deliverables(
+            project_root,
+            staged_formal,
+            staged_import,
+            module_path,
+            batch_status,
+            batch_id,
+            product_map,
+            page_discovery,
+            product_name,
+        )
 
-    validator_args = ["--workbook", str(formal_workbook), "--import-workbook", str(target_import)]
-    if batch_status:
-        validator_args.extend(["--batch-status", str(batch_status)])
-    if product_map:
-        validator_args.extend(["--product-map", str(product_map)])
-    if page_discovery:
-        validator_args.extend(["--page-discovery", str(page_discovery)])
+    if import_workbook and import_workbook.resolve() != paths["import_archive"].resolve():
+        atomic_publish_copies([(paths["import_archive"], import_workbook)])
+
+    validator_args = ["--workbook", str(paths["formal_archive"]), "--import-workbook", str(paths["import_archive"])]
+    if product_map and page_discovery:
+        validator_args.extend(["--product-map", str(product_map), "--page-discovery", str(page_discovery)])
+        if batch_status:
+            validator_args.extend(["--batch-status", str(batch_status)])
     run_python_script(script_dir / "validate-test-design-deliverable.py", validator_args)
+    return paths
 
 
 def generate_import_workbook(
@@ -792,8 +1005,7 @@ def generate_import_workbook(
     import_headers = header_map(import_ws)
     clear_data_rows(import_ws)
 
-    canonical_path = ">".join(canonical_module_parts(module_path, product_name)) or module_path
-    modules = module_names(canonical_path)
+    modules = import_module_names(module_path, product_name)
     write_row = 2
     for row_index in range(2, function_ws.max_row + 1):
         case = row_dict(function_ws, function_headers, row_index)
@@ -880,12 +1092,17 @@ def main() -> int:
     style.add_argument("--output", type=Path)
     style.add_argument("--template", type=Path)
 
+    prepare = sub.add_parser("prepare-formal", help="Copy the formal template and clear all example data before filling.")
+    prepare.add_argument("--template", required=True, type=Path)
+    prepare.add_argument("--output", required=True, type=Path)
+
     init = sub.add_parser("init-batch-run", help="Create a standard batch-run ledger from templates before page discovery.")
     init.add_argument("--project-root", required=True, type=Path)
     init.add_argument("--run-id", required=True)
     init.add_argument("--module-path", required=True)
     init.add_argument("--batch-id", default="BATCH-001")
     init.add_argument("--product-name")
+    init.add_argument("--large-scope", action="store_true", help="Also create a compact batch-plan.md for multi-page/module work.")
 
     finalize = sub.add_parser("finalize-deliverables", help="Copy validated workbooks to current/deliverables/internal archives and update batch-status paths.")
     finalize.add_argument("--project-root", required=True, type=Path)
@@ -924,15 +1141,25 @@ def main() -> int:
         generate_import_workbook(args.formal_workbook, args.import_template, args.output, args.module_path, args.product_name)
     elif args.command == "fix-formal-styles":
         apply_formal_workbook_styles(args.workbook, args.output, args.template)
+    elif args.command == "prepare-formal":
+        prepare_formal_workbook(args.template, args.output)
     elif args.command == "init-batch-run":
-        init_batch_run(args.project_root, args.run_id, args.module_path, args.batch_id, args.product_name)
+        run_dir = init_batch_run(
+            args.project_root,
+            args.run_id,
+            args.module_path,
+            args.batch_id,
+            args.product_name,
+            args.large_scope,
+        )
+        print(f"RUN_DIR={run_dir.resolve()}")
     elif args.command == "finalize-deliverables":
         if args.page_discovery and not args.batch_status:
             raise SystemExit(
                 "ERROR: --batch-status is required when --page-discovery is provided. "
-                "Run init-batch-run first and keep batch-plan.md, batch-status.csv, batch-review.md, and page-discovery.csv together."
+                "Keep batch-status.csv and page-discovery.csv in the same run directory."
             )
-        finalize_deliverables(
+        paths = finalize_deliverables(
             args.project_root,
             args.formal_workbook,
             args.import_workbook,
@@ -943,13 +1170,15 @@ def main() -> int:
             args.page_discovery,
             args.product_name,
         )
+        print(f"FORMAL_WORKBOOK={paths['formal'].resolve()}")
+        print(f"IMPORT_WORKBOOK={paths['import'].resolve()}")
     elif args.command == "complete-deliverables":
         if args.page_discovery and not args.batch_status:
             raise SystemExit(
                 "ERROR: --batch-status is required when --page-discovery is provided. "
-                "Run init-batch-run first and keep batch-plan.md, batch-status.csv, batch-review.md, and page-discovery.csv together."
+                "Keep batch-status.csv and page-discovery.csv in the same run directory."
             )
-        complete_deliverables(
+        paths = complete_deliverables(
             args.project_root,
             args.formal_workbook,
             args.import_template,
@@ -962,6 +1191,8 @@ def main() -> int:
             args.product_name,
             args.scripts_path,
         )
+        print(f"FORMAL_WORKBOOK={paths['formal'].resolve()}")
+        print(f"IMPORT_WORKBOOK={paths['import'].resolve()}")
     elif args.command == "sync-product-map":
         sync_product_map(
             args.product_map,

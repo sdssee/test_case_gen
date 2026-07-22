@@ -91,7 +91,7 @@ powershell -ExecutionPolicy Bypass -File scripts\validate-test-design-deliverabl
   -ImportWorkbookPath docs/test-assets/imports/<导入文件.xlsx>
 ```
 
-大范围任务可追加 `-BatchStatusPath <batch-status.csv>` 校验批次状态中的覆盖数量和质量门禁。
+大范围任务可追加 `-BatchStatusPath <batch-status.csv>` 校验轻量断点字段和路径结构；批次状态不承担语义质量门禁。
 只需要单独生成导入文件且不做批次收口时，可使用 `generate-import` 兼容命令。
 
 ## 资产结构升级

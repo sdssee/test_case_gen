@@ -4,6 +4,8 @@
 
 本仓库不是业务应用代码。它提供可复制到业务项目根目录的 Memory、Skill、Rule、脚本和 Excel 模板。
 
+本仓库只发布通用框架，不内置任何具体产品、页面、地址或历史执行结果。外部测试目录仅可作为审计输入，未经用户明确要求不得复制进仓库；`.workbuddy/` 等本地运行记忆也不属于交付内容。
+
 ## 核心入口
 
 | 文件 | 作用 |
@@ -15,10 +17,10 @@
 | `.codebuddy/rules/test-design-rule.md` | CodeBuddy Code/CLI 硬规则。 |
 | `docs/test-design/codebuddy-test-design-template.xlsx` | 正式测试设计模板，固定 8 个 Sheet。 |
 | `docs/test-design/测试用例模板.xlsx` | 测试系统导入模板，使用时复制副本，不修改原模板。 |
-| `docs/test-assets/product-map.xlsx` | 内部产品测试知识图谱，不作为默认客户交付件。 |
+| `docs/test-assets/product-map.xlsx` | 空白产品测试知识图谱模板，仅在业务项目显式启用长期资产时写入。 |
 | `docs/RULE_OWNERSHIP.md` | 规则归属矩阵，避免重复和漂移。 |
 
-详细规则按任务读取 `docs/test-design/rules/`；Excel 字段以 `docs/test-design/excel-template-spec.md` 为准；归档和跨模块依赖以 `docs/test-design/archive-and-index-guidelines.md` 为准。
+详细规则按任务读取 `docs/test-design/rules/`；Excel 字段以 `docs/test-design/excel-template-spec.md` 为准；历史资产按需读取 `docs/test-design/rules/product-map-sync.md`。
 
 ## 标准交付
 
@@ -37,17 +39,7 @@
 
 ## 主流程
 
-批次任务或页面实探任务先初始化批次目录：
-
-```powershell
-python scripts/test_design_excel_tools.py init-batch-run `
-  --project-root . `
-  --run-id <YYYYMMDD_任务标识> `
-  --module-path "一级模块>二级菜单>三级菜单" `
-  --batch-id BATCH-001
-```
-
-生成正式测试设计后，优先使用一站式收口命令：
+用户直接调用`test-design` Skill；run-dir由Skill内部创建或复用，不向用户暴露初始化阶段。生成正式测试设计后，使用一站式收口命令：
 
 ```powershell
 python scripts/test_design_excel_tools.py complete-deliverables `
@@ -56,9 +48,7 @@ python scripts/test_design_excel_tools.py complete-deliverables `
   --import-template docs/test-design/测试用例模板.xlsx `
   --module-path "一级模块>二级菜单>三级菜单" `
   --batch-status docs/test-assets/batch-runs/<任务>/batch-status.csv `
-  --page-discovery docs/test-assets/batch-runs/<任务>/page-discovery.csv `
-  --product-map docs/test-assets/product-map.xlsx `
-  --scripts-path docs/test-assets/batch-runs/<任务>/artifacts/scripts
+  --page-discovery docs/test-assets/batch-runs/<任务>/page-discovery.csv
 ```
 
 只需要单独生成导入文件且不做批次收口时，可使用 `generate-import` 兼容命令。
@@ -68,11 +58,11 @@ python scripts/test_design_excel_tools.py complete-deliverables `
 ## 关键规则
 
 - 测试策略以 `DFX维度` 和 `DFX场景` 为主字段，`场景类型`、`正向/反向` 已废弃；详细矩阵见 `docs/test-design/rules/dfx-test-strategy.md`。
-- 每条功能测试用例必须把 DFX 落到测试数据、操作步骤、预期结果和恢复路径。
-- 页面实探必须记录所有可点击、可输入、可选择、可测试元素，并写入 `page-discovery.csv`、页面元素覆盖清单和产品版图。
-- 已有数据只能查看和只读深探；敏感操作只允许作用于本次创建且带测试标识的数据。
+- 每条功能测试用例必须把适用DFX场景落到测试数据、操作步骤和具体预期；只有改变共享状态时才要求恢复路径。
+- 页面实探必须记录所有可点击、可输入、可选择、可测试元素，并写入 `page-discovery.csv`和页面元素覆盖清单；产品版图按需同步。
+- 已有数据只能查看和只读深探；新增、编辑、删除、状态变更等操作只允许作用于本次创建且带测试标识的数据。
 - 客户交付件放在 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。
-- 内部资产归档到 `docs/test-assets/modules/`、`docs/test-assets/imports/` 和 `docs/test-assets/product-map.xlsx`。
+- 内部归档写入 `docs/test-assets/modules/`和`docs/test-assets/imports/`；`product-map.xlsx`仅在需要历史复用或跨模块资产时同步。
 
 ## 校验
 
@@ -88,13 +78,7 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
 ```
 
-大范围任务追加 `-BatchStatusPath <batch-status.csv>`；有导入文件时追加 `-ImportWorkbookPath <导入文件.xlsx>`。如果同级存在 `page-discovery.csv`，校验会自动启用产品版图同步检查。
-
-当前批次生成了 Python/JSON/CSV/Markdown/TXT 中间分片时，执行前先预检：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scripts.ps1 -Path docs/test-assets/batch-runs/<任务>/artifacts/scripts
-```
+大范围任务可追加 `-BatchStatusPath <batch-status.csv>`；有导入文件时追加 `-ImportWorkbookPath <导入文件.xlsx>`。产品版图仅在显式传入时同步校验。
 
 ## 升级
 

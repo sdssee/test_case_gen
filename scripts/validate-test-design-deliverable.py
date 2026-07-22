@@ -224,6 +224,14 @@ def fail(message: str) -> None:
     raise AssertionError(message)
 
 
+PRODUCT_MAP_TEMPLATE_MARKERS = ("示例", "FLOW-DEMO-", "CHG-DEMO-", "TC-DEMO-", "AI_TEST_DEMO")
+
+
+def is_product_map_template_row(row: dict[str, str]) -> bool:
+    joined = "".join(row.values())
+    return any(marker in joined for marker in PRODUCT_MAP_TEMPLATE_MARKERS)
+
+
 FACT_STATUSES = {"已实测", "页面观察", "DFX设计", "待确认"}
 
 
@@ -1247,9 +1255,9 @@ def validate_product_map_sync(
         ("product-map 用例资产索引", product_case_rows),
         ("product-map 变更记录", product_change_rows),
     ]:
-        if not any("示例" not in "".join(row.values()) for row in rows):
+        if not any(not is_product_map_template_row(row) for row in rows):
             fail(f"{label} still only contains sample/template rows and has not been synced with real product facts")
-        sample_rows = [index for index, row in enumerate(rows, start=2) if "示例" in "".join(row.values())]
+        sample_rows = [index for index, row in enumerate(rows, start=2) if is_product_map_template_row(row)]
         if sample_rows:
             fail(f"{label} contains sample/template rows after sync: rows {sample_rows[:10]}")
     validate_table_ranges(product_map, PRODUCT_MAP_REQUIRED_REAL_SHEETS)
@@ -1259,7 +1267,7 @@ def validate_product_map_sync(
         rows = row_dicts(rows_raw, f"product-map {sheet_name}")
         if not rows:
             fail(f"product-map {sheet_name} must contain real synced rows")
-        sample_rows = [index for index, row in enumerate(rows, start=2) if "示例" in "".join(row.values())]
+        sample_rows = [index for index, row in enumerate(rows, start=2) if is_product_map_template_row(row)]
         if sample_rows:
             fail(f"product-map {sheet_name} contains sample/template rows after sync: rows {sample_rows[:10]}")
 

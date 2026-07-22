@@ -376,13 +376,18 @@ def append_mapped_row(ws, values: dict[str, str]) -> None:
     write_mapped_row(ws, headers, row_index, values)
 
 
+PRODUCT_MAP_TEMPLATE_MARKERS = ("示例", "FLOW-DEMO-", "CHG-DEMO-", "TC-DEMO-", "AI_TEST_DEMO")
+
+
 def remove_rows_containing(ws, needles: list[str]) -> None:
     if not needles:
         return
     for row_index in range(ws.max_row, 1, -1):
         values = ["" if cell.value is None else str(cell.value) for cell in ws[row_index]]
         joined = "\n".join(values)
-        if any(needle and needle in joined for needle in needles) or "示例" in joined:
+        if any(needle and needle in joined for needle in needles) or any(
+            marker in joined for marker in PRODUCT_MAP_TEMPLATE_MARKERS
+        ):
             ws.delete_rows(row_index, 1)
 
 

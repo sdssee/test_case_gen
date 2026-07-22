@@ -40,19 +40,25 @@ def load_shard_validator():
 
 
 class TestDesignWorkflowTests(unittest.TestCase):
-    def test_product_map_template_has_no_builtin_product_facts(self) -> None:
+    def test_product_map_template_contains_only_generic_samples(self) -> None:
         workbook = load_workbook(PRODUCT_MAP_TEMPLATE, data_only=False)
         self.assertEqual(len(workbook.sheetnames), 10)
         for worksheet in workbook.worksheets:
             headers = [cell.value for cell in worksheet[1]]
             self.assertTrue(any(value not in (None, "") for value in headers), worksheet.title)
-            for row in worksheet.iter_rows(min_row=2, values_only=True):
-                self.assertFalse(
-                    any(value not in (None, "") for value in row),
-                    f"{worksheet.title} contains built-in product facts: {row}",
-                )
+            data_rows = [
+                row
+                for row in worksheet.iter_rows(min_row=2, values_only=True)
+                if any(value not in (None, "") for value in row)
+            ]
+            self.assertEqual(len(data_rows), 1, worksheet.title)
+            sample_text = "".join("" if value is None else str(value) for value in data_rows[0])
+            self.assertTrue(
+                any(marker in sample_text for marker in ("示例", "DEMO", "内部工作流")),
+                f"{worksheet.title} sample row is not explicitly marked as generic: {data_rows[0]}",
+            )
 
-    def test_blank_product_map_template_accepts_real_sync(self) -> None:
+    def test_sample_product_map_template_accepts_real_sync(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             formal = temp / "formal.xlsx"
@@ -104,7 +110,14 @@ class TestDesignWorkflowTests(unittest.TestCase):
                     for value in row_values
                 ]
                 self.assertTrue(any(value for value in values), worksheet.title)
-                self.assertFalse(any("示例" in value for value in values), worksheet.title)
+                self.assertFalse(
+                    any(
+                        marker in value
+                        for value in values
+                        for marker in excel_tools.PRODUCT_MAP_TEMPLATE_MARKERS
+                    ),
+                    worksheet.title,
+                )
 
     def build_minimal_valid_formal(self, output: Path) -> None:
         excel_tools.prepare_formal_workbook(FORMAL_TEMPLATE, output)

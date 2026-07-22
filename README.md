@@ -17,7 +17,7 @@
 | `.codebuddy/rules/test-design-rule.md` | CodeBuddy Code/CLI 硬规则。 |
 | `docs/test-design/codebuddy-test-design-template.xlsx` | 正式测试设计模板，固定 8 个 Sheet。 |
 | `docs/test-design/测试用例模板.xlsx` | 测试系统导入模板，使用时复制副本，不修改原模板。 |
-| `docs/test-assets/product-map.xlsx` | 空白产品测试知识图谱模板，仅在业务项目显式启用长期资产时写入。 |
+| `docs/test-assets/product-map.xlsx` | 产品测试知识图谱模板；通用示例行只说明字段和格式，运行时不作为产品事实。 |
 | `docs/RULE_OWNERSHIP.md` | 规则归属矩阵，避免重复和漂移。 |
 
 详细规则按任务读取 `docs/test-design/rules/`；Excel 字段以 `docs/test-design/excel-template-spec.md` 为准；历史资产按需读取 `docs/test-design/rules/product-map-sync.md`。

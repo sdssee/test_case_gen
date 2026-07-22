@@ -1,6 +1,6 @@
 # 产品级测试资产库
 
-`docs/test-assets/`保存业务项目运行后形成的内部历史资产，不作为默认客户交付件。本轮页面事实始终以run-dir的`page-discovery.csv`为准。通用框架仓库中的`product-map.xlsx`只保留表头和空白格式行，不预置任何产品事实。
+`docs/test-assets/`保存业务项目运行后形成的内部历史资产，不作为默认客户交付件。本轮页面事实始终以run-dir的`page-discovery.csv`为准。通用框架仓库中的`product-map.xlsx`每个Sheet保留一行通用示例，用于说明字段和提供写入格式；读取和首次同步时必须忽略或清除示例行。
 
 ```text
 docs/test-assets/

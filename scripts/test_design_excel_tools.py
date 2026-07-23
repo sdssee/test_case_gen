@@ -145,6 +145,31 @@ DESTRUCTIVE_PAYLOAD_PATTERNS = (
     r"(?i)\btruncate\s+table\b",
 )
 PERFORMANCE_SOURCE_MARKERS = ("需求阈值", "实测基线", "建议目标", "待确认", "不适用")
+PAGE_COVERAGE_STATUSES = {"已覆盖", "不适用", "不测范围", "待确认"}
+PAGE_FACT_SOURCE_TOKENS = {"页面实探", "页面观察", "DFX设计", "已实测", "待确认"}
+PAGE_FACT_REQUIRED_HEADERS = {
+    "批次ID",
+    "最小标题路径",
+    "页面/入口",
+    "元素名称/文案",
+    "元素类型",
+    "交互方式",
+    "适用DFX维度",
+    "适用DFX场景",
+    "选项取值/输入值",
+    "联动/依赖变化",
+    "结果分支/后续状态",
+    "完整点击路径",
+    "预期/观察行为",
+    "业务依据/规则来源",
+    "测试数据来源",
+    "事实状态",
+    "是否已生成用例",
+    "关联用例ID",
+    "覆盖状态",
+    "未覆盖/待确认原因",
+    "备注",
+}
 IMPORT_MULTILINE_FIELDS = ["测试步骤描述", "测试步骤预期结果", "前置条件", "测试用例说明", "备注"]
 FORMAL_MULTILINE_FIELDS = {
     "测试设计总览": ["测试范围", "不测范围", "主要风险", "准入条件", "准出条件", "待确认问题"],
@@ -273,6 +298,41 @@ def set_wrap(ws, headers: dict[str, int], row_index: int, field_names: list[str]
             shrink_to_fit=cell.alignment.shrink_to_fit,
             indent=cell.alignment.indent,
         )
+
+
+def ensure_min_column_widths(ws, headers: dict[str, int], widths: dict[str, float]) -> None:
+    for field, minimum in widths.items():
+        column = headers.get(field)
+        if not column:
+            continue
+        letter = get_column_letter(column)
+        current = ws.column_dimensions[letter].width or 0
+        ws.column_dimensions[letter].width = max(current, minimum)
+
+
+def fit_row_height(
+    ws,
+    headers: dict[str, int],
+    row_index: int,
+    field_names: list[str],
+    minimum: float = 36,
+    maximum: float = 240,
+) -> None:
+    estimated_lines = 1
+    for field in field_names:
+        column = headers.get(field)
+        if not column:
+            continue
+        value = ws.cell(row=row_index, column=column).value
+        if value in (None, ""):
+            continue
+        width = ws.column_dimensions[get_column_letter(column)].width or 12
+        chars_per_line = max(8, int(width * 0.9))
+        lines = 0
+        for part in str(value).splitlines() or [""]:
+            lines += max(1, (len(part) + chars_per_line - 1) // chars_per_line)
+        estimated_lines = max(estimated_lines, lines)
+    ws.row_dimensions[row_index].height = min(maximum, max(minimum, estimated_lines * 16))
 
 
 def normalize_case_level(priority: str) -> str:
@@ -550,6 +610,27 @@ def _validate_performance_row(row: dict[str, str], source: Path, index: int) -> 
             raise ValueError(
                 f"{source.name} 性能测试设计 row {index} claims an 实测基线 without measurement provenance"
             )
+    standard = row.get("通过标准", "")
+    located_markers = [
+        (target.find(marker), marker)
+        for marker in PERFORMANCE_SOURCE_MARKERS
+        if marker in target
+    ]
+    source_marker = min(located_markers)[1] if located_markers else ""
+    required_standard_markers = {
+        "需求阈值": ("需求", "验收"),
+        "实测基线": ("实测基线", "基线", "测量"),
+        "建议目标": ("建议", "待确认"),
+        "待确认": ("待确认",),
+        "不适用": ("不适用",),
+    }
+    if source_marker and not any(
+        marker in standard for marker in required_standard_markers[source_marker]
+    ):
+        raise ValueError(
+            f"{source.name} 性能测试设计 row {index} 通过标准 must preserve the "
+            f"{source_marker} provenance instead of presenting it as a confirmed threshold"
+        )
 
 
 def _validate_shard_row(
@@ -681,7 +762,48 @@ def load_design_shards(shards_dir: Path, formal_template: Path) -> dict[str, lis
         case_rows,
         key=lambda row: (function_rank[row["功能点"]], original_rank[row["用例 ID"]]),
     )
+    _validate_dfx_scenario_landing(merged_rows)
     return merged_rows
+
+
+def _split_values(value: str) -> list[str]:
+    return [item.strip() for item in re.split(r"[,，;；、/\\\s]+", value or "") if item.strip()]
+
+
+def _dfx_pairs(dimensions: str, scenarios: str) -> set[tuple[str, str]]:
+    return {(dimension, scenario) for dimension in _split_values(dimensions) for scenario in _split_values(scenarios)}
+
+
+def _validate_dfx_scenario_landing(rows_by_sheet: dict[str, list[dict[str, str]]]) -> None:
+    function_rows = rows_by_sheet["功能测试用例"]
+    performance_rows = rows_by_sheet["性能测试设计"]
+    for scenario in rows_by_sheet["测试场景矩阵"]:
+        if scenario.get("是否生成用例", "").strip() != "是":
+            continue
+        scenario_pairs = _dfx_pairs(scenario.get("DFX维度", ""), scenario.get("DFX场景", ""))
+        story_id = scenario.get("Story ID/需求 ID", "").strip()
+        function_point = scenario.get("功能点", "").strip()
+        performance_dimension = any(
+            dimension in {"DFP性能", "DFO运维", "DFX极端"}
+            for dimension, _ in scenario_pairs
+        )
+        candidates = performance_rows if performance_dimension else function_rows
+        landed = False
+        for row in candidates:
+            if story_id and row.get("Story ID/需求 ID", "").strip() != story_id:
+                continue
+            if not performance_dimension and function_point and row.get("功能点", "").strip() != function_point:
+                continue
+            if scenario_pairs & _dfx_pairs(row.get("DFX维度", ""), row.get("DFX场景", "")):
+                landed = True
+                break
+        if not landed:
+            raise ValueError(
+                f"测试场景矩阵 {scenario.get('场景 ID', '')!r} declares generated DFX "
+                f"{sorted(scenario_pairs)} for {function_point!r}, but no matching "
+                f"{'performance scenario' if performance_dimension else 'functional case'} "
+                "exists for the same story/function"
+            )
 
 
 def _parse_case_ids(value: str) -> list[str]:
@@ -692,30 +814,240 @@ def _parse_case_ids(value: str) -> list[str]:
     ]
 
 
+def _fact_text(source: dict[str, str]) -> str:
+    return " ".join(
+        (source.get(field) or "").strip()
+        for field in ["页面/入口", "元素名称/文案", "元素类型", "交互方式", "完整点击路径"]
+    )
+
+
+def _is_selection_fact(source: dict[str, str]) -> bool:
+    return any(marker in _fact_text(source) for marker in ("下拉", "级联", "选择", "单选", "复选", "枚举", "树选择", "开关"))
+
+
+def _is_input_fact(source: dict[str, str]) -> bool:
+    if any(marker in source.get("元素类型", "") for marker in ("按钮", "图标", "表格列", "分页", "链接")):
+        return False
+    return any(marker in _fact_text(source) for marker in ("输入", "文本框", "文本域", "搜索框", "查询框", "数字框", "日期框"))
+
+
+def _is_state_change_fact(source: dict[str, str]) -> bool:
+    return any(marker in _fact_text(source) for marker in ("新增", "创建", "编辑", "修改", "配置", "保存", "删除", "移除", "提交"))
+
+
+def _is_action_control(source: dict[str, str]) -> bool:
+    return any(marker in source.get("元素类型", "") for marker in ("按钮", "图标", "链接")) or any(
+        marker in source.get("元素名称/文案", "") for marker in ("确定", "保存", "提交", "取消", "删除", "关闭")
+    )
+
+
+def _is_independent_configurable_fact(source: dict[str, str]) -> bool:
+    return not _is_action_control(source) and (_is_selection_fact(source) or _is_input_fact(source)) and any(
+        marker in _fact_text(source) for marker in ("新增", "创建", "编辑", "修改", "配置", "表单", "弹窗", "抽屉")
+    )
+
+
+def _branch_values(value: str) -> list[str]:
+    return [part.strip() for part in re.split(r"[、;；\n]+", value or "") if part.strip()]
+
+
+def _validate_fact_at_write(source: dict[str, str], label: str) -> None:
+    status = (source.get("事实状态") or "").strip()
+    if status not in FACT_STATUSES:
+        raise ValueError(f"{label} has invalid 事实状态 {status!r}; expected {sorted(FACT_STATUSES)}")
+    if not (source.get("页面/入口") or "").strip() or not (source.get("元素名称/文案") or "").strip():
+        raise ValueError(f"{label} must include 页面/入口 and 元素名称/文案")
+    for field in ("预期/观察行为", "业务依据/规则来源", "测试数据来源"):
+        value = (source.get(field) or "").strip()
+        if field == "预期/观察行为" and value in PAGE_FACT_SOURCE_TOKENS:
+            raise ValueError(f"{label} appears column-shifted: {field} contains source token {value!r}")
+        if field == "测试数据来源" and value in FACT_STATUSES:
+            raise ValueError(f"{label} appears column-shifted: {field} contains fact status {value!r}")
+    if status != "已实测":
+        return
+    if _is_selection_fact(source) or _is_input_fact(source):
+        for field in ("选项取值/输入值", "预期/观察行为", "结果分支/后续状态"):
+            if not (source.get(field) or "").strip():
+                raise ValueError(f"{label} is 已实测 but lacks {field}")
+    if _is_selection_fact(source) and not (source.get("联动/依赖变化") or "").strip():
+        raise ValueError(f"{label} is a tested finite selection but lacks 联动/依赖变化")
+    if _is_state_change_fact(source):
+        for field in ("预期/观察行为", "结果分支/后续状态"):
+            if not (source.get(field) or "").strip():
+                raise ValueError(f"{label} is a tested state-changing transaction but lacks {field}")
+
+
+def _read_page_facts(page_discovery: Path) -> tuple[list[str], list[dict[str, str]]]:
+    with page_discovery.open("r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.DictReader(fp)
+        headers = reader.fieldnames or []
+        rows = list(reader)
+    if not headers:
+        raise ValueError(f"page-discovery.csv has no header row: {page_discovery}")
+    missing = sorted(PAGE_FACT_REQUIRED_HEADERS - set(headers))
+    if missing:
+        raise ValueError(f"page-discovery.csv is missing standard headers: {missing}")
+    return headers, rows
+
+
+def upsert_page_facts(page_discovery: Path, facts: list[dict[str, object]]) -> dict[str, int]:
+    """Idempotently write one continuous exploration transaction with named CSV fields."""
+    headers, rows = _read_page_facts(page_discovery)
+    normalized_facts: list[dict[str, str]] = []
+    for index, raw in enumerate(facts, start=1):
+        unknown = sorted(set(raw) - set(headers))
+        if unknown:
+            raise ValueError(f"page fact {index} has unknown fields: {unknown}")
+        fact = {header: "" for header in headers}
+        fact.update({key: "" if value is None else str(value).strip() for key, value in raw.items()})
+        _validate_fact_at_write(fact, f"page fact {index}")
+        normalized_facts.append(fact)
+    if normalized_facts:
+        rows = [row for row in rows if (row.get("页面/入口") or "").strip() or (row.get("元素名称/文案") or "").strip()]
+
+    identity_fields = ("批次ID", "最小标题路径", "页面/入口", "元素名称/文案")
+    inserted = updated = absorbed = 0
+    for fact in normalized_facts:
+        identity = tuple(fact.get(field, "") for field in identity_fields)
+        matches = [
+            row for row in rows
+            if tuple((row.get(field) or "").strip() for field in identity_fields) == identity
+        ]
+        if not matches:
+            rows.append(fact)
+            inserted += 1
+            continue
+        if len(matches) > 1:
+            raise ValueError(f"page-discovery.csv has duplicate natural key: {identity}")
+        current = matches[0]
+        if all((current.get(header) or "").strip() == fact.get(header, "") for header in headers):
+            absorbed += 1
+            continue
+        old_status = (current.get("事实状态") or "").strip()
+        new_status = fact.get("事实状态", "")
+        progressing = old_status != "已实测" and new_status == "已实测"
+        conflicts = []
+        for header in headers:
+            incoming = fact.get(header, "")
+            existing = (current.get(header) or "").strip()
+            if not incoming:
+                continue
+            if existing and existing != incoming and not progressing:
+                conflicts.append(header)
+            else:
+                current[header] = incoming
+        if conflicts:
+            raise ValueError(f"page fact conflicts with existing natural key {identity}: {conflicts}")
+        updated += 1
+    with page_discovery.open("w", encoding="utf-8-sig", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(rows)
+    return {"inserted": inserted, "updated": updated, "absorbed": absorbed, "total": len(rows)}
+
+
+def page_fact_checkpoint(page_discovery: Path) -> dict[str, object]:
+    """Summarize execution decisions before case generation without writing another artifact."""
+    _, rows = _read_page_facts(page_discovery)
+    real_rows = [row for row in rows if (row.get("页面/入口") or "").strip() and (row.get("元素名称/文案") or "").strip()]
+    external_block_markers = (
+        "权限",
+        "账号",
+        "外部",
+        "跨系统",
+        "不可逆",
+        "共享环境",
+        "业务规则",
+        "需求确认",
+        "环境限制",
+        "数据准备",
+    )
+    page_action_markers = ("点击", "输入", "选择", "下拉", "按钮", "分页", "编辑", "创建", "删除", "保存")
+
+    def requires_user_confirmation(row: dict[str, str]) -> bool:
+        if (row.get("事实状态") or "").strip() != "待确认":
+            return False
+        reason = (row.get("未覆盖/待确认原因") or "").strip()
+        page_verifiable = any(marker in _fact_text(row) for marker in page_action_markers)
+        externally_blocked = any(marker in reason for marker in external_block_markers)
+        return not page_verifiable or externally_blocked
+
+    pending = [
+        {
+            "页面": row.get("页面/入口", ""),
+            "元素": row.get("元素名称/文案", ""),
+            "原因": row.get("未覆盖/待确认原因", ""),
+        }
+        for row in real_rows
+        if requires_user_confirmation(row)
+    ]
+    execute_on_page = [
+        {
+            "页面": row.get("页面/入口", ""),
+            "元素": row.get("元素名称/文案", ""),
+            "当前状态": row.get("事实状态", ""),
+        }
+        for row in real_rows
+        if (
+            (row.get("事实状态") or "").strip() in {"页面观察", "DFX设计"}
+            or (
+                (row.get("事实状态") or "").strip() == "待确认"
+                and not requires_user_confirmation(row)
+            )
+        )
+        and any(marker in _fact_text(row) for marker in page_action_markers)
+    ]
+    dimensions = sorted(
+        {
+            value
+            for row in real_rows
+            for value in _split_values(row.get("适用DFX维度", ""))
+        }
+    )
+    return {
+        "事实总数": len(real_rows),
+        "已实测": sum((row.get("事实状态") or "").strip() == "已实测" for row in real_rows),
+        "页面待执行": execute_on_page,
+        "需用户确认": pending,
+        "已识别DFX维度": dimensions,
+        "可进入用例规划": bool(real_rows) and not pending and not execute_on_page,
+    }
+
+
 def page_element_rows(
     page_discovery: Path,
     case_rows: list[dict[str, str]],
 ) -> list[dict[str, str]]:
-    with page_discovery.open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.DictReader(fp)
-        headers = reader.fieldnames or []
-        discovery_rows = list(reader)
-    if not headers:
-        raise ValueError(f"page-discovery.csv has no header row: {page_discovery}")
+    _, discovery_rows = _read_page_facts(page_discovery)
     case_by_id = {row["用例 ID"]: row for row in case_rows}
     elements: list[dict[str, str]] = []
+    primary_case_fields: dict[str, list[str]] = {}
     for index, source in enumerate(discovery_rows, start=1):
         element_name = (source.get("元素名称/文案") or "").strip()
         if not element_name:
             continue
+        _validate_fact_at_write(source, f"page-discovery.csv row {index}")
         status = (source.get("事实状态") or "").strip()
-        if status not in FACT_STATUSES:
-            raise ValueError(
-                f"page-discovery.csv row {index} has invalid 事实状态 {status!r}; expected {sorted(FACT_STATUSES)}"
-            )
         linked_ids = _parse_case_ids(source.get("关联用例ID", ""))
         generated = (source.get("是否已生成用例") or "").strip()
         coverage = (source.get("覆盖状态") or "").strip()
+        reason = (source.get("未覆盖/待确认原因") or "").strip()
+        if generated not in {"是", "否"}:
+            raise ValueError(f"page-discovery.csv row {index} 是否已生成用例 must be 是 or 否")
+        if coverage not in PAGE_COVERAGE_STATUSES:
+            raise ValueError(
+                f"page-discovery.csv row {index} has invalid 覆盖状态 {coverage!r}; "
+                f"expected {sorted(PAGE_COVERAGE_STATUSES)}"
+            )
+        if coverage != "已覆盖" and not reason:
+            raise ValueError(
+                f"page-discovery.csv row {index} status {coverage} must include 未覆盖/待确认原因"
+            )
+        if status == "已实测" and coverage == "待确认":
+            raise ValueError(
+                f"page-discovery.csv row {index} is 已实测 but coverage is still 待确认; "
+                "link its primary case or record a resolved non-applicable/out-of-scope reason"
+            )
         unknown_ids = [case_id for case_id in linked_ids if case_id not in case_by_id]
         if unknown_ids:
             raise ValueError(f"page-discovery.csv row {index} references unknown case IDs: {unknown_ids}")
@@ -731,17 +1063,20 @@ def page_element_rows(
             raise ValueError(
                 f"page-discovery.csv row {index} is 已覆盖 but has no 关联用例ID"
             )
-        if status == "已实测":
-            element_type = source.get("元素类型", "")
-            if any(marker in element_type for marker in ("输入", "下拉", "选择", "单选", "开关")):
-                if not (source.get("选项取值/输入值") or "").strip():
-                    raise ValueError(
-                        f"page-discovery.csv row {index} is 已实测 but lacks 选项取值/输入值"
-                    )
-                if not (source.get("预期/观察行为") or "").strip():
-                    raise ValueError(
-                        f"page-discovery.csv row {index} is 已实测 but lacks 预期/观察行为"
-                    )
+        if generated == "否" and linked_ids:
+            raise ValueError(f"page-discovery.csv row {index} is not generated but links case IDs")
+        if generated == "否" and coverage == "已覆盖":
+            raise ValueError(f"page-discovery.csv row {index} is 已覆盖 but 是否已生成用例 is 否")
+        if generated == "是" and (_is_selection_fact(source) or _is_input_fact(source)):
+            branch_count = len(_branch_values(source.get("选项取值/输入值", "")))
+            if branch_count > 1 and len(linked_ids) < branch_count:
+                raise ValueError(
+                    f"page-discovery.csv row {index} records {branch_count} independently verified "
+                    f"options/input classes but only {len(linked_ids)} primary baseline cases"
+                )
+        if generated == "是" and _is_independent_configurable_fact(source):
+            for case_id in linked_ids:
+                primary_case_fields.setdefault(case_id, []).append(element_name)
         linked_dimensions = {
             case_by_id[case_id].get("DFX维度", "")
             for case_id in linked_ids
@@ -800,6 +1135,17 @@ def page_element_rows(
                 "素材来源": (source.get("测试数据来源") or "").strip(),
                 "待确认问题/备注": remarks,
             }
+        )
+    conflicts = {
+        case_id: list(OrderedDict.fromkeys(fields))
+        for case_id, fields in primary_case_fields.items()
+        if len(list(OrderedDict.fromkeys(fields))) > 1
+    }
+    if conflicts:
+        case_id, fields = next(iter(conflicts.items()))
+        raise ValueError(
+            f"Case {case_id} is the primary validation for multiple independent configurable "
+            f"fields {fields}; split them into single-factor save cases"
         )
     if not elements:
         raise ValueError(f"page-discovery.csv contains no real page element rows: {page_discovery}")
@@ -905,7 +1251,7 @@ def update_batch_status_paths(
         if "导入文件已生成" in row:
             row["导入文件已生成"] = "是"
         if "状态" in row:
-            row["状态"] = "已完成"
+            row["状态"] = "待Review"
         if page_discovery_completed and "页面实探状态" in row:
             row["页面实探状态"] = "已完成"
         if source_shards_validated and "JSON分片状态" in row:
@@ -923,6 +1269,44 @@ def update_batch_status_paths(
         writer.writeheader()
         writer.writerows(rows)
     return changes
+
+
+def complete_final_review(
+    batch_status: Path,
+    review_file: Path,
+    batch_id: str | None = None,
+) -> None:
+    """Close a run only after the single semantic review has been recorded."""
+    if not review_file.exists():
+        raise ValueError(f"final review file not found: {review_file}")
+    if review_file.resolve().parent != batch_status.resolve().parent or review_file.name != "final-review.md":
+        raise ValueError("final review must be the run directory's final-review.md")
+    review_text = review_file.read_text(encoding="utf-8-sig").strip()
+    if len(review_text) < 20 or any(marker in review_text for marker in ("TODO", "TBD", "{NAV}", "${")):
+        raise ValueError("final-review.md must contain a concrete review conclusion without placeholders")
+    with batch_status.open("r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.DictReader(fp)
+        headers = reader.fieldnames or []
+        rows = list(reader)
+    target_rows = [row for row in rows if not batch_id or row.get("批次ID") == batch_id]
+    if not target_rows:
+        raise ValueError(f"No matching batch row found for batch_id={batch_id!r}")
+    for row in target_rows:
+        if row.get("状态", "").strip() not in {"待Review", "Review中"}:
+            raise ValueError(
+                f"batch {row.get('批次ID', '')} must be 待Review before final review completion"
+            )
+        if not row.get("归档路径", "").strip() or not row.get("导入文件路径", "").strip():
+            raise ValueError(f"batch {row.get('批次ID', '')} has no compiler-owned deliverable paths")
+        row["状态"] = "已完成"
+        if "下一步动作" in row:
+            row["下一步动作"] = "完成"
+        if "最后更新时间" in row:
+            row["最后更新时间"] = date.today().isoformat()
+    with batch_status.open("w", encoding="utf-8-sig", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def preflight_finalize_metadata(
@@ -1564,6 +1948,18 @@ def generate_import_workbook(
     import_ws = import_wb[import_wb.sheetnames[0]]
     import_headers = header_map(import_ws)
     clear_data_rows(import_ws)
+    ensure_min_column_widths(
+        import_ws,
+        import_headers,
+        {
+            "测试用例名称": 34,
+            "测试步骤描述": 55,
+            "测试步骤预期结果": 55,
+            "测试用例说明": 26,
+            "前置条件": 32,
+            "备注": 28,
+        },
+    )
 
     modules = import_module_names(module_path, product_name)
     write_row = 2
@@ -1602,14 +1998,26 @@ def generate_import_workbook(
             if column:
                 import_ws.cell(row=write_row, column=column, value=value)
         set_wrap(import_ws, import_headers, write_row, IMPORT_MULTILINE_FIELDS)
-        import_ws.row_dimensions[write_row].height = max(import_ws.row_dimensions[write_row].height or 18, 60)
+        fit_row_height(import_ws, import_headers, write_row, IMPORT_MULTILINE_FIELDS)
         write_row += 1
 
     template_wb = load_workbook(import_template)
     apply_template_workbook_format(import_wb, template_wb)
+    ensure_min_column_widths(
+        import_ws,
+        import_headers,
+        {
+            "测试用例名称": 34,
+            "测试步骤描述": 55,
+            "测试步骤预期结果": 55,
+            "测试用例说明": 26,
+            "前置条件": 32,
+            "备注": 28,
+        },
+    )
     for row_index in range(2, import_ws.max_row + 1):
         set_wrap(import_ws, import_headers, row_index, IMPORT_MULTILINE_FIELDS)
-        import_ws.row_dimensions[row_index].height = max(import_ws.row_dimensions[row_index].height or 18, 60)
+        fit_row_height(import_ws, import_headers, row_index, IMPORT_MULTILINE_FIELDS)
     remove_workbook_tables_and_refresh_filters(import_wb)
     import_wb.save(output)
 
@@ -1629,9 +2037,22 @@ def apply_formal_workbook_styles(workbook: Path, output: Path | None = None, tem
             continue
         ws = wb[sheet_name]
         headers = header_map(ws)
+        if sheet_name == FORMAL_FUNCTION_SHEET:
+            ensure_min_column_widths(
+                ws,
+                headers,
+                {
+                    "用例标题": 34,
+                    "前置条件": 30,
+                    "测试数据": 30,
+                    "操作步骤": 52,
+                    "预期结果": 52,
+                    "备注": 28,
+                },
+            )
         for row_index in range(2, ws.max_row + 1):
             set_wrap(ws, headers, row_index, fields)
-            ws.row_dimensions[row_index].height = max(ws.row_dimensions[row_index].height or 18, 60)
+            fit_row_height(ws, headers, row_index, fields)
     remove_workbook_tables_and_refresh_filters(wb)
     wb.save(target)
 
@@ -1702,6 +2123,26 @@ def main() -> int:
     compile_cmd.add_argument("--product-map", type=Path)
     compile_cmd.add_argument("--page-discovery", type=Path)
     compile_cmd.add_argument("--product-name")
+
+    upsert_facts = sub.add_parser(
+        "upsert-page-facts",
+        help="Idempotently write one page-exploration transaction from a JSON array on stdin.",
+    )
+    upsert_facts.add_argument("--page-discovery", required=True, type=Path)
+
+    checkpoint_facts = sub.add_parser(
+        "checkpoint-page-facts",
+        help="Print page execution, user-confirmation and DFX readiness before case generation.",
+    )
+    checkpoint_facts.add_argument("--page-discovery", required=True, type=Path)
+
+    review_complete = sub.add_parser(
+        "complete-final-review",
+        help="Mark a compiled batch complete after its single semantic final-review.md is recorded.",
+    )
+    review_complete.add_argument("--batch-status", required=True, type=Path)
+    review_complete.add_argument("--review-file", required=True, type=Path)
+    review_complete.add_argument("--batch-id")
 
     sync = sub.add_parser("sync-product-map", help="Sync product-map.xlsx from a formal workbook and page-discovery.csv.")
     sync.add_argument("--product-map", required=True, type=Path)
@@ -1788,6 +2229,22 @@ def main() -> int:
         )
         print(f"FORMAL_WORKBOOK={paths['formal'].resolve()}")
         print(f"IMPORT_WORKBOOK={paths['import'].resolve()}")
+    elif args.command == "upsert-page-facts":
+        try:
+            payload = json.load(sys.stdin)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(
+                f"ERROR: stdin must contain a JSON array of named page facts: {exc}"
+            ) from exc
+        if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+            raise SystemExit("ERROR: stdin must contain a JSON array of page fact objects")
+        result = upsert_page_facts(args.page_discovery, payload)
+        print(json.dumps(result, ensure_ascii=False))
+    elif args.command == "checkpoint-page-facts":
+        print(json.dumps(page_fact_checkpoint(args.page_discovery), ensure_ascii=False, indent=2))
+    elif args.command == "complete-final-review":
+        complete_final_review(args.batch_status, args.review_file, args.batch_id)
+        print(f"FINAL_REVIEW={args.review_file.resolve()}")
     elif args.command == "sync-product-map":
         sync_product_map(
             args.product_map,

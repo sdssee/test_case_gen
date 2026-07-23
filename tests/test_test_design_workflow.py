@@ -531,7 +531,7 @@ class TestDesignWorkflowTests(unittest.TestCase):
                 "数据量级": "建议目标：1条有效测试数据",
                 "测试时长": "建议目标：完成3次重复采样",
                 "监控指标": "页面响应时间",
-                "通过标准": "不显著劣于实测基线",
+                "通过标准": "建议通过标准：不显著劣于首次实测基线，正式阈值待确认",
                 "造数策略": "使用本轮创建的有效测试数据",
                 "风险说明": "无正式阈值，交付前待确认",
                 "是否纳入本轮测试": "是",
@@ -690,11 +690,21 @@ class TestDesignWorkflowTests(unittest.TestCase):
             self.assertTrue(paths["import"].exists())
             with batch_status.open("r", encoding="utf-8-sig", newline="") as fp:
                 status = next(csv.DictReader(fp))
-            self.assertEqual(status["状态"], "已完成")
+            self.assertEqual(status["状态"], "待Review")
             self.assertEqual(status["JSON分片状态"], "已完成")
             self.assertEqual(status["功能用例数"], "3")
             self.assertEqual(status["性能场景数"], "1")
             self.assertEqual(status["下一步动作"], "执行一次最终语义Review")
+            review_file = batch_status.parent / "final-review.md"
+            review_file.write_text(
+                "# 最终Review\n\nReview结论：双Excel同源，页面事实与主验证用例映射一致，允许收口。",
+                encoding="utf-8",
+            )
+            excel_tools.complete_final_review(batch_status, review_file, "BATCH-001")
+            with batch_status.open("r", encoding="utf-8-sig", newline="") as fp:
+                status = next(csv.DictReader(fp))
+            self.assertEqual(status["状态"], "已完成")
+            self.assertEqual(status["下一步动作"], "完成")
 
     def test_invalid_json_fails_before_workbook_generation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -706,6 +716,178 @@ class TestDesignWorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "failed JSON syntax validation"):
                 excel_tools.compile_formal_workbook(FORMAL_TEMPLATE, shards_dir, output)
             self.assertFalse(output.exists())
+
+    def test_generated_dfx_must_land_in_same_function(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            shards_dir, _, _ = self.build_valid_shards_and_discovery(temp)
+            shard = shards_dir / "01-core.json"
+            data = json.loads(shard.read_text(encoding="utf-8"))
+            data["测试场景矩阵"]["rows"][0]["功能点"] = "另一个功能"
+            shard.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "no matching functional case"):
+                excel_tools.load_design_shards(shards_dir, FORMAL_TEMPLATE)
+
+    def test_page_fact_upsert_is_idempotent_and_checkpoint_precedes_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            page_discovery = Path(temp_dir) / "page-discovery.csv"
+            shutil.copy2(
+                REPO_ROOT / "docs" / "test-assets" / "batch-runs" / "templates" / "page-discovery-template.csv",
+                page_discovery,
+            )
+            observed = {
+                "批次ID": "BATCH-001",
+                "最小标题路径": "一级模块>目标页面",
+                "页面/入口": "目标页面",
+                "元素名称/文案": "模式选择",
+                "元素类型": "下拉框",
+                "交互方式": "展开并选择",
+                "适用DFX维度": "DFT功能",
+                "适用DFX场景": "正向流程",
+                "完整点击路径": "一级模块>目标页面>模式选择",
+                "预期/观察行为": "下拉框可展开",
+                "业务依据/规则来源": "页面观察",
+                "事实状态": "待确认",
+                "是否已生成用例": "否",
+                "覆盖状态": "待确认",
+                "未覆盖/待确认原因": "尚未逐项选择",
+            }
+            external_risk = {
+                "批次ID": "BATCH-001",
+                "最小标题路径": "一级模块>目标页面",
+                "页面/入口": "目标页面",
+                "元素名称/文案": "其他角色权限范围",
+                "元素类型": "外部依赖",
+                "交互方式": "需其他账号",
+                "适用DFX维度": "DFS安全",
+                "适用DFX场景": "权限控制",
+                "完整点击路径": "一级模块>目标页面",
+                "业务依据/规则来源": "权限设计",
+                "事实状态": "待确认",
+                "是否已生成用例": "否",
+                "覆盖状态": "待确认",
+                "未覆盖/待确认原因": "缺少其他角色账号和权限说明",
+            }
+            first = excel_tools.upsert_page_facts(page_discovery, [observed, external_risk])
+            second = excel_tools.upsert_page_facts(page_discovery, [observed, external_risk])
+            self.assertEqual(first["inserted"], 2)
+            self.assertEqual(second["absorbed"], 2)
+            checkpoint = excel_tools.page_fact_checkpoint(page_discovery)
+            self.assertEqual(len(checkpoint["页面待执行"]), 1)
+            self.assertEqual(len(checkpoint["需用户确认"]), 1)
+            self.assertFalse(checkpoint["可进入用例规划"])
+
+            tested = dict(observed)
+            tested.update(
+                {
+                    "选项取值/输入值": "选项A；选项B",
+                    "联动/依赖变化": "选项A和选项B分别切换对应配置区",
+                    "结果分支/后续状态": "选择后保持对应值并展示对应配置",
+                    "预期/观察行为": "两个选项均可选择且联动结果不同",
+                    "业务依据/规则来源": "页面实探",
+                    "测试数据来源": "本轮页面实探",
+                    "事实状态": "已实测",
+                    "覆盖状态": "待确认",
+                    "未覆盖/待确认原因": "等待用例规划",
+                }
+            )
+            updated = excel_tools.upsert_page_facts(page_discovery, [tested])
+            self.assertEqual(updated["updated"], 1)
+
+    def test_finite_options_require_independent_primary_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            shards_dir, _, page_discovery = self.build_valid_shards_and_discovery(temp)
+            rows = excel_tools.load_design_shards(shards_dir, FORMAL_TEMPLATE)
+            with page_discovery.open("r", encoding="utf-8-sig", newline="") as fp:
+                reader = csv.DictReader(fp)
+                headers = reader.fieldnames or []
+                facts = list(reader)
+            fact = {header: "" for header in headers}
+            fact.update(
+                {
+                    "批次ID": "BATCH-001",
+                    "最小标题路径": "一级模块>目标页面",
+                    "页面/入口": "创建配置弹窗",
+                    "元素名称/文案": "模式选择",
+                    "元素类型": "下拉框",
+                    "交互方式": "选择并保存",
+                    "适用DFX维度": "DFT功能",
+                    "适用DFX场景": "正向流程",
+                    "选项取值/输入值": "选项A；选项B",
+                    "联动/依赖变化": "分别展示对应配置",
+                    "结果分支/后续状态": "保存后列表回显所选模式",
+                    "完整点击路径": "一级模块>目标页面>创建>模式选择",
+                    "预期/观察行为": "两个选项均保存成功",
+                    "业务依据/规则来源": "页面实探",
+                    "测试数据来源": "本轮测试数据",
+                    "事实状态": "已实测",
+                    "是否已生成用例": "是",
+                    "关联用例ID": "TC-CONNECT-001",
+                    "覆盖状态": "已覆盖",
+                }
+            )
+            facts.append(fact)
+            with page_discovery.open("w", encoding="utf-8-sig", newline="") as fp:
+                writer = csv.DictWriter(fp, fieldnames=headers)
+                writer.writeheader()
+                writer.writerows(facts)
+            with self.assertRaisesRegex(ValueError, "independently verified options/input classes"):
+                excel_tools.page_element_rows(page_discovery, rows["功能测试用例"])
+
+    def test_two_edit_fields_cannot_share_one_primary_case(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            shards_dir, _, page_discovery = self.build_valid_shards_and_discovery(temp)
+            rows = excel_tools.load_design_shards(shards_dir, FORMAL_TEMPLATE)
+            with page_discovery.open("r", encoding="utf-8-sig", newline="") as fp:
+                reader = csv.DictReader(fp)
+                headers = reader.fieldnames or []
+                facts = list(reader)
+            for name, value in [("字段A", "新值A"), ("字段B", "20")]:
+                fact = {header: "" for header in headers}
+                fact.update(
+                    {
+                        "批次ID": "BATCH-001",
+                        "最小标题路径": "一级模块>目标页面",
+                        "页面/入口": "编辑配置弹窗",
+                        "元素名称/文案": name,
+                        "元素类型": "输入框",
+                        "交互方式": "修改并保存",
+                        "适用DFX维度": "DFT功能",
+                        "适用DFX场景": "正向流程",
+                        "选项取值/输入值": value,
+                        "结果分支/后续状态": "保存后重新进入编辑弹窗并正确回显",
+                        "完整点击路径": f"一级模块>目标页面>编辑>{name}",
+                        "预期/观察行为": "保存成功且该字段生效，其他字段保持不变",
+                        "业务依据/规则来源": "页面实探",
+                        "测试数据来源": "本轮测试数据",
+                        "事实状态": "已实测",
+                        "是否已生成用例": "是",
+                        "关联用例ID": "TC-CONNECT-001",
+                        "覆盖状态": "已覆盖",
+                    }
+                )
+                facts.append(fact)
+            with page_discovery.open("w", encoding="utf-8-sig", newline="") as fp:
+                writer = csv.DictWriter(fp, fieldnames=headers)
+                writer.writeheader()
+                writer.writerows(facts)
+            with self.assertRaisesRegex(ValueError, "multiple independent configurable fields"):
+                excel_tools.page_element_rows(page_discovery, rows["功能测试用例"])
+
+    def test_suggested_performance_target_cannot_be_confirmed_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            shards_dir, _, _ = self.build_valid_shards_and_discovery(temp)
+            shard = shards_dir / "01-core.json"
+            data = json.loads(shard.read_text(encoding="utf-8"))
+            performance = data["性能测试设计"]["rows"][0]
+            performance["响应时间目标"] = "建议目标：响应时间小于2秒"
+            performance["通过标准"] = "响应时间小于2秒"
+            shard.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must preserve the 建议目标 provenance"):
+                excel_tools.load_design_shards(shards_dir, FORMAL_TEMPLATE)
 
     def test_ambiguous_expected_result_is_rejected_at_shard_load(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

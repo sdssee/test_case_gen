@@ -899,6 +899,28 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
             source_text = " ".join(targets + [row.get("通过标准", ""), row.get("风险说明", "")])
             if not any(marker in source_text for marker in ["需求", "基线", "建议", "待确认"]):
                 fail(f"{label} must identify target source as 需求/基线/建议/待确认")
+            response_target = row.get("响应时间目标", "")
+            pass_standard = row.get("通过标准", "")
+            source_requirements = {
+                "需求阈值": ["需求", "验收"],
+                "实测基线": ["实测基线", "基线", "测量"],
+                "建议目标": ["建议", "待确认"],
+                "待确认": ["待确认"],
+                "不适用": ["不适用"],
+            }
+            located_markers = [
+                (response_target.find(marker), marker)
+                for marker in source_requirements
+                if marker in response_target
+            ]
+            source_marker = min(located_markers)[1] if located_markers else ""
+            if source_marker and not any(
+                marker in pass_standard for marker in source_requirements[source_marker]
+            ):
+                fail(
+                    f"{label} 通过标准 must preserve {source_marker} provenance "
+                    "instead of presenting it as a confirmed threshold"
+                )
 
     risk_rows_raw = sheet_rows(workbook, "风险与待确认问题")
     require_headers(risk_rows_raw, ["编号", "类型", "关联DFX维度", "关联DFX场景", "描述", "影响范围", "建议处理方式"], "风险与待确认问题")
@@ -1401,6 +1423,7 @@ def validate_page_discovery_facts(
         fail("page-discovery.csv must contain at least one discovery row")
     case_ids = workbook_data["case_ids"]
     assert isinstance(case_ids, set)
+    primary_case_fields: dict[str, list[str]] = {}
     for index, row in enumerate(rows, start=2):
         page = row.get("页面/入口", "")
         element = row.get("元素名称/文案", "")
@@ -1409,13 +1432,31 @@ def validate_page_discovery_facts(
         fact_status = row.get("事实状态", "")
         if fact_status not in FACT_STATUSES:
             fail(f"page-discovery.csv row {index} 事实状态 must be one of {sorted(FACT_STATUSES)}: {fact_status}")
+        generated = row.get("是否已生成用例", "")
+        coverage = row.get("覆盖状态", "")
+        reason = row.get("未覆盖/待确认原因", "")
+        linked_ids = parse_ids(row.get("关联用例ID", ""))
+        if generated not in {"是", "否"}:
+            fail(f"page-discovery.csv row {index} 是否已生成用例 must be 是 or 否")
+        if coverage not in {"已覆盖", "不适用", "不测范围", "待确认"}:
+            fail(f"page-discovery.csv row {index} has invalid 覆盖状态: {coverage}")
+        if coverage != "已覆盖" and not reason:
+            fail(f"page-discovery.csv row {index} status {coverage} must fill 未覆盖/待确认原因")
+        if fact_status == "已实测" and coverage == "待确认":
+            fail(f"page-discovery.csv row {index} is 已实测 but coverage is still 待确认")
+        if generated == "否" and (linked_ids or coverage == "已覆盖"):
+            fail(f"page-discovery.csv row {index} cannot be 已覆盖/link cases when 是否已生成用例 is 否")
+        if row.get("预期/观察行为", "") in {"页面实探", "页面观察", "DFX设计", "已实测", "待确认"}:
+            fail(f"page-discovery.csv row {index} appears column-shifted at 预期/观察行为")
+        if row.get("测试数据来源", "") in FACT_STATUSES:
+            fail(f"page-discovery.csv row {index} appears column-shifted at source fields")
         if fact_status == "已实测" and is_selection_element(row):
             for field in ["选项取值/输入值", "联动/依赖变化", "结果分支/后续状态"]:
                 if not row.get(field, ""):
                     fail(f"page-discovery.csv row {index} tested selection must fill {field}: {page} / {element}")
-            if row.get("是否已生成用例", "") == "是":
+            if generated == "是":
                 option_count = len(observed_option_values(row.get("选项取值/输入值", "")))
-                linked_count = len(parse_ids(row.get("关联用例ID", "")))
+                linked_count = len(linked_ids)
                 if option_count > 1 and linked_count < option_count:
                     fail(
                         f"page-discovery.csv row {index} records {option_count} finite options but only "
@@ -1425,6 +1466,13 @@ def validate_page_discovery_facts(
             for field in ["选项取值/输入值", "预期/观察行为", "结果分支/后续状态"]:
                 if not row.get(field, ""):
                     fail(f"page-discovery.csv row {index} tested input must fill {field}: {page} / {element}")
+            if generated == "是":
+                input_class_count = len(observed_option_values(row.get("选项取值/输入值", "")))
+                if input_class_count > 1 and len(linked_ids) < input_class_count:
+                    fail(
+                        f"page-discovery.csv row {index} records {input_class_count} valid input classes "
+                        f"but only {len(linked_ids)} linked baseline cases: {page} / {element}"
+                    )
         if fact_status == "已实测" and is_edit_or_config_flow_element(row):
             for field in ["选项取值/输入值", "预期/观察行为", "结果分支/后续状态"]:
                 if not row.get(field, ""):
@@ -1433,13 +1481,32 @@ def validate_page_discovery_facts(
             for field in ["预期/观察行为", "结果分支/后续状态"]:
                 if not row.get(field, ""):
                     fail(f"page-discovery.csv row {index} tested delete flow must fill {field}: {page} / {element}")
-        if row.get("是否已生成用例", "") == "是":
-            linked_ids = parse_ids(row.get("关联用例ID", ""))
+        configurable_context = " ".join(
+            row.get(field, "")
+            for field in ["页面/入口", "元素名称/文案", "元素类型", "交互方式", "完整点击路径"]
+        )
+        action_control = any(marker in row.get("元素类型", "") for marker in ["按钮", "图标", "链接"])
+        if (
+            generated == "是"
+            and not action_control
+            and (is_selection_element(row) or is_input_element(row))
+            and any(marker in configurable_context for marker in ["新增", "创建", "编辑", "修改", "配置", "表单", "弹窗", "抽屉"])
+        ):
+            for case_id in linked_ids:
+                primary_case_fields.setdefault(case_id, []).append(element)
+        if generated == "是":
             if not linked_ids:
                 fail(f"page-discovery.csv row {index} generated coverage is missing 关联用例ID")
             unknown = sorted(linked_ids - case_ids)
             if unknown:
                 fail(f"page-discovery.csv row {index} references case IDs missing from workbook: {unknown}")
+    for case_id, fields in primary_case_fields.items():
+        unique_fields = list(dict.fromkeys(fields))
+        if len(unique_fields) > 1:
+            fail(
+                f"case {case_id} is primary validation for multiple independent configurable "
+                f"fields {unique_fields}; split into single-factor save cases"
+            )
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate generated test design deliverable workbook.")
     parser.add_argument("--workbook", required=True, type=Path)

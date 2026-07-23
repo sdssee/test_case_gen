@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import csv
+import json
 import os
 import shutil
 import tempfile
@@ -40,6 +41,373 @@ def load_shard_validator():
 
 
 class TestDesignWorkflowTests(unittest.TestCase):
+    def build_valid_shards_and_discovery(self, root: Path) -> tuple[Path, Path, Path]:
+        shards_dir = root / "shards"
+        shards_dir.mkdir(parents=True)
+        overview = {
+            "项目/模块": "通用产品 / 一级模块",
+            "需求名称": "目标页面功能",
+            "版本/迭代": "测试迭代",
+            "测试负责人": "待确认",
+            "需求来源": "页面实探",
+            "测试范围": "目标页面的连接与导航能力",
+            "不测范围": "当前页面外功能",
+            "测试类型": "功能、安全、性能设计",
+            "测试环境": "内网测试环境",
+            "主要风险": "输入处理和结果反馈",
+            "准入条件": "1. 测试环境可访问。",
+            "准出条件": "1. P1/P2用例设计完整。",
+            "待确认问题": "无",
+        }
+        case_one = {
+            "用例 ID": "TC-CONNECT-001",
+            "Story ID/需求 ID": "ST-001",
+            "模块": "一级模块",
+            "功能点": "连接测试",
+            "用例标题": "连接测试-使用有效地址执行",
+            "优先级": "P1",
+            "测试类型": "功能测试",
+            "DFX维度": "DFT功能",
+            "DFX场景": "正向流程",
+            "前置条件": "1. 内网测试环境可访问。",
+            "测试数据": "地址：192.168.1.20",
+            "操作步骤": "1. 登录系统，进入一级模块-目标页面。\n2. 输入192.168.1.20并点击连接。",
+            "预期结果": "1. 页面保留192.168.1.20。\n2. 结果区域显示连接成功。",
+            "实际结果": "",
+            "执行状态": "待执行",
+            "是否适合自动化": "是",
+            "关联风险": "",
+            "备注": "",
+        }
+        case_two = {
+            "用例 ID": "TC-NAV-001",
+            "Story ID/需求 ID": "ST-002",
+            "模块": "一级模块",
+            "功能点": "页面导航",
+            "用例标题": "页面导航-通过一级模块进入目标页面",
+            "优先级": "P2",
+            "测试类型": "功能测试",
+            "DFX维度": "DFT功能",
+            "DFX场景": "正向流程",
+            "前置条件": "1. 已登录系统。",
+            "测试数据": "",
+            "操作步骤": "1. 登录系统，进入一级模块-目标页面。\n2. 观察页面标题和功能区域。",
+            "预期结果": "1. 页面标题显示目标页面。\n2. 连接功能区域可见。",
+            "实际结果": "",
+            "执行状态": "待执行",
+            "是否适合自动化": "是",
+            "关联风险": "",
+            "备注": "",
+        }
+        dfx_case = {
+            "用例 ID": "TC-CONNECT-002",
+            "Story ID/需求 ID": "ST-001",
+            "模块": "一级模块",
+            "功能点": "连接测试",
+            "用例标题": "连接测试-输入只读安全标记验证命令隔离",
+            "优先级": "P3",
+            "测试类型": "安全性测试",
+            "DFX维度": "DFS安全",
+            "DFX场景": "注入防护",
+            "前置条件": "1. 已登录内网测试环境。",
+            "测试数据": "地址：;id",
+            "操作步骤": "1. 登录系统，进入一级模块-目标页面。\n2. 输入;id并点击连接。",
+            "预期结果": "1. 页面拒绝非法地址并显示明确错误提示。\n2. 结果区域不显示系统用户身份信息。",
+            "实际结果": "",
+            "执行状态": "待执行",
+            "是否适合自动化": "否",
+            "关联风险": "RISK-001",
+            "备注": "DFX设计：使用只读载荷",
+        }
+        shard_one = {
+            "分片ID": "SHARD-001",
+            "测试设计总览": {"rows": [overview]},
+            "需求用户故事拆解": {
+                "rows": [
+                    {
+                        "Story ID/需求 ID": "ST-001",
+                        "用户故事/需求描述": "作为用户，我需要执行连接测试。",
+                        "角色": "用户",
+                        "业务价值": "确认目标连通性",
+                        "验收标准": "1. 有效地址返回明确连接结果。",
+                        "业务规则": "使用当前测试环境执行",
+                        "前置条件": "测试环境可访问",
+                        "后置影响": "无",
+                        "依赖系统": "目标服务",
+                        "待确认问题": "无",
+                    },
+                    {
+                        "Story ID/需求 ID": "ST-002",
+                        "用户故事/需求描述": "作为用户，我需要从菜单进入目标页面。",
+                        "角色": "用户",
+                        "业务价值": "访问连接能力",
+                        "验收标准": "1. 页面入口可达。",
+                        "业务规则": "按真实菜单路径导航",
+                        "前置条件": "已登录",
+                        "后置影响": "无",
+                        "依赖系统": "无",
+                        "待确认问题": "无",
+                    },
+                ]
+            },
+            "测试场景矩阵": {
+                "rows": [
+                    {
+                        "场景 ID": "SC-001",
+                        "Story ID/需求 ID": "ST-001",
+                        "功能点": "连接测试",
+                        "测试维度": "功能测试",
+                        "DFX维度": "DFT功能",
+                        "DFX场景": "正向流程",
+                        "测试对象/页面元素": "地址输入框、连接按钮",
+                        "输入数据/状态条件": "有效内网地址",
+                        "观察点": "连接结果",
+                        "风险等级": "低",
+                        "优先级": "P1",
+                        "是否生成用例": "是",
+                        "备注": "已实测",
+                    },
+                    {
+                        "场景 ID": "SC-002",
+                        "Story ID/需求 ID": "ST-002",
+                        "功能点": "页面导航",
+                        "测试维度": "功能测试",
+                        "DFX维度": "DFT功能",
+                        "DFX场景": "正向流程",
+                        "测试对象/页面元素": "一级模块菜单",
+                        "输入数据/状态条件": "已登录",
+                        "观察点": "页面标题和功能区域",
+                        "风险等级": "低",
+                        "优先级": "P2",
+                        "是否生成用例": "是",
+                        "备注": "页面观察",
+                    },
+                ]
+            },
+            "功能测试用例": {"rows": [case_one, case_two]},
+            "性能测试设计": {
+                "rows": [
+                    {
+                        "性能场景 ID": "PERF-001",
+                        "Story ID/需求 ID": "ST-001",
+                        "业务链路": "打开目标页面并执行连接",
+                        "性能测试类型": "响应时间",
+                        "DFX维度": "DFP性能",
+                        "DFX场景": "响应时间",
+                        "目标用户量/并发数": "建议目标：1个用户",
+                        "TPS/QPS 目标": "不适用",
+                        "响应时间目标": "建议目标：以首次实测基线为准",
+                        "数据量级": "建议目标：1条有效地址",
+                        "测试时长": "建议目标：3次采样",
+                        "监控指标": "页面响应时间",
+                        "通过标准": "待确认：由需求方确认正式阈值",
+                        "造数策略": "使用本轮有效内网地址",
+                        "风险说明": "尚未测量，不标记为实测基线",
+                        "是否纳入本轮测试": "否",
+                    }
+                ]
+            },
+            "风险与待确认问题": {
+                "rows": [
+                    {
+                        "编号": "RISK-001",
+                        "类型": "安全风险",
+                        "关联DFX维度": "DFS安全",
+                        "关联DFX场景": "注入防护",
+                        "描述": "输入可能被错误解释为命令参数。",
+                        "影响范围": "连接功能",
+                        "风险等级": "高",
+                        "建议处理方式": "使用受控只读载荷验证输入隔离。",
+                        "负责人": "待确认",
+                        "状态": "待确认",
+                    }
+                ]
+            },
+            "自动化建议": {
+                "rows": [
+                    {
+                        "用例 ID/场景 ID": "TC-CONNECT-001",
+                        "自动化层级": "接口/UI组合",
+                        "自动化价值": "回归核心连接能力",
+                        "自动化优先级": "P1",
+                        "依赖数据": "稳定的内网测试地址",
+                        "Mock 需求": "可选模拟目标服务",
+                        "稳定性风险": "网络波动",
+                        "建议框架/工具": "接口断言结合Playwright页面检查",
+                        "备注": "断言稳定结果结构",
+                    },
+                    {
+                        "用例 ID/场景 ID": "TC-NAV-001",
+                        "自动化层级": "UI自动化",
+                        "自动化价值": "回归菜单可达性",
+                        "自动化优先级": "P2",
+                        "依赖数据": "可登录账号",
+                        "Mock 需求": "无",
+                        "稳定性风险": "菜单权限变化",
+                        "建议框架/工具": "Playwright",
+                        "备注": "检查真实菜单和页面标题",
+                    },
+                ]
+            },
+        }
+        shard_two = {
+            "分片ID": "SHARD-002",
+            "测试场景矩阵": {
+                "rows": [
+                    {
+                        "场景 ID": "SC-003",
+                        "Story ID/需求 ID": "ST-001",
+                        "功能点": "连接测试",
+                        "测试维度": "安全性测试",
+                        "DFX维度": "DFS安全",
+                        "DFX场景": "注入防护",
+                        "测试对象/页面元素": "地址输入框、连接按钮",
+                        "输入数据/状态条件": "只读安全标记",
+                        "观察点": "错误提示与无命令回显",
+                        "风险等级": "高",
+                        "优先级": "P3",
+                        "是否生成用例": "是",
+                        "备注": "DFX设计",
+                    }
+                ]
+            },
+            "功能测试用例": {"rows": [dfx_case]},
+            "自动化建议": {
+                "rows": [
+                    {
+                        "用例 ID/场景 ID": "TC-CONNECT-002",
+                        "自动化层级": "安全接口测试",
+                        "自动化价值": "验证输入隔离",
+                        "自动化优先级": "P2",
+                        "依赖数据": "隔离测试环境",
+                        "Mock 需求": "无",
+                        "稳定性风险": "禁止在共享环境执行破坏性载荷",
+                        "建议框架/工具": "受控安全测试脚本",
+                        "备注": "仅使用只读载荷",
+                    }
+                ]
+            },
+        }
+        (shards_dir / "01-core.json").write_text(
+            json.dumps(shard_one, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (shards_dir / "02-dfx.json").write_text(
+            json.dumps(shard_two, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        run_dir = root / "run"
+        templates = REPO_ROOT / "docs" / "test-assets" / "batch-runs" / "templates"
+        run_dir.mkdir(parents=True)
+        (run_dir / "artifacts").mkdir()
+        batch_status = run_dir / "batch-status.csv"
+        page_discovery = run_dir / "page-discovery.csv"
+        shutil.copy2(templates / "batch-status-template.csv", batch_status)
+        shutil.copy2(templates / "page-discovery-template.csv", page_discovery)
+        excel_tools.write_single_csv_row(
+            batch_status,
+            {
+                "批次ID": "BATCH-001",
+                "一级模块": "一级模块",
+                "二级菜单": "目标页面",
+                "最小标题路径": "一级模块>目标页面",
+                "状态": "进行中",
+                "页面实探状态": "已完成",
+                "JSON分片状态": "进行中",
+                "功能用例数": "0",
+                "性能场景数": "0",
+            },
+        )
+        with page_discovery.open("r", encoding="utf-8-sig", newline="") as fp:
+            headers = next(csv.reader(fp))
+        discovery_rows = []
+        for values in [
+            {
+                "批次ID": "BATCH-001",
+                "一级模块": "一级模块",
+                "二级菜单": "目标页面",
+                "最小标题路径": "一级模块>目标页面",
+                "页面/入口": "目标页面",
+                "菜单路径/URL": "一级模块>目标页面",
+                "发现方式": "浏览器实探",
+                "角色/权限": "测试用户",
+                "数据状态": "默认",
+                "元素名称/文案": "地址输入框和连接按钮",
+                "元素类型": "输入框/按钮",
+                "交互方式": "输入并点击",
+                "适用DFX维度": "DFT功能",
+                "适用DFX场景": "正向流程",
+                "选项取值/输入值": "192.168.1.20",
+                "结果分支/后续状态": "显示成功结果",
+                "完整点击路径": "登录>一级模块>目标页面>连接",
+                "预期/观察行为": "有效地址连接成功",
+                "业务依据/规则来源": "页面实探",
+                "测试数据来源": "本轮内网测试数据",
+                "事实状态": "已实测",
+                "是否已生成用例": "是",
+                "关联用例ID": "TC-CONNECT-001",
+                "覆盖状态": "已覆盖",
+            },
+            {
+                "批次ID": "BATCH-001",
+                "一级模块": "一级模块",
+                "二级菜单": "目标页面",
+                "最小标题路径": "一级模块>目标页面",
+                "页面/入口": "目标页面",
+                "菜单路径/URL": "一级模块>目标页面",
+                "发现方式": "DFX策略",
+                "角色/权限": "测试用户",
+                "数据状态": "默认",
+                "元素名称/文案": "地址输入框和连接按钮-安全分支",
+                "元素类型": "输入框/按钮",
+                "交互方式": "输入并点击",
+                "适用DFX维度": "DFS安全",
+                "适用DFX场景": "注入防护",
+                "选项取值/输入值": "只读安全标记",
+                "结果分支/后续状态": "拒绝非法地址且不显示命令输出",
+                "完整点击路径": "登录>一级模块>目标页面>连接",
+                "预期/观察行为": "非法地址被明确拒绝且不显示身份信息",
+                "业务依据/规则来源": "DFX设计",
+                "测试数据来源": "安全策略",
+                "事实状态": "DFX设计",
+                "是否已生成用例": "是",
+                "关联用例ID": "TC-CONNECT-002",
+                "覆盖状态": "已覆盖",
+            },
+            {
+                "批次ID": "BATCH-001",
+                "一级模块": "一级模块",
+                "二级菜单": "目标页面",
+                "最小标题路径": "一级模块>目标页面",
+                "页面/入口": "目标页面",
+                "菜单路径/URL": "一级模块>目标页面",
+                "发现方式": "页面观察",
+                "角色/权限": "测试用户",
+                "数据状态": "已登录",
+                "元素名称/文案": "一级模块菜单",
+                "元素类型": "菜单",
+                "交互方式": "点击",
+                "适用DFX维度": "DFT功能",
+                "适用DFX场景": "正向流程",
+                "完整点击路径": "登录>一级模块>目标页面",
+                "预期/观察行为": "进入目标页面并显示页面标题",
+                "业务依据/规则来源": "页面观察",
+                "事实状态": "页面观察",
+                "是否已生成用例": "是",
+                "关联用例ID": "TC-NAV-001",
+                "覆盖状态": "已覆盖",
+            },
+        ]:
+            row = {header: "" for header in headers}
+            row.update(values)
+            discovery_rows.append(row)
+        with page_discovery.open("w", encoding="utf-8-sig", newline="") as fp:
+            writer = csv.DictWriter(fp, fieldnames=headers)
+            writer.writeheader()
+            writer.writerows(discovery_rows)
+        return shards_dir, batch_status, page_discovery
+
     def test_product_map_template_contains_only_generic_samples(self) -> None:
         workbook = load_workbook(PRODUCT_MAP_TEMPLATE, data_only=False)
         self.assertEqual(len(workbook.sheetnames), 10)
@@ -272,6 +640,134 @@ class TestDesignWorkflowTests(unittest.TestCase):
         validator = load_shard_validator()
         with self.assertRaises(AssertionError):
             validator.validate_compile(Path("fix_retry.py"))
+
+    def test_run_directory_rejects_any_task_specific_python(self) -> None:
+        validator = load_shard_validator()
+        with self.assertRaisesRegex(AssertionError, "Task-specific Python producers"):
+            validator.validate_compile(Path("fill_formal_excel.py"))
+
+    def test_compile_formal_uses_shards_and_page_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            shards_dir, _, page_discovery = self.build_valid_shards_and_discovery(temp)
+            output = temp / "formal.xlsx"
+            rows = excel_tools.compile_formal_workbook(
+                FORMAL_TEMPLATE,
+                shards_dir,
+                output,
+                page_discovery,
+            )
+
+            self.assertEqual(
+                [row["用例 ID"] for row in rows["功能测试用例"]],
+                ["TC-CONNECT-001", "TC-CONNECT-002", "TC-NAV-001"],
+            )
+            workbook = load_workbook(output, data_only=True)
+            overview = workbook["测试设计总览"]
+            overview_headers = excel_tools.header_map(overview)
+            self.assertEqual(overview.max_row, 2)
+            self.assertEqual(overview.cell(2, overview_headers["项目/模块"]).value, "通用产品 / 一级模块")
+            self.assertEqual(overview.cell(2, overview_headers["需求名称"]).value, "目标页面功能")
+            elements = workbook["页面元素覆盖清单"]
+            self.assertEqual(len(excel_tools.non_empty_rows(elements, excel_tools.header_map(elements))), 3)
+
+    def test_compile_delivery_updates_batch_only_after_valid_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            shards_dir, batch_status, page_discovery = self.build_valid_shards_and_discovery(project_root)
+            paths = excel_tools.compile_deliverables(
+                project_root=project_root,
+                shards_dir=shards_dir,
+                formal_template=FORMAL_TEMPLATE,
+                import_template=IMPORT_TEMPLATE,
+                module_path="一级模块>目标页面",
+                batch_status=batch_status,
+                batch_id="BATCH-001",
+                page_discovery=page_discovery,
+            )
+
+            self.assertTrue(paths["formal"].exists())
+            self.assertTrue(paths["import"].exists())
+            with batch_status.open("r", encoding="utf-8-sig", newline="") as fp:
+                status = next(csv.DictReader(fp))
+            self.assertEqual(status["状态"], "已完成")
+            self.assertEqual(status["JSON分片状态"], "已完成")
+            self.assertEqual(status["功能用例数"], "3")
+            self.assertEqual(status["性能场景数"], "1")
+            self.assertEqual(status["下一步动作"], "执行一次最终语义Review")
+
+    def test_invalid_json_fails_before_workbook_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            shards_dir = temp / "shards"
+            shards_dir.mkdir()
+            (shards_dir / "broken.json").write_text('{"功能测试用例": [}', encoding="utf-8")
+            output = temp / "formal.xlsx"
+            with self.assertRaisesRegex(ValueError, "failed JSON syntax validation"):
+                excel_tools.compile_formal_workbook(FORMAL_TEMPLATE, shards_dir, output)
+            self.assertFalse(output.exists())
+
+    def test_ambiguous_expected_result_is_rejected_at_shard_load(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            shards_dir, _, _ = self.build_valid_shards_and_discovery(temp)
+            shard = shards_dir / "01-core.json"
+            data = json.loads(shard.read_text(encoding="utf-8"))
+            data["功能测试用例"]["rows"][0]["预期结果"] = (
+                "1. 页面显示结果或错误提示。\n2. 页面保持可操作。"
+            )
+            shard.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "ambiguous expected result"):
+                excel_tools.load_design_shards(shards_dir, FORMAL_TEMPLATE)
+
+    def test_destructive_payload_is_rejected_without_sensitive_masking(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            shards_dir, _, _ = self.build_valid_shards_and_discovery(temp)
+            shard = shards_dir / "02-dfx.json"
+            data = json.loads(shard.read_text(encoding="utf-8"))
+            data["功能测试用例"]["rows"][0]["测试数据"] = "地址：;rm -rf /"
+            shard.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "destructive executable payload"):
+                excel_tools.load_design_shards(shards_dir, FORMAL_TEMPLATE)
+
+    def test_duplicate_automation_advice_is_rejected_at_shard_load(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            shards_dir, _, _ = self.build_valid_shards_and_discovery(temp)
+            core_path = shards_dir / "01-core.json"
+            dfx_path = shards_dir / "02-dfx.json"
+            core = json.loads(core_path.read_text(encoding="utf-8"))
+            dfx = json.loads(dfx_path.read_text(encoding="utf-8"))
+            duplicate = dict(core["自动化建议"]["rows"][0])
+            duplicate["用例 ID/场景 ID"] = dfx["自动化建议"]["rows"][0]["用例 ID/场景 ID"]
+            dfx["自动化建议"]["rows"][0] = duplicate
+            dfx_path.write_text(json.dumps(dfx, ensure_ascii=False, indent=2), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Automation suggestions .* are identical"):
+                excel_tools.load_design_shards(shards_dir, FORMAL_TEMPLATE)
+
+    def test_init_batch_creates_json_shard_directory_without_script_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            source_templates = (
+                REPO_ROOT / "docs" / "test-assets" / "batch-runs" / "templates"
+            )
+            target_templates = (
+                project_root / "docs" / "test-assets" / "batch-runs" / "templates"
+            )
+            shutil.copytree(source_templates, target_templates)
+            run_dir = excel_tools.init_batch_run(
+                project_root=project_root,
+                run_id="RUN-001",
+                module_path="一级模块>目标页面",
+                batch_id="BATCH-001",
+            )
+            self.assertTrue((run_dir / "artifacts" / "shards").is_dir())
+            self.assertFalse((run_dir / "artifacts" / "scripts").exists())
+
+    def test_page_discovery_does_not_implicitly_enable_product_map(self) -> None:
+        wrapper = (REPO_ROOT / "scripts" / "validate-test-design-deliverable.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("$PageDiscoveryPath -and -not $ProductMapPath", wrapper)
 
     def test_historical_discovery_migration_does_not_claim_unverified_work(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

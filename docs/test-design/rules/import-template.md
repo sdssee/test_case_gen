@@ -7,7 +7,7 @@
 - 不得在正式测试设计 Excel 中新增 `测试系统导入用例` Sheet。
 - 导入内容必须从 `功能测试用例` Sheet 派生。
 - 正式Excel和导入Excel必须使用同一次功能用例汇总，不得分别理解或修正用例。
-- 随批次交付优先使用 `scripts/test_design_excel_tools.py complete-deliverables` 统一生成；只需单独生成导入文件时才使用 `generate-import` 或同等表头映射逻辑。
+- 新批次交付使用`scripts/test_design_excel_tools.py compile-deliverables`从现有JSON分片统一生成；历史正式草稿恢复可使用`complete-deliverables`，只需单独生成导入文件时才使用`generate-import`。
 - 禁止批次脚本按固定列序号数组直接写入导入模板。
 
 ## 字段约束

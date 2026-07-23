@@ -27,9 +27,6 @@ if ($BatchStatusPath) {
     $PageDiscoveryPath = $candidatePageDiscovery
   }
 }
-if ($PageDiscoveryPath -and -not $ProductMapPath) {
-  $ProductMapPath = Join-Path (Split-Path -Parent $scriptDir) "docs\test-assets\product-map.xlsx"
-}
 if ($ProductMapPath) {
   $argsList += @("--product-map", $ProductMapPath)
 }

@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import uuid
+from collections import OrderedDict
 from copy import copy, deepcopy
 from datetime import date
 from pathlib import Path
@@ -35,6 +38,113 @@ FORMAL_SHEETS = [
     "自动化建议",
     "页面元素覆盖清单",
 ]
+SHEET_ROW_KEYS = {
+    "测试设计总览": None,
+    "需求用户故事拆解": "Story ID/需求 ID",
+    "测试场景矩阵": "场景 ID",
+    "功能测试用例": "用例 ID",
+    "性能测试设计": "性能场景 ID",
+    "风险与待确认问题": "编号",
+    "自动化建议": "用例 ID/场景 ID",
+    "页面元素覆盖清单": "元素 ID",
+}
+SHEET_REQUIRED_FIELDS = {
+    "测试设计总览": [
+        "项目/模块",
+        "需求名称",
+        "版本/迭代",
+        "测试负责人",
+        "需求来源",
+        "测试范围",
+        "不测范围",
+        "测试类型",
+        "测试环境",
+        "主要风险",
+        "准入条件",
+        "准出条件",
+        "待确认问题",
+    ],
+    "需求用户故事拆解": ["Story ID/需求 ID", "用户故事/需求描述", "验收标准"],
+    "测试场景矩阵": [
+        "场景 ID",
+        "功能点",
+        "测试维度",
+        "DFX维度",
+        "DFX场景",
+        "测试对象/页面元素",
+        "输入数据/状态条件",
+        "观察点",
+        "优先级",
+        "是否生成用例",
+    ],
+    "功能测试用例": [
+        "用例 ID",
+        "Story ID/需求 ID",
+        "模块",
+        "功能点",
+        "用例标题",
+        "优先级",
+        "测试类型",
+        "DFX维度",
+        "DFX场景",
+        "前置条件",
+        "操作步骤",
+        "预期结果",
+        "是否适合自动化",
+    ],
+    "性能测试设计": [
+        "性能场景 ID",
+        "业务链路",
+        "性能测试类型",
+        "DFX维度",
+        "DFX场景",
+        "响应时间目标",
+        "监控指标",
+        "通过标准",
+        "是否纳入本轮测试",
+    ],
+    "风险与待确认问题": ["编号", "类型", "描述", "影响范围", "风险等级", "建议处理方式", "状态"],
+    "自动化建议": [
+        "用例 ID/场景 ID",
+        "自动化层级",
+        "自动化价值",
+        "自动化优先级",
+        "依赖数据",
+        "稳定性风险",
+        "建议框架/工具",
+    ],
+    "页面元素覆盖清单": [
+        "元素 ID",
+        "页面/入口",
+        "页面 URL/菜单路径",
+        "元素名称/文案",
+        "元素类型",
+        "交互方式",
+        "适用DFX维度",
+        "适用DFX场景",
+        "预期行为",
+        "覆盖状态",
+        "发现方式",
+    ],
+}
+FACT_STATUSES = {"已实测", "页面观察", "DFX设计", "待确认"}
+AMBIGUOUS_EXPECTED_PATTERNS = (
+    r"结果或错误",
+    r"成功或失败",
+    r"接受.{0,30}或.{0,30}截断",
+    r"提示.{0,30}或.{0,30}报错",
+    r"页面正常响应",
+    r"系统处理正确",
+    r"结果符合预期",
+)
+DESTRUCTIVE_PAYLOAD_PATTERNS = (
+    r"(?i)\brm\s+-rf\b",
+    r"(?i)\bformat\s+[a-z]:",
+    r"(?i)\bdel\s+/[fsq]",
+    r"(?i)\bdrop\s+(database|schema)\b",
+    r"(?i)\btruncate\s+table\b",
+)
+PERFORMANCE_SOURCE_MARKERS = ("需求阈值", "实测基线", "建议目标", "待确认", "不适用")
 IMPORT_MULTILINE_FIELDS = ["测试步骤描述", "测试步骤预期结果", "前置条件", "测试用例说明", "备注"]
 FORMAL_MULTILINE_FIELDS = {
     "测试设计总览": ["测试范围", "不测范围", "主要风险", "准入条件", "准出条件", "待确认问题"],
@@ -362,6 +472,369 @@ def prepare_formal_workbook(template: Path, output: Path) -> None:
     wb.save(output)
 
 
+def _section_rows(data: object, section_name: str) -> list[dict[str, object]]:
+    if not isinstance(data, dict):
+        raise ValueError("JSON shard root must be an object")
+    section = data.get(section_name)
+    if section is None:
+        return []
+    if isinstance(section, dict):
+        section = section.get("rows")
+    if not isinstance(section, list):
+        raise ValueError(f"{section_name} must be a rows array or an object containing a rows array")
+    invalid_rows = [index for index, row in enumerate(section, start=1) if not isinstance(row, dict)]
+    if invalid_rows:
+        raise ValueError(f"{section_name} contains non-object rows at positions: {invalid_rows}")
+    return section
+
+
+def _normalized_row(row: dict[str, object]) -> dict[str, str]:
+    return {
+        str(key).strip(): "" if value is None else str(value).strip()
+        for key, value in row.items()
+    }
+
+
+def _numbered_lines(value: str, label: str) -> None:
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError(f"{label} must not be empty")
+    for expected_number, line in enumerate(lines, start=1):
+        match = re.match(r"^(\d+)\.\s*\S+", line)
+        if not match or int(match.group(1)) != expected_number:
+            raise ValueError(f"{label} must use consecutive numbered lines; got: {line}")
+
+
+def _validate_case_row(row: dict[str, str], source: Path, index: int) -> None:
+    label = f"{source.name} 功能测试用例 row {index}"
+    function_point = row["功能点"]
+    if not row["用例标题"].startswith(f"{function_point}-"):
+        raise ValueError(f"{label} title must start with 功能点-: {row['用例标题']}")
+    _numbered_lines(row["操作步骤"], f"{label} 操作步骤")
+    _numbered_lines(row["预期结果"], f"{label} 预期结果")
+    first_steps = "\n".join(row["操作步骤"].splitlines()[:3])
+    entry_markers = ("登录", "打开系统", "访问系统", "进入系统", "打开平台", "访问平台", "进入平台", "URL")
+    if not any(marker in first_steps for marker in entry_markers):
+        raise ValueError(f"{label} must start from the system/project entry")
+    if not any(marker in first_steps for marker in ("菜单", "模块", "导航", "路径", ">", "-", "—", "－", "页面")):
+        raise ValueError(f"{label} must include the business navigation path before control operations")
+    expected = row["预期结果"]
+    for pattern in AMBIGUOUS_EXPECTED_PATTERNS:
+        if re.search(pattern, expected):
+            raise ValueError(f"{label} contains an ambiguous expected result: {pattern}")
+    executable_text = "\n".join([row.get("测试数据", ""), row["操作步骤"]])
+    for pattern in DESTRUCTIVE_PAYLOAD_PATTERNS:
+        if re.search(pattern, executable_text):
+            raise ValueError(
+                f"{label} contains a destructive executable payload. "
+                "Use a non-destructive marker or read-only payload without masking internal test data."
+            )
+
+
+def _validate_performance_row(row: dict[str, str], source: Path, index: int) -> None:
+    target = row.get("响应时间目标", "")
+    if not any(marker in target for marker in PERFORMANCE_SOURCE_MARKERS):
+        raise ValueError(
+            f"{source.name} 性能测试设计 row {index} 响应时间目标 must identify its source as "
+            f"one of {PERFORMANCE_SOURCE_MARKERS}"
+        )
+    if "实测基线" in target:
+        evidence = "\n".join(
+            [
+                row.get("通过标准", ""),
+                row.get("造数策略", ""),
+                row.get("风险说明", ""),
+            ]
+        )
+        if not any(marker in evidence for marker in ("采样", "测量", "记录", "基线")):
+            raise ValueError(
+                f"{source.name} 性能测试设计 row {index} claims an 实测基线 without measurement provenance"
+            )
+
+
+def _validate_shard_row(
+    section_name: str,
+    row: dict[str, str],
+    allowed_headers: set[str],
+    source: Path,
+    index: int,
+) -> None:
+    unknown = sorted(set(row) - allowed_headers)
+    if unknown:
+        raise ValueError(f"{source.name} {section_name} row {index} has unknown fields: {unknown}")
+    missing = [field for field in SHEET_REQUIRED_FIELDS[section_name] if not row.get(field, "").strip()]
+    if missing:
+        raise ValueError(f"{source.name} {section_name} row {index} is missing required fields: {missing}")
+    if section_name == "功能测试用例":
+        _validate_case_row(row, source, index)
+    elif section_name == "性能测试设计":
+        _validate_performance_row(row, source, index)
+
+
+def load_design_shards(shards_dir: Path, formal_template: Path) -> dict[str, list[dict[str, str]]]:
+    """Load, validate and deterministically merge existing per-function JSON shards."""
+    if not shards_dir.exists():
+        raise ValueError(f"JSON shard directory not found: {shards_dir}")
+    generated_python = sorted(shards_dir.rglob("*.py"))
+    if generated_python:
+        names = ", ".join(path.name for path in generated_python[:5])
+        raise ValueError(
+            f"Run directories must not contain task-specific Python producers: {names}. "
+            "Use compile-deliverables with JSON shards instead."
+        )
+    shard_files = sorted(shards_dir.rglob("*.json"))
+    if not shard_files:
+        raise ValueError(f"No JSON shards found under: {shards_dir}")
+
+    template_wb = load_workbook(formal_template, read_only=True, data_only=False)
+    allowed_by_sheet = {
+        sheet_name: set(header_map(template_wb[sheet_name]))
+        for sheet_name in FORMAL_SHEETS
+    }
+    template_wb.close()
+    merged: dict[str, OrderedDict[str, dict[str, str]]] = {
+        sheet_name: OrderedDict() for sheet_name in FORMAL_SHEETS
+    }
+    singleton_overview: dict[str, str] | None = None
+
+    for shard_path in shard_files:
+        try:
+            with shard_path.open("r", encoding="utf-8-sig") as fp:
+                data = json.load(fp)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"{shard_path} failed JSON syntax validation: line {exc.lineno}, "
+                f"column {exc.colno}: {exc.msg}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise ValueError(f"{shard_path} must contain a JSON object")
+        for section_name in FORMAL_SHEETS:
+            for index, raw_row in enumerate(_section_rows(data, section_name), start=1):
+                row = _normalized_row(raw_row)
+                _validate_shard_row(
+                    section_name,
+                    row,
+                    allowed_by_sheet[section_name],
+                    shard_path,
+                    index,
+                )
+                if section_name == "测试设计总览":
+                    if singleton_overview is None:
+                        singleton_overview = row
+                    elif singleton_overview != row:
+                        raise ValueError(
+                            f"Conflicting 测试设计总览 rows across JSON shards: {shard_path}"
+                        )
+                    continue
+                key_field = SHEET_ROW_KEYS[section_name]
+                assert key_field
+                key = row[key_field]
+                existing = merged[section_name].get(key)
+                if existing is None:
+                    merged[section_name][key] = row
+                elif existing != row:
+                    raise ValueError(
+                        f"Conflicting {section_name} key {key!r} across JSON shards: {shard_path}"
+                    )
+
+    if singleton_overview is None:
+        raise ValueError("JSON shards must contain exactly one 测试设计总览 row")
+    merged_rows: dict[str, list[dict[str, str]]] = {
+        section_name: list(rows.values()) for section_name, rows in merged.items()
+    }
+    merged_rows["测试设计总览"] = [singleton_overview]
+    for section_name in FORMAL_SHEETS[:-1]:
+        if not merged_rows[section_name]:
+            raise ValueError(f"JSON shards do not contain any rows for required section: {section_name}")
+
+    case_rows = merged_rows["功能测试用例"]
+    seen_bodies: dict[tuple[str, str], str] = {}
+    for row in case_rows:
+        body = (row["操作步骤"], row["预期结果"])
+        if body in seen_bodies:
+            raise ValueError(
+                f"Cases {seen_bodies[body]} and {row['用例 ID']} have identical steps and expected results"
+            )
+        seen_bodies[body] = row["用例 ID"]
+    automation_rows = merged_rows["自动化建议"]
+    seen_automation_bodies: dict[tuple[tuple[str, str], ...], str] = {}
+    for row in automation_rows:
+        body = tuple(
+            (field, value)
+            for field, value in row.items()
+            if field != SHEET_ROW_KEYS["自动化建议"]
+        )
+        if body in seen_automation_bodies:
+            raise ValueError(
+                f"Automation suggestions {seen_automation_bodies[body]} and "
+                f"{row['用例 ID/场景 ID']} are identical; write a targeted suggestion "
+                "or merge the referenced IDs into one row"
+            )
+        seen_automation_bodies[body] = row["用例 ID/场景 ID"]
+
+    function_order: OrderedDict[str, None] = OrderedDict()
+    for row in case_rows:
+        function_order.setdefault(row["功能点"], None)
+    function_rank = {name: index for index, name in enumerate(function_order)}
+    original_rank = {row["用例 ID"]: index for index, row in enumerate(case_rows)}
+    merged_rows["功能测试用例"] = sorted(
+        case_rows,
+        key=lambda row: (function_rank[row["功能点"]], original_rank[row["用例 ID"]]),
+    )
+    return merged_rows
+
+
+def _parse_case_ids(value: str) -> list[str]:
+    return [
+        item.strip()
+        for item in re.split(r"[,，;；\n]+", value or "")
+        if item.strip()
+    ]
+
+
+def page_element_rows(
+    page_discovery: Path,
+    case_rows: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    with page_discovery.open("r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.DictReader(fp)
+        headers = reader.fieldnames or []
+        discovery_rows = list(reader)
+    if not headers:
+        raise ValueError(f"page-discovery.csv has no header row: {page_discovery}")
+    case_by_id = {row["用例 ID"]: row for row in case_rows}
+    elements: list[dict[str, str]] = []
+    for index, source in enumerate(discovery_rows, start=1):
+        element_name = (source.get("元素名称/文案") or "").strip()
+        if not element_name:
+            continue
+        status = (source.get("事实状态") or "").strip()
+        if status not in FACT_STATUSES:
+            raise ValueError(
+                f"page-discovery.csv row {index} has invalid 事实状态 {status!r}; expected {sorted(FACT_STATUSES)}"
+            )
+        linked_ids = _parse_case_ids(source.get("关联用例ID", ""))
+        generated = (source.get("是否已生成用例") or "").strip()
+        coverage = (source.get("覆盖状态") or "").strip()
+        unknown_ids = [case_id for case_id in linked_ids if case_id not in case_by_id]
+        if unknown_ids:
+            raise ValueError(f"page-discovery.csv row {index} references unknown case IDs: {unknown_ids}")
+        if linked_ids and generated != "是":
+            raise ValueError(
+                f"page-discovery.csv row {index} links cases but 是否已生成用例 is not 是"
+            )
+        if generated == "是" and not linked_ids:
+            raise ValueError(
+                f"page-discovery.csv row {index} is generated but has no 关联用例ID"
+            )
+        if coverage == "已覆盖" and not linked_ids:
+            raise ValueError(
+                f"page-discovery.csv row {index} is 已覆盖 but has no 关联用例ID"
+            )
+        if status == "已实测":
+            element_type = source.get("元素类型", "")
+            if any(marker in element_type for marker in ("输入", "下拉", "选择", "单选", "开关")):
+                if not (source.get("选项取值/输入值") or "").strip():
+                    raise ValueError(
+                        f"page-discovery.csv row {index} is 已实测 but lacks 选项取值/输入值"
+                    )
+                if not (source.get("预期/观察行为") or "").strip():
+                    raise ValueError(
+                        f"page-discovery.csv row {index} is 已实测 but lacks 预期/观察行为"
+                    )
+        linked_dimensions = {
+            case_by_id[case_id].get("DFX维度", "")
+            for case_id in linked_ids
+            if case_by_id[case_id].get("DFX维度", "")
+        }
+        declared_dimensions = {
+            item.strip()
+            for item in re.split(r"[,，;；]+", source.get("适用DFX维度", ""))
+            if item.strip()
+        }
+        missing_dimensions = sorted(linked_dimensions - declared_dimensions)
+        if missing_dimensions:
+            raise ValueError(
+                f"page-discovery.csv row {index} is missing linked case DFX dimensions: {missing_dimensions}"
+            )
+        story_ids = list(
+            OrderedDict.fromkeys(
+                case_by_id[case_id].get("Story ID/需求 ID", "")
+                for case_id in linked_ids
+                if case_by_id[case_id].get("Story ID/需求 ID", "")
+            )
+        )
+        remarks = "\n".join(
+            value
+            for value in [
+                (source.get("未覆盖/待确认原因") or "").strip(),
+                (source.get("备注") or "").strip(),
+                f"事实状态：{status}",
+            ]
+            if value
+        )
+        elements.append(
+            {
+                "元素 ID": f"EL-{len(elements) + 1:03d}",
+                "Story ID/需求 ID": ",".join(story_ids),
+                "页面/入口": (source.get("页面/入口") or "").strip(),
+                "页面 URL/菜单路径": (source.get("菜单路径/URL") or "").strip(),
+                "元素名称/文案": element_name,
+                "元素类型": (source.get("元素类型") or "").strip(),
+                "交互方式": (source.get("交互方式") or "").strip(),
+                "适用DFX维度": (source.get("适用DFX维度") or "").strip(),
+                "适用DFX场景": (source.get("适用DFX场景") or "").strip(),
+                "前置状态/权限": ";".join(
+                    value
+                    for value in [
+                        (source.get("角色/权限") or "").strip(),
+                        (source.get("数据状态") or "").strip(),
+                    ]
+                    if value
+                ),
+                "预期行为": (source.get("预期/观察行为") or "").strip(),
+                "业务依据/规则来源": (source.get("业务依据/规则来源") or "").strip(),
+                "覆盖用例 ID": ",".join(linked_ids),
+                "覆盖状态": coverage,
+                "发现方式": (source.get("发现方式") or "").strip(),
+                "素材来源": (source.get("测试数据来源") or "").strip(),
+                "待确认问题/备注": remarks,
+            }
+        )
+    if not elements:
+        raise ValueError(f"page-discovery.csv contains no real page element rows: {page_discovery}")
+    return elements
+
+
+def compile_formal_workbook(
+    formal_template: Path,
+    shards_dir: Path,
+    output: Path,
+    page_discovery: Path | None = None,
+) -> dict[str, list[dict[str, str]]]:
+    """Compile all eight formal sheets from validated functional shards and page facts."""
+    rows_by_sheet = load_design_shards(shards_dir, formal_template)
+    if page_discovery:
+        rows_by_sheet["页面元素覆盖清单"] = page_element_rows(
+            page_discovery,
+            rows_by_sheet["功能测试用例"],
+        )
+    if not rows_by_sheet["页面元素覆盖清单"]:
+        raise ValueError(
+            "页面元素覆盖清单 must be provided by page-discovery.csv or existing JSON shards"
+        )
+    prepare_formal_workbook(formal_template, output)
+    workbook = load_workbook(output)
+    for sheet_name in FORMAL_SHEETS:
+        worksheet = workbook[sheet_name]
+        headers = header_map(worksheet)
+        for row_index, values in enumerate(rows_by_sheet[sheet_name], start=2):
+            write_mapped_row(worksheet, headers, row_index, values)
+    remove_workbook_tables_and_refresh_filters(workbook)
+    workbook.save(output)
+    return rows_by_sheet
+
+
 def write_mapped_row(ws, headers: dict[str, int], row_index: int, values: dict[str, str]) -> None:
     copy_row_style(ws, 2 if ws.max_row >= 2 else 1, row_index)
     for field, value in values.items():
@@ -391,7 +864,16 @@ def remove_rows_containing(ws, needles: list[str]) -> None:
             ws.delete_rows(row_index, 1)
 
 
-def update_batch_status_paths(batch_status: Path, batch_id: str | None, archive_rel: str, import_rel: str) -> list[dict[str, str]]:
+def update_batch_status_paths(
+    batch_status: Path,
+    batch_id: str | None,
+    archive_rel: str,
+    import_rel: str,
+    function_case_count: int | None = None,
+    performance_count: int | None = None,
+    page_discovery_completed: bool = False,
+    source_shards_validated: bool = False,
+) -> list[dict[str, str]]:
     if not batch_status:
         return []
     with batch_status.open("r", encoding="utf-8-sig", newline="") as fp:
@@ -422,8 +904,20 @@ def update_batch_status_paths(batch_status: Path, batch_id: str | None, archive_
         row["导入文件路径"] = import_rel
         if "导入文件已生成" in row:
             row["导入文件已生成"] = "是"
+        if "状态" in row:
+            row["状态"] = "已完成"
+        if page_discovery_completed and "页面实探状态" in row:
+            row["页面实探状态"] = "已完成"
+        if source_shards_validated and "JSON分片状态" in row:
+            row["JSON分片状态"] = "已完成"
+        if function_case_count is not None and "功能用例数" in row:
+            row["功能用例数"] = str(function_case_count)
+        if performance_count is not None and "性能场景数" in row:
+            row["性能场景数"] = str(performance_count)
         if "最后更新时间" in row:
             row["最后更新时间"] = date.today().isoformat()
+        if "下一步动作" in row:
+            row["下一步动作"] = "执行一次最终语义Review"
     with batch_status.open("w", encoding="utf-8-sig", newline="") as fp:
         writer = csv.DictWriter(fp, fieldnames=headers)
         writer.writeheader()
@@ -559,8 +1053,8 @@ def init_batch_run(
 
     run_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir = run_dir / "artifacts"
-    scripts_dir = artifacts_dir / "scripts"
-    scripts_dir.mkdir(parents=True, exist_ok=True)
+    shards_dir = artifacts_dir / "shards"
+    shards_dir.mkdir(parents=True, exist_ok=True)
 
     created: dict[str, bool] = {}
     for target_name, template_path in required_templates.items():
@@ -848,6 +1342,7 @@ def finalize_deliverables(
     product_map: Path | None = None,
     page_discovery: Path | None = None,
     product_name: str | None = None,
+    source_shards_validated: bool = False,
 ) -> dict[str, Path]:
     project_root = project_root.resolve()
     preflight_finalize_metadata(batch_status, batch_id, product_map, page_discovery)
@@ -900,11 +1395,25 @@ def finalize_deliverables(
                 stale.unlink()
 
     if batch_status:
+        formal_wb = load_workbook(module_archive, read_only=True, data_only=True)
+        function_case_count = len(non_empty_rows(
+            formal_wb["功能测试用例"],
+            header_map(formal_wb["功能测试用例"]),
+        ))
+        performance_count = len(non_empty_rows(
+            formal_wb["性能测试设计"],
+            header_map(formal_wb["性能测试设计"]),
+        ))
+        formal_wb.close()
         changes = update_batch_status_paths(
             batch_status,
             batch_id,
             relative_project_path(project_root, module_archive),
             relative_project_path(project_root, import_archive),
+            function_case_count,
+            performance_count,
+            page_discovery is not None,
+            source_shards_validated,
         )
         sync_batch_markdown_paths(batch_status, changes)
         cleanup_batch_artifacts(batch_status)
@@ -945,6 +1454,7 @@ def complete_deliverables(
     page_discovery: Path | None = None,
     product_name: str | None = None,
     scripts_path: Path | None = None,
+    source_shards_validated: bool = False,
 ) -> dict[str, Path]:
     project_root = project_root.resolve()
     preflight_finalize_metadata(batch_status, batch_id, product_map, page_discovery)
@@ -975,18 +1485,63 @@ def complete_deliverables(
             product_map,
             page_discovery,
             product_name,
+            source_shards_validated,
         )
 
     if import_workbook and import_workbook.resolve() != paths["import_archive"].resolve():
         atomic_publish_copies([(paths["import_archive"], import_workbook)])
 
-    validator_args = ["--workbook", str(paths["formal_archive"]), "--import-workbook", str(paths["import_archive"])]
     if product_map and page_discovery:
-        validator_args.extend(["--product-map", str(product_map), "--page-discovery", str(page_discovery)])
+        validator_args = [
+            "--workbook",
+            str(paths["formal_archive"]),
+            "--import-workbook",
+            str(paths["import_archive"]),
+            "--product-map",
+            str(product_map),
+            "--page-discovery",
+            str(page_discovery),
+        ]
         if batch_status:
             validator_args.extend(["--batch-status", str(batch_status)])
-    run_python_script(script_dir / "validate-test-design-deliverable.py", validator_args)
+        run_python_script(script_dir / "validate-test-design-deliverable.py", validator_args)
     return paths
+
+
+def compile_deliverables(
+    project_root: Path,
+    shards_dir: Path,
+    formal_template: Path,
+    import_template: Path,
+    module_path: str,
+    batch_status: Path | None = None,
+    batch_id: str | None = None,
+    product_map: Path | None = None,
+    page_discovery: Path | None = None,
+    product_name: str | None = None,
+) -> dict[str, Path]:
+    """Compile validated shards and atomically publish the canonical workbook pair."""
+    preflight_finalize_metadata(batch_status, batch_id, product_map, page_discovery)
+    with tempfile.TemporaryDirectory(prefix="test-design-compile-") as temp_dir_name:
+        formal_draft = Path(temp_dir_name) / "formal-from-shards.xlsx"
+        compile_formal_workbook(
+            formal_template=formal_template,
+            shards_dir=shards_dir,
+            output=formal_draft,
+            page_discovery=page_discovery,
+        )
+        return complete_deliverables(
+            project_root=project_root,
+            formal_workbook=formal_draft,
+            import_template=import_template,
+            module_path=module_path,
+            batch_status=batch_status,
+            batch_id=batch_id,
+            product_map=product_map,
+            page_discovery=page_discovery,
+            product_name=product_name,
+            source_shards_validated=True,
+        )
 
 
 def generate_import_workbook(
@@ -1133,6 +1688,21 @@ def main() -> int:
     complete.add_argument("--product-name")
     complete.add_argument("--scripts-path", type=Path)
 
+    compile_cmd = sub.add_parser(
+        "compile-deliverables",
+        help="Compile existing per-function JSON shards into all eight sheets and atomically publish both Excel files.",
+    )
+    compile_cmd.add_argument("--project-root", required=True, type=Path)
+    compile_cmd.add_argument("--shards-dir", required=True, type=Path)
+    compile_cmd.add_argument("--formal-template", required=True, type=Path)
+    compile_cmd.add_argument("--import-template", required=True, type=Path)
+    compile_cmd.add_argument("--module-path", required=True)
+    compile_cmd.add_argument("--batch-status", type=Path)
+    compile_cmd.add_argument("--batch-id")
+    compile_cmd.add_argument("--product-map", type=Path)
+    compile_cmd.add_argument("--page-discovery", type=Path)
+    compile_cmd.add_argument("--product-name")
+
     sync = sub.add_parser("sync-product-map", help="Sync product-map.xlsx from a formal workbook and page-discovery.csv.")
     sync.add_argument("--product-map", required=True, type=Path)
     sync.add_argument("--formal-workbook", required=True, type=Path)
@@ -1195,6 +1765,26 @@ def main() -> int:
             args.page_discovery,
             args.product_name,
             args.scripts_path,
+        )
+        print(f"FORMAL_WORKBOOK={paths['formal'].resolve()}")
+        print(f"IMPORT_WORKBOOK={paths['import'].resolve()}")
+    elif args.command == "compile-deliverables":
+        if args.page_discovery and not args.batch_status:
+            raise SystemExit(
+                "ERROR: --batch-status is required when --page-discovery is provided. "
+                "Keep batch-status.csv and page-discovery.csv in the same run directory."
+            )
+        paths = compile_deliverables(
+            project_root=args.project_root,
+            shards_dir=args.shards_dir,
+            formal_template=args.formal_template,
+            import_template=args.import_template,
+            module_path=args.module_path,
+            batch_status=args.batch_status,
+            batch_id=args.batch_id,
+            product_map=args.product_map,
+            page_discovery=args.page_discovery,
+            product_name=args.product_name,
         )
         print(f"FORMAL_WORKBOOK={paths['formal'].resolve()}")
         print(f"IMPORT_WORKBOOK={paths['import'].resolve()}")

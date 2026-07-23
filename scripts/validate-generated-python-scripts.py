@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import py_compile
 import re
 import sys
 from pathlib import Path
@@ -14,16 +13,6 @@ MAX_PYTHON_BYTES = 200 * 1024
 MAX_JSON_BYTES = 256 * 1024
 SCAN_EXTS = {".py", ".json", ".csv", ".md", ".txt"}
 
-FORBIDDEN_QUOTE_CHARS = {
-    "\u201c": "left double smart quote",
-    "\u201d": "right double smart quote",
-    "\u2018": "left single smart quote",
-    "\u2019": "right single smart quote",
-    "\u300c": "corner quote",
-    "\u300d": "corner quote",
-    "\u300e": "white corner quote",
-    "\u300f": "white corner quote",
-}
 GENERIC_FILLER_PHRASES = {
     "确认操作完成后页面功能正常可用",
     "页面正常响应",
@@ -44,19 +33,6 @@ def iter_generated_files(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in SCAN_EXTS)
 
 
-def validate_forbidden_quotes(path: Path) -> None:
-    text = path.read_text(encoding="utf-8-sig")
-    for line_number, line in enumerate(text.splitlines(), start=1):
-        for char, label in FORBIDDEN_QUOTE_CHARS.items():
-            column = line.find(char)
-            if column >= 0:
-                fail(
-                    f"{path}:{line_number}:{column + 1} contains {label} U+{ord(char):04X}. "
-                    "Generated Python scripts must serialize Chinese text with repr/json.dumps "
-                    "or use plain ASCII quote delimiters with escaped content."
-                )
-
-
 def validate_file_size(path: Path) -> None:
     suffix = path.suffix.lower()
     max_bytes = MAX_FILE_BYTES
@@ -75,12 +51,10 @@ def validate_file_size(path: Path) -> None:
 
 
 def validate_compile(path: Path) -> None:
-    if path.name.lower().startswith("fix_"):
-        fail(f"Temporary repair scripts are not allowed in a run directory: {path}")
-    try:
-        py_compile.compile(str(path), doraise=True)
-    except py_compile.PyCompileError as exc:
-        fail(f"{path} failed Python syntax validation:\n{exc.msg}")
+    fail(
+        f"Task-specific Python producers are not allowed in a run directory: {path}. "
+        "Use scripts/test_design_excel_tools.py compile-deliverables with JSON shards."
+    )
 
 
 def numbered_lines(value: str, label: str) -> None:
@@ -152,7 +126,6 @@ def main() -> int:
     for path in files:
         validate_file_size(path)
         if path.suffix.lower() == ".py":
-            validate_forbidden_quotes(path)
             validate_compile(path)
         elif path.suffix.lower() == ".json":
             for row in validate_json(path):

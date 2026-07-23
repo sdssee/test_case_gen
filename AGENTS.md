@@ -15,12 +15,12 @@
 - 页面事实使用`已实测/页面观察/DFX设计/待确认`区分来源。
 - 每个有限选项、每个有效输入等价类分别形成baseline Case，不默认组合。
 - CRUD和可选配置必须使用本轮测试数据按单因素完成真实保存、回显和生效验证。
-- 保留按功能块拆分的多个JSON；分片写入前完成编号、导航、排序、具体步骤/预期和确定性重复检查。
+- 保留按功能块拆分的多个JSON；每个分片一次写齐本功能的故事、场景、用例、性能、风险和自动化建议，并在写入当场完成语法、字段、编号、导航和确定性内容检查。
 - 普通选择、输入、查询按具体结果闭环；新增、编辑、删除和配置变更按业务事务闭环。
-- 禁止页面Hook、逐元素义务队列、自动返工循环、用例单一大JSON和`fix_*.py`临时修复脚本。
-- 正式工作簿固定8个Sheet；双Excel从同一次分片汇总生成并原子发布。
+- 禁止页面Hook、逐元素义务队列、自动返工循环、用例单一大JSON和run-dir内任何任务专用Python。
+- 正式工作簿固定8个Sheet；页面元素从`page-discovery.csv`编译，其余内容从同一次分片汇总，双Excel一次生成并原子发布。
 - 内网IP、URL、账号、密码、Token、密钥、Cookie、部署路径和测试载荷允许原样流通，不做敏感内容校验或脱敏。
-- 取消内容校验不改变操作边界：不得误改非本轮创建的数据。
+- 取消内容校验不改变操作边界：不得误改非本轮创建的数据；可执行安全用例不得使用破坏性载荷。
 
 ## 运行与Review
 
@@ -32,8 +32,7 @@
 ## 辅助命令
 
 ```powershell
-python scripts/test_design_excel_tools.py prepare-formal --template docs/test-design/codebuddy-test-design-template.xlsx --output <测试设计草稿.xlsx>
-python scripts/test_design_excel_tools.py complete-deliverables --project-root . --formal-workbook <测试设计草稿.xlsx> --import-template docs/test-design/测试用例模板.xlsx --module-path "<真实菜单路径>"
+python scripts/test_design_excel_tools.py compile-deliverables --project-root . --shards-dir <run-dir>/artifacts/shards --formal-template docs/test-design/codebuddy-test-design-template.xlsx --import-template docs/test-design/测试用例模板.xlsx --module-path "<真实菜单路径>" --batch-status <batch-status.csv> --page-discovery <page-discovery.csv>
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1 -Mode Fast
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1 -Mode Full
 ```

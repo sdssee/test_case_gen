@@ -1,6 +1,6 @@
 ---
 name: test-design
-description: 基于页面实探、需求参考与DFX策略生成8-Sheet测试设计和测试系统导入Excel。
+description: 基于页面实探、需求参考与DFX策略生成8-Sheet测试设计和测试系统导入Excel；适用于页面深探、功能/DFX用例设计、现有多JSON分片编译及双Excel交付。
 allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 ---
 
@@ -29,9 +29,9 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 5. 将事实持续写入现有 `page-discovery.csv`，使用 `已实测`、`页面观察`、`DFX设计`、`待确认`区分来源。不得把推断写成实测。
 6. DFX在Case规划时参与扩展。每个有限选项、每个有效输入等价类分别形成baseline Case；其他控件使用默认稳定值，不默认生成笛卡尔积。
 7. CRUD及可选配置项按单因素实际保存验证。新增验证创建成功与生效；编辑验证保存、回显和生效；删除只作用于本轮测试数据并分别验证取消和确认。
-8. 保留按功能块拆分的多个JSON。每个分片写入前一次完成编号、导航、功能排序、具体步骤/预期和确定性重复检查，不生成临时修复脚本。
-9. 正式测试设计固定8个Sheet；正式工作簿和导入工作簿从同一次分片汇总独立生成。
-10. 使用统一交付工具一次生成、校验和原子发布双Excel。最终路径使用工具返回值，不自行拼接。
+8. 保留按功能块拆分的多个JSON。每个分片包含本功能的故事、场景、功能用例、性能、风险和自动化建议；全局总览只在一个分片写一次。写完当前分片立即做JSON语法与结构自检，不生成任务专用Python。
+9. 正式测试设计固定8个Sheet；页面元素清单由`page-discovery.csv`确定性生成，其余Sheet由现有分片汇总生成。
+10. 只调用统一`compile-deliverables`命令一次生成、校验和原子发布双Excel。JSON失败时只修正当前分片，禁止绕过分片直接写Excel。
 11. 全部产物完成后只执行一次跨产物语义Review；分片写入时只做轻量结构自检，不建立自动返工循环。
 
 ## 关键质量规则
@@ -41,9 +41,10 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 下拉和输入以实际选择/输入及具体结果为闭环；新增、编辑、删除、配置变更必须完成业务事务并验证结果。
 - 重置、取消、关闭等独立功能不能因为在其他Case中辅助使用而丢失自己的主验证Case。
 - 不使用“页面正常响应”“结果符合预期”“确认操作完成后页面功能正常可用”等空泛语句。
+- 不使用“结果或错误”“接受或截断”“提示或报错”等不可判定预期；未实测内容使用`DFX设计`或`待确认`来源，不冒充页面结论。
 - 性能设计必须结合当前功能；无需求阈值时标记为实测基线、建议目标或待确认，不编造验收标准。
 - 内网IP、URL、账号、密码、Token、密钥、Cookie、部署路径和安全测试载荷允许原样用于本轮内网实探和交付，不做识别、脱敏、替换或拦截。
-- 内容可流通不改变操作边界：不得误改非本轮创建的数据。
+- 内容可流通不改变操作边界：不得误改非本轮创建的数据；可执行安全用例使用无破坏性标记或只读载荷。
 
 ## 运行产物
 
@@ -55,12 +56,12 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 按功能块拆分的JSON
 - `final-review.md`（仅在最终Review时创建）
 
-多页面、多模块或大范围任务额外保留精简 `batch-plan.md`。不预创建空白Review，不生成 `fix_*.py`。
+多页面、多模块或大范围任务额外保留精简 `batch-plan.md`。不预创建空白Review，不在run-dir生成任何`.py`。
 
 ## 交付命令
 
 ```powershell
-python scripts/test_design_excel_tools.py complete-deliverables --project-root . --formal-workbook <测试设计草稿.xlsx> --import-template docs/test-design/测试用例模板.xlsx --module-path "<真实菜单路径>" --batch-status <batch-status.csv> --page-discovery <page-discovery.csv>
+python scripts/test_design_excel_tools.py compile-deliverables --project-root . --shards-dir <run-dir>/artifacts/shards --formal-template docs/test-design/codebuddy-test-design-template.xlsx --import-template docs/test-design/测试用例模板.xlsx --module-path "<真实菜单路径>" --batch-status <batch-status.csv> --page-discovery <page-discovery.csv>
 ```
 
 完成后使用命令输出的 `FORMAL_WORKBOOK` 和 `IMPORT_WORKBOOK` 作为最终交付路径。

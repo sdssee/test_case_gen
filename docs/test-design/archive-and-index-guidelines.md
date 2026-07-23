@@ -94,13 +94,11 @@ docs/test-assets/product-map.xlsx
 大范围任务如存在`batch-plan.md`，已完成批次不得仍标记为执行中或待开始；最终`final-review.md`直接引用统一交付工具返回的实际路径。
 
 
-大范围任务禁止创建承载全量测试用例正文的单一中间文件，例如单个 Python、JSON、CSV、Markdown 或临时脚本文件。脚本只能用于当前批次的模板填充、格式转换或校验，并保存到本任务 artifacts/scripts/，不得把多个最小标题路径、多个批次或全产品测试用例先集中写入一个文件后再统一生成 Excel。每批的测试用例正文必须以当前批次正式测试设计 Excel、`page-discovery.csv` 和 `batch-status.csv` 为边界进行维护。当前批次 Python 临时脚本或 JSON/CSV/Markdown/TXT 数据分片也必须控制单文件体积，单个 Python 建议小于 200KB，单个 JSON/CSV/Markdown/TXT 中间文件建议小于 256KB；超过时继续按最小标题路径、页面域或功能块分片，不得用一个大 Python 文件或大 JSON 文件承载大量用例正文。
-
-如确需生成当前批次 Python 临时脚本，写入中文文本、菜单路径、测试步骤、预期结果或 JSON 数据时，必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件读取，禁止手工拼接包含中文弯引号、智能引号或未转义双引号的字符串字面量。执行前必须运行 `scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>`，通过单文件大小、JSON 语法、Python 语法编译和高风险引号扫描后才能执行。
+大范围任务按功能把用例正文写入`artifacts/shards/`中的多个JSON分片，禁止创建承载全量正文的单一大文件，也禁止在run-dir生成任务专用Python、临时填表脚本或修复脚本。分片由标准`compile-deliverables`命令统一解析、校验和编译；单个JSON过大时继续按最小标题路径、页面域或功能块拆分，不新增用例分片状态机或自动重试循环。
 
 正式测试设计、导入文件、运行账本、页面事实和`product-map.xlsx`允许保留本轮内网测试地址、账号、凭据和载荷，不执行敏感内容识别、脱敏、替换或交付拦截。
 
-每个批次正式写测试用例前，如果存在可访问页面、原型或桌面窗口，必须使用浏览器能力或 computer use 遍历当前批次最小标题路径对应模块、页面域或业务链路的所有可点击/可交互功能点。遍历结果必须同步到 `page-discovery.csv`、页面元素覆盖清单、功能测试用例和 `product-map.xlsx` 的产品模块地图、页面元素地图、业务对象地图、业务链路地图、模块能力索引、跨模块依赖关系和变更记录；无法确认业务规则的入口登记为待确认问题。
+每个批次正式写测试用例前，如果存在可访问页面、原型或桌面窗口，必须使用浏览器能力或 computer use 遍历当前批次最小标题路径对应模块、页面域或业务链路的所有可点击/可交互功能点。遍历结果必须同步到`page-discovery.csv`，并由编译器生成页面元素覆盖清单、驱动功能测试用例；无法确认且无法通过页面继续验证的业务规则登记为待确认问题。只有用户明确要求维护长期产品资产时，才额外同步`product-map.xlsx`。
 
 具体写测试用例时，必须在对应页面或功能点内做深遍历，覆盖所有可点击、可输入、可测试元素，包括按钮、链接、菜单、Tab、图标按钮、筛选、排序、分页、表格行操作、批量操作、输入框、下拉项、上传下载、弹窗、抽屉、开关、禁用态、空状态和错误态。
 
@@ -135,12 +133,9 @@ docs/test-assets/product-map.xlsx
 1. 将客户交付件保存到 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。
 2. 将正式测试设计最终版保存到 `docs/test-assets/modules/`。
 3. 如需导入测试系统，将导入文件副本保存到 `docs/test-assets/imports/`。
-4. 将本模块提供的能力、业务对象、关键状态、业务链路、可复用前置条件、可复用测试数据、跨模块依赖、影响分析和关联用例 ID 更新到 `product-map.xlsx`。
-   `product-map.xlsx` 的十个 Sheet 都必须沉淀真实产品资产，禁止保留 `示例产品`、`示例模块`、`示例页面` 等模板样例行；其中 `用例资产索引` 必须覆盖正式测试设计中的全部功能用例 ID，`页面元素地图` 必须覆盖正式测试设计中的全部页面元素。
+4. 用户明确要求维护长期产品资产时，再将本模块能力、业务对象、关键状态、业务链路、跨模块依赖和关联用例ID更新到`product-map.xlsx`；普通单次交付不隐式创建或校验产品版图。
 5. 如果用户人工修改了测试设计，最终版必须回存内部资产库，并更新产品版图中的变更记录。
-6. 生成正式测试设计 Excel 后，必须运行 `scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>`；大范围任务追加 `-BatchStatusPath <batch-status.csv>`，并强制读取同级 `page-discovery.csv` 与 `docs/test-assets/product-map.xlsx` 做产品版图同步校验；也可以显式追加 `-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>`，校验页面实探、正式 Excel 和产品版图之间的最小标题路径、页面元素、关联用例、用例资产索引和变更记录是否同步。
-
-批次交付收口优先使用 `scripts/test_design_excel_tools.py complete-deliverables`。该命令负责中间脚本预检、正式测试设计格式修复、导入文件生成、复制正式测试设计到客户交付目录和 `docs/test-assets/modules/`、复制导入文件到客户交付目录和 `docs/test-assets/imports/`、回写 `batch-status.csv` 的归档路径与导入文件路径，并清理 artifacts/scripts 下的 `__pycache__`。传入 `--page-discovery` 时必须同时传入 `--batch-status`；传入 `--product-map` 和 `--page-discovery` 时会调用 `sync-product-map` 同步产品版图。不要手工维护多份 Excel 副本，以免 deliverables、imports、modules 与批次账本不一致。
+6. 新批次使用`scripts/test_design_excel_tools.py compile-deliverables`一次完成JSON解析、8-Sheet编译、测试系统导入文件生成、双文件校验、原子发布和批次状态回写。`complete-deliverables`只用于历史正式草稿恢复；只有显式传入`--product-map`时才执行长期产品资产同步。不要手工维护多份Excel副本。
 
 ## 跨模块用例管理
 

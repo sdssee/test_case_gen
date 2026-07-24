@@ -20,12 +20,7 @@ your-project/
       测试用例模板.xlsx
       excel-template-spec.md
       rules/
-      current/
       deliverables/
-    test-assets/
-      modules/
-      imports/
-      batch-runs/
   scripts/
 ```
 
@@ -69,7 +64,7 @@ your-project/
 ```powershell
 python scripts/test_design_excel_tools.py complete-deliverables `
   --project-root . `
-  --formal-workbook docs/test-design/current/<测试设计.xlsx> `
+  --formal-workbook docs/test-design/deliverables/<测试设计.xlsx> `
   --import-template docs/test-design/测试用例模板.xlsx `
   --module-path "一级模块>二级菜单>三级菜单"
 ```
@@ -77,16 +72,6 @@ python scripts/test_design_excel_tools.py complete-deliverables `
 只需要单独生成导入文件时，可使用 `generate-import` 兼容命令。
 
 导入文件生成后，用 `-ImportWorkbookPath <导入文件.xlsx>` 追加校验。
-
-## 批次与资产
-
-- 客户交付件：`docs/test-design/current/`、`docs/test-design/deliverables/`
-- 模块归档：`docs/test-assets/modules/`
-- 导入副本：`docs/test-assets/imports/`
-- 批次账本：`docs/test-assets/batch-runs/`
-
-大范围任务必须建立 `docs/test-assets/batch-runs/<YYYYMMDD>_<任务标识>/`，并维护 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/`。
-页面实探或批次任务开始前，先运行 `python scripts/test_design_excel_tools.py init-batch-run --project-root . --run-id <YYYYMMDD_任务标识> --module-path "<一级>><二级>><三级>" --batch-id BATCH-001` 初始化标准批次账本；传入 `--page-discovery` 收口时必须同时传入 `--batch-status`。
 
 ## 自检命令
 
@@ -100,10 +85,4 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
-```
-
-当前批次 Python 临时脚本预检：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scripts.ps1 -Path docs/test-assets/batch-runs/<任务>/artifacts/scripts
 ```

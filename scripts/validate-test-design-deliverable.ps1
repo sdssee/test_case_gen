@@ -2,10 +2,6 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$WorkbookPath,
 
-  [string]$BatchStatusPath,
-
-  [string]$PageDiscoveryPath,
-
   [string]$ImportWorkbookPath
 )
 
@@ -18,16 +14,6 @@ if (-not (Test-Path $python)) {
 }
 
 $argsList = @((Join-Path $scriptDir "validate-test-design-deliverable.py"), "--workbook", $WorkbookPath)
-if ($BatchStatusPath) {
-  $argsList += @("--batch-status", $BatchStatusPath)
-  if (-not $PageDiscoveryPath) {
-    $candidatePageDiscovery = Join-Path (Split-Path -Parent $BatchStatusPath) "page-discovery.csv"
-    $PageDiscoveryPath = $candidatePageDiscovery
-  }
-}
-if ($PageDiscoveryPath) {
-  $argsList += @("--page-discovery", $PageDiscoveryPath)
-}
 if ($ImportWorkbookPath) {
   $argsList += @("--import-workbook", $ImportWorkbookPath)
 }

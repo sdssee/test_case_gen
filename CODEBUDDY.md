@@ -4,11 +4,11 @@
 
 ## 核心目标
 
-- 基于需求文档、用户故事、接口文档、页面截图、原型、可访问页面、PR Diff、缺陷单或已有用例，生成结构化测试设计。
+- 基于需求文档、用户故事、接口文档、页面截图、原型、可访问页面、缺陷单或已有用例，生成结构化测试设计。
 - 正式交付物优先使用 `docs/test-design/codebuddy-test-design-template.xlsx`。
 - 正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
 - 需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，不修改原模板。
-- 客户交付件放在 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。
+- 所有交付件统一放在 `docs/test-design/deliverables/`。
 
 ## 必读文件
 
@@ -43,9 +43,6 @@
 - 模块或批次正式写测试用例前，必须先综合评估 DFX 12 维度 × 4 场景覆盖，明确适用、不适用、待确认和需补充证据的维度，再进入用例设计。
 - 每批都必须覆盖功能测试、性能测试、异常、边界、权限、状态、数据一致性、风险、自动化建议和页面元素覆盖清单。
 - 异常值、边界值和测试策略必须按 DFX 覆盖评估结果落地，不得只写一句笼统策略；正式 Excel 必须填写 `DFX维度` 和 `DFX场景`，`场景类型`、`正向/反向` 不再作为测试策略字段；无法验证的 DFX 场景写入风险、性能设计或自动化建议。
-- 只要发生页面实探或生成 `page-discovery.csv`，必须先执行 `scripts/test_design_excel_tools.py init-batch-run` 初始化批次目录，并保留 `batch-plan.md`、`batch-status.csv`、`batch-review.md`、`page-discovery.csv` 和 `artifacts/` 五件套。
-- `batch-status.csv` 和 `page-discovery.csv` 必须使用标准模板表头，禁止自定义精简表头和字段错位。
-- 批次截图、临时脚本和证据必须放在当前任务 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享根目录 artifacts。
 - 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
 - 交付文件名只使用菜单/模块路径，不拼运行文件夹名、批次目录名或产品名；如 `module-path` 包含产品名前缀，传入 `--product-name` 自动去除，避免重复交付文件。
 - 导入文件 `执行方式` 默认 `手动`，也就是默认填写 `手动`；只有已有可运行、可维护且覆盖主要校验点的自动化资产，并且本次明确按自动化导入或关联资产时，才允许 `自动化`。
@@ -60,12 +57,6 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 ```
 
 
-页面实探或批次任务开始前运行：
-
-```powershell
-python scripts/test_design_excel_tools.py init-batch-run --project-root . --run-id <YYYYMMDD_任务标识> --module-path "<一级>><二级>><三级>" --batch-id BATCH-001
-```
-
 当前批次 Python 临时脚本或 JSON/CSV/Markdown/TXT 中间分片执行前运行：
 
 ```powershell
@@ -74,8 +65,8 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scrip
 
 该预检会检查单文件大小、JSON 语法、Python 语法和中文弯引号风险。
 
-## Git
+## Git 约定
 
-- 每次完成修改后运行 `git status`。
-- 修改完成且验证通过后，默认提交并推送到当前分支。
-- GitHub 提交信息使用中文。
+- 每次完成修改后检查 Git 变更。
+- 修改完成且验证通过后，提交当前修改并推送到 `origin`。
+- Commit Message 使用中文，简洁说明本次修改内容。

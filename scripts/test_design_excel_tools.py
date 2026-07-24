@@ -389,8 +389,7 @@ def write_single_csv_row(path: Path, values: dict[str, str]) -> None:
 
 
 def init_batch_run(project_root: Path, run_id: str, module_path: str, batch_id: str, product_name: str | None = None) -> Path:
-    run_dir = project_root / "docs" / "test-assets" / "batch-runs" / run_id
-    templates_dir = project_root / "docs" / "test-assets" / "batch-runs" / "templates"
+    raise RuntimeError("Legacy batch ledger initialization is no longer supported.")
     required_templates = {
         "batch-plan.md": templates_dir / "batch-plan-template.md",
         "batch-status.csv": templates_dir / "batch-status-template.csv",
@@ -492,9 +491,6 @@ def finalize_deliverables(
     formal_workbook: Path,
     import_workbook: Path,
     module_path: str,
-    batch_status: Path | None = None,
-    batch_id: str | None = None,
-    page_discovery: Path | None = None,
     product_name: str | None = None,
 ) -> None:
     project_root = project_root.resolve()
@@ -505,26 +501,11 @@ def finalize_deliverables(
     remove_workbook_tables_and_refresh_filters(import_wb)
     import_wb.save(import_workbook)
 
-    module_archive = project_root / "docs" / "test-assets" / "modules" / formal_name
-    import_archive = project_root / "docs" / "test-assets" / "imports" / import_name
-    current_copy = project_root / "docs" / "test-design" / "current" / formal_name
     deliverable_formal = project_root / "docs" / "test-design" / "deliverables" / formal_name
     deliverable_import = project_root / "docs" / "test-design" / "deliverables" / import_name
 
-    for target in [module_archive, current_copy, deliverable_formal]:
-        copy_workbook(formal_workbook, target)
-    for target in [import_archive, deliverable_import]:
-        copy_workbook(import_workbook, target)
-
-    if batch_status:
-        changes = update_batch_status_paths(
-            batch_status,
-            batch_id,
-            relative_project_path(project_root, module_archive),
-            relative_project_path(project_root, import_archive),
-        )
-        sync_batch_markdown_paths(batch_status, changes)
-        cleanup_batch_artifacts(batch_status)
+    copy_workbook(formal_workbook, deliverable_formal)
+    copy_workbook(import_workbook, deliverable_import)
 def run_python_script(script: Path, args: list[str]) -> None:
     completed = subprocess.run([sys.executable, str(script), *args], check=False)
     if completed.returncode:
@@ -537,19 +518,12 @@ def complete_deliverables(
     import_template: Path,
     module_path: str,
     import_workbook: Path | None = None,
-    batch_status: Path | None = None,
-    batch_id: str | None = None,
-    page_discovery: Path | None = None,
     product_name: str | None = None,
-    scripts_path: Path | None = None,
 ) -> None:
     project_root = project_root.resolve()
     script_dir = Path(__file__).resolve().parent
     _, _, import_name = deliverable_names(module_path, product_name)
-    target_import = import_workbook or (project_root / "docs" / "test-assets" / "imports" / import_name)
-
-    if scripts_path and scripts_path.exists():
-        run_python_script(script_dir / "validate-generated-python-scripts.py", ["--path", str(scripts_path)])
+    target_import = import_workbook or (project_root / "docs" / "test-design" / "deliverables" / import_name)
 
     apply_formal_workbook_styles(formal_workbook)
     generate_import_workbook(formal_workbook, import_template, target_import, module_path, product_name)
@@ -558,17 +532,10 @@ def complete_deliverables(
         formal_workbook,
         target_import,
         module_path,
-        batch_status,
-        batch_id,
-        page_discovery,
         product_name,
     )
 
     validator_args = ["--workbook", str(formal_workbook), "--import-workbook", str(target_import)]
-    if batch_status:
-        validator_args.extend(["--batch-status", str(batch_status)])
-    if page_discovery:
-        validator_args.extend(["--page-discovery", str(page_discovery)])
     run_python_script(script_dir / "validate-test-design-deliverable.py", validator_args)
 
 
@@ -681,21 +648,11 @@ def main() -> int:
     style.add_argument("--output", type=Path)
     style.add_argument("--template", type=Path)
 
-    init = sub.add_parser("init-batch-run", help="Create a standard batch-run ledger from templates before page discovery.")
-    init.add_argument("--project-root", required=True, type=Path)
-    init.add_argument("--run-id", required=True)
-    init.add_argument("--module-path", required=True)
-    init.add_argument("--batch-id", default="BATCH-001")
-    init.add_argument("--product-name")
-
-    finalize = sub.add_parser("finalize-deliverables", help="Copy validated workbooks to current/deliverables/internal archives and update batch-status paths.")
+    finalize = sub.add_parser("finalize-deliverables", help="Copy validated workbooks to deliverables.")
     finalize.add_argument("--project-root", required=True, type=Path)
     finalize.add_argument("--formal-workbook", required=True, type=Path)
     finalize.add_argument("--import-workbook", required=True, type=Path)
     finalize.add_argument("--module-path", required=True)
-    finalize.add_argument("--batch-status", type=Path)
-    finalize.add_argument("--batch-id")
-    finalize.add_argument("--page-discovery", type=Path)
     finalize.add_argument("--product-name")
 
     complete = sub.add_parser("complete-deliverables", help="One-shot precheck, style, import generation, finalize, and delivery validation.")
@@ -704,52 +661,29 @@ def main() -> int:
     complete.add_argument("--import-template", required=True, type=Path)
     complete.add_argument("--module-path", required=True)
     complete.add_argument("--import-workbook", type=Path)
-    complete.add_argument("--batch-status", type=Path)
-    complete.add_argument("--batch-id")
-    complete.add_argument("--page-discovery", type=Path)
     complete.add_argument("--product-name")
-    complete.add_argument("--scripts-path", type=Path)
 
     args = parser.parse_args()
     if args.command == "generate-import":
         generate_import_workbook(args.formal_workbook, args.import_template, args.output, args.module_path, args.product_name)
     elif args.command == "fix-formal-styles":
         apply_formal_workbook_styles(args.workbook, args.output, args.template)
-    elif args.command == "init-batch-run":
-        init_batch_run(args.project_root, args.run_id, args.module_path, args.batch_id, args.product_name)
     elif args.command == "finalize-deliverables":
-        if args.page_discovery and not args.batch_status:
-            raise SystemExit(
-                "ERROR: --batch-status is required when --page-discovery is provided. "
-                "Run init-batch-run first and keep batch-plan.md, batch-status.csv, batch-review.md, and page-discovery.csv together."
-            )
         finalize_deliverables(
             args.project_root,
             args.formal_workbook,
             args.import_workbook,
             args.module_path,
-            args.batch_status,
-            args.batch_id,
-            args.page_discovery,
             args.product_name,
         )
     elif args.command == "complete-deliverables":
-        if args.page_discovery and not args.batch_status:
-            raise SystemExit(
-                "ERROR: --batch-status is required when --page-discovery is provided. "
-                "Run init-batch-run first and keep batch-plan.md, batch-status.csv, batch-review.md, and page-discovery.csv together."
-            )
         complete_deliverables(
             args.project_root,
             args.formal_workbook,
             args.import_template,
             args.module_path,
             args.import_workbook,
-            args.batch_status,
-            args.batch_id,
-            args.page_discovery,
             args.product_name,
-            args.scripts_path,
         )
     return 0
 

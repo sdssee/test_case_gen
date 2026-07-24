@@ -7,8 +7,7 @@
 - `excel-template-spec.md`：模板字段说明。
 - `test-system-field-reference.md`：测试系统字段解释、必填/自动生成/下拉字段说明，已替代原 1.jpg、2.jpg、3.jpg 截图。
 - `rules/dfx-test-strategy.md`：DFX 12 维度 × 4 场景测试策略矩阵，用于规范异常、边界、性能、安全、可靠性等用例设计。
-- `current/`：当前任务客户交付件目录。
-- `deliverables/`：已交付给客户或测试系统的文件副本目录。
+- `deliverables/`：正式测试设计和测试系统导入文件的统一交付目录。
 
 使用 CodeBuddy 生成测试设计时，优先引用 `codebuddy-test-design-template.xlsx`。
 

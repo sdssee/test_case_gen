@@ -39,12 +39,6 @@
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
 ```
 
-大范围任务追加：
-
-```powershell
--BatchStatusPath <batch-status.csv>
-```
-
 生成导入文件后追加：
 
 ```powershell

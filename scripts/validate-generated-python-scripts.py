@@ -64,7 +64,7 @@ def validate_file_size(path: Path) -> None:
             f"{path} is {size} bytes, exceeding the generated intermediate file limit of {max_bytes} bytes. "
             "Do not write a whole module, multiple leaf titles, or all test cases into one Python/JSON/text file. "
             "Split by the current leaf-title batch, keep case bodies in the formal Excel workbook, "
-            "page-discovery.csv, and batch-status.csv, and make helper scripts load only small shard files."
+            "small structured shard files, and make helper scripts load only the current shard."
         )
 
 

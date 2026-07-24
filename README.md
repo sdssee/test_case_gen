@@ -1,6 +1,6 @@
 # test_case_gen
 
-测试设计规范包，用于让 CodeBuddy/Codex 按统一规则生成测试设计 Excel、测试系统导入文件，并维护内部产品测试资产。
+测试设计规范包，用于让 CodeBuddy/Codex 按统一规则生成测试设计 Excel 和测试系统导入文件。
 
 本仓库不是业务应用代码。它提供可复制到业务项目根目录的 Memory、Skill、Rule、脚本和 Excel 模板。
 
@@ -36,27 +36,14 @@
 
 ## 主流程
 
-批次任务或页面实探任务先初始化批次目录：
-
-```powershell
-python scripts/test_design_excel_tools.py init-batch-run `
-  --project-root . `
-  --run-id <YYYYMMDD_任务标识> `
-  --module-path "一级模块>二级菜单>三级菜单" `
-  --batch-id BATCH-001
-```
-
-生成正式测试设计后，优先使用一站式收口命令：
+生成正式测试设计后，使用一站式收口命令：
 
 ```powershell
 python scripts/test_design_excel_tools.py complete-deliverables `
   --project-root . `
-  --formal-workbook docs/test-design/current/<测试设计.xlsx> `
+  --formal-workbook docs/test-design/deliverables/<测试设计.xlsx> `
   --import-template docs/test-design/测试用例模板.xlsx `
-  --module-path "一级模块>二级菜单>三级菜单" `
-  --batch-status docs/test-assets/batch-runs/<任务>/batch-status.csv `
-  --page-discovery docs/test-assets/batch-runs/<任务>/page-discovery.csv `
-  --scripts-path docs/test-assets/batch-runs/<任务>/artifacts/scripts
+  --module-path "一级模块>二级菜单>三级菜单"
 ```
 
 只需要单独生成导入文件且不做批次收口时，可使用 `generate-import` 兼容命令。
@@ -68,7 +55,7 @@ python scripts/test_design_excel_tools.py complete-deliverables `
 - 测试策略以 `DFX维度` 和 `DFX场景` 为主字段，`场景类型`、`正向/反向` 已废弃；详细矩阵见 `docs/test-design/rules/dfx-test-strategy.md`。
 - 每条功能测试用例必须把 DFX 落到测试数据、操作步骤、预期结果和恢复路径。
 - 已有数据只能查看和只读深探；敏感操作只允许作用于本次创建且带测试标识的数据。
-- 客户交付件放在 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。
+- 所有交付件统一放在 `docs/test-design/deliverables/`。
 
 ## 校验
 
@@ -85,15 +72,9 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 ```
 
 
-当前批次生成了 Python/JSON/CSV/Markdown/TXT 中间分片时，执行前先预检：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scripts.ps1 -Path docs/test-assets/batch-runs/<任务>/artifacts/scripts
-```
-
 ## 维护
 
 - 规则变化先查 `docs/RULE_OWNERSHIP.md`。
 - 模板字段变化同步 `docs/test-design/excel-template-spec.md` 和校验脚本。
 - 修改完成后运行稳定性自检。
-- 验证通过后按项目约定提交并推送到 `origin`。
+- 每次修改验证通过后提交并推送，Commit Message 使用中文。

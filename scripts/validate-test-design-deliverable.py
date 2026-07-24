@@ -1100,7 +1100,7 @@ def validate_batch_granularity(row: dict[str, str], numbers: dict[str, int]) -> 
 def project_root_from_batch_status(batch_status: Path) -> Path:
     resolved = batch_status.resolve()
     for parent in [resolved.parent, *resolved.parents]:
-        if (parent / "docs" / "test-assets").exists() or (parent / "docs" / "test-design").exists():
+        if (parent / "docs" / "test-design").exists():
             return parent
     return resolved.parent
 
@@ -1163,10 +1163,7 @@ def validate_batch_status(path: Path) -> list[dict[str, str]]:
 
 def validate_batch_file_consistency(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
     project_root = project_root_from_batch_status(batch_status)
-    current_dirs = [
-        project_root / "docs" / "test-design" / "current",
-        project_root / "docs" / "test-design" / "deliverables",
-    ]
+    current_dirs = [project_root / "docs" / "test-design" / "deliverables"]
     completed_statuses = {"已完成", "完成"}
     for row in batch_rows:
         batch_id = row.get("批次ID", "")
@@ -1181,7 +1178,7 @@ def validate_batch_file_consistency(batch_status: Path, batch_rows: list[dict[st
             matches = list(directory.glob(f"*{batch_id}*.xlsx"))
             if matches:
                 fail(
-                    f"batch {batch_id} has generated current/deliverable workbook but batch-status.csv status is {status}: {matches[0]}"
+                    f"batch {batch_id} has generated a deliverable workbook but batch-status.csv status is {status}: {matches[0]}"
                 )
 
 
@@ -1190,8 +1187,7 @@ def validate_batch_artifacts_location(batch_status: Path) -> None:
     root_artifacts = batch_runs_dir / "artifacts"
     if root_artifacts.exists() and any(root_artifacts.iterdir()):
         fail(
-            "Batch artifacts must be stored under docs/test-assets/batch-runs/<task>/artifacts/, "
-            f"not the shared batch-runs/artifacts directory: {root_artifacts}"
+            f"Batch artifacts must not be stored in a shared artifacts directory: {root_artifacts}"
         )
     scripts_dir = batch_status.resolve().parent / "artifacts" / "scripts"
     pycache_dir = scripts_dir / "__pycache__"
@@ -1207,14 +1203,13 @@ def validate_batch_run_directory_from_page_discovery(page_discovery: Path) -> Pa
         fail(
             "A batch run with page-discovery.csv must keep the full standard ledger "
             f"beside it. Missing {missing} in {run_dir}. "
-            "Run scripts/test_design_excel_tools.py init-batch-run before page discovery."
+            "Create a complete batch ledger before page discovery."
         )
     batch_runs_dir = run_dir.parent
     root_artifacts = batch_runs_dir / "artifacts"
     if root_artifacts.exists() and any(root_artifacts.iterdir()):
         fail(
-            "Batch artifacts must be stored under docs/test-assets/batch-runs/<task>/artifacts/, "
-            f"not the shared batch-runs/artifacts directory: {root_artifacts}"
+            f"Batch artifacts must not be stored in a shared artifacts directory: {root_artifacts}"
         )
     scripts_dir = run_dir / "artifacts" / "scripts"
     pycache_dir = scripts_dir / "__pycache__"
@@ -1224,7 +1219,7 @@ def validate_batch_run_directory_from_page_discovery(page_discovery: Path) -> Pa
     if stale_workbooks:
         fail(
             "Batch artifacts must not keep generated workbook copies after finalize-deliverables. "
-            f"Use current/deliverables/modules/imports as the workbook destinations: {stale_workbooks[0]}"
+            f"Use the deliverables directory as the workbook destination: {stale_workbooks[0]}"
         )
     return run_dir / "batch-status.csv"
 
@@ -1255,15 +1250,15 @@ def validate_batch_import_workbooks(batch_status: Path, batch_rows: list[dict[st
         if not import_path.exists():
             fail(f"batch {batch_id} 导入文件路径 does not exist: {import_raw}")
         project_root = project_root_from_batch_status(batch_status)
-        modules_dir = project_root / "docs" / "test-assets" / "modules"
-        imports_dir = project_root / "docs" / "test-assets" / "imports"
+        modules_dir = project_root / "docs" / "test-design" / "deliverables"
+        imports_dir = project_root / "docs" / "test-design" / "deliverables"
         if not is_relative_to_path(archive_path, modules_dir):
             fail(
-                f"batch {batch_id} 归档路径 must point to internal module archive under docs/test-assets/modules/: {archive_raw}"
+                f"batch {batch_id} 归档路径 must point to the deliverables directory: {archive_raw}"
             )
         if not is_relative_to_path(import_path, imports_dir):
             fail(
-                f"batch {batch_id} 导入文件路径 must point to internal import archive under docs/test-assets/imports/: {import_raw}"
+                f"batch {batch_id} 导入文件路径 must point to the deliverables directory: {import_raw}"
             )
         archive_data = validate_workbook(archive_path)
         validate_import_workbook(import_path, archive_data)
@@ -1448,31 +1443,12 @@ def default_page_discovery_path(batch_status: Path | None) -> Path | None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate generated test design deliverable workbook.")
     parser.add_argument("--workbook", required=True, type=Path)
-    parser.add_argument("--batch-status", type=Path)
-    parser.add_argument("--page-discovery", type=Path)
     parser.add_argument("--import-workbook", type=Path)
     args = parser.parse_args()
 
-    if not args.page_discovery:
-        args.page_discovery = default_page_discovery_path(args.batch_status)
-    if args.page_discovery:
-        discovered_batch_status = validate_batch_run_directory_from_page_discovery(args.page_discovery)
-        if not args.batch_status:
-            args.batch_status = discovered_batch_status
-
     workbook_data = validate_workbook(args.workbook)
-    batch_rows = None
-    if args.batch_status:
-        batch_rows = validate_batch_status(args.batch_status)
-        validate_batch_artifacts_location(args.batch_status)
-        validate_batch_file_consistency(args.batch_status, batch_rows)
-        validate_batch_plan(args.batch_status, batch_rows)
-        validate_batch_review(args.batch_status, batch_rows)
-        validate_batch_import_workbooks(args.batch_status, batch_rows)
     if args.import_workbook:
         validate_import_workbook(args.import_workbook, workbook_data)
-    if args.page_discovery:
-        validate_page_discovery_sync(workbook_data, args.page_discovery, batch_rows)
     print("OK: test design deliverable quality checks passed.")
     return 0
 

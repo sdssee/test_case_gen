@@ -1,3 +1,4 @@
-dist/
-dist-test/
-.upgrade-backups/
+__pycache__/
+*.py[cod]
+~$*.xlsx
+~$*.xls

@@ -18,7 +18,6 @@
 
 ## 脱敏要求
 
-- 正式交付件中的环境地址使用占位符表达。
 - 环境入口统一使用 `<product_login_url>`，环境基址统一使用 `<test_env_base_url>`，账号和密码统一使用 `<test_user_account>`、`<test_user_password>` 等占位符。
 - 例如 `sk-...`、`secret=...`、`password=...`、`token=...`、`密钥:真实值` 都必须替换。
 - 使用 `<valid_api_key>`、`<test_token>`、`<test_service_url>`、`<masked_phone>`、`<masked_account>` 等占位符。

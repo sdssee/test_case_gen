@@ -45,16 +45,8 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 -BatchStatusPath <batch-status.csv>
 ```
 
-页面实探任务追加：
-
-```powershell
--PageDiscoveryPath <page-discovery.csv>
-```
-
 生成导入文件后追加：
 
 ```powershell
 -ImportWorkbookPath <导入文件.xlsx>
 ```
-
-校验覆盖字段映射、模板格式、页面元素覆盖关系、标题与步骤、性能设计、批次状态和双 Excel 一致性。

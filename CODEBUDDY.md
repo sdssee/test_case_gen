@@ -28,7 +28,6 @@
 - 页面、截图、原型、浏览器或 computer use：`docs/test-design/rules/page-discovery.md`
 - 全产品、大模块、多菜单或超过一个最小标题：`docs/test-design/rules/batch-run.md`
 - 测试系统导入：`docs/test-design/rules/import-template.md`
-- 历史用例或跨模块依赖：按需读取 `docs/test-design/archive-and-index-guidelines.md` 和指定模块归档。
 
 ## 不可违反的摘要规则
 
@@ -39,7 +38,6 @@
 - 只能对本次创建且带 `AI_TEST`、`CODEX_TEST`、日期或任务编号的数据执行敏感操作。
 - 有页面时必须深遍历所有可点击、可输入、可选择、可测试元素；选择类控件记录选项取值和联动/依赖变化，输入类控件记录实际输入、真实提示和结果分支，新增类流程必须实填实走。
 - 弹窗、下拉、输入、编辑、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环。
-- 增量补充或二次补充不得只追加用例；先识别覆盖缺口、建立补充批次并重新页面实探，能复用已有用例时直接引用。
 - 范围超过一个最小标题时，必须按最深标题级别分批执行，逐个最小标题路径完成完整测试设计，不得合并多个最小标题，不得再拆分一个最小标题。
 - 正式写测试用例前，必须先展示风险项与待确认问题并让用户确认；用户确认、补充、排除或调整后，动态调整测试范围、测试数据、优先级、步骤、预期结果和风险等级。
 - 模块或批次正式写测试用例前，必须先综合评估 DFX 12 维度 × 4 场景覆盖，明确适用、不适用、待确认和需补充证据的维度，再进入用例设计。
@@ -49,7 +47,6 @@
 - `batch-status.csv` 和 `page-discovery.csv` 必须使用标准模板表头，禁止自定义精简表头和字段错位。
 - 批次截图、临时脚本和证据必须放在当前任务 `docs/test-assets/batch-runs/<task>/artifacts/`，不得写入共享根目录 artifacts。
 - 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
-- `complete-deliverables` 一次完成格式修复、导入生成、交付复制、模块归档和交付校验。
 - 交付文件名只使用菜单/模块路径，不拼运行文件夹名、批次目录名或产品名；如 `module-path` 包含产品名前缀，传入 `--product-name` 自动去除，避免重复交付文件。
 - 导入文件 `执行方式` 默认 `手动`，也就是默认填写 `手动`；只有已有可运行、可维护且覆盖主要校验点的自动化资产，并且本次明确按自动化导入或关联资产时，才允许 `自动化`。
 - 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。
@@ -62,7 +59,6 @@
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
 ```
 
-批次任务追加 `-BatchStatusPath <batch-status.csv> -PageDiscoveryPath <page-discovery.csv>`；有导入文件时追加 `-ImportWorkbookPath <导入文件.xlsx>`。
 
 页面实探或批次任务开始前运行：
 
@@ -80,7 +76,6 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scrip
 
 ## 升级与 Git
 
-- `VERSION` 中的 `framework_version` 标识框架版本，`asset_schema_version` 标识内部资产结构版本。
 - 外网到内网普通框架升级使用 `scripts/new-framework-upgrade-package.ps1` 和 `scripts/upgrade-framework.ps1`。
 - 普通框架升级不得覆盖 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。标识：PROTECTED_ASSET_DIRS。
 - 每次完成修改后运行 `git status`。

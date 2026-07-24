@@ -19,7 +19,6 @@ your-project/
       codebuddy-test-design-template.xlsx
       测试用例模板.xlsx
       excel-template-spec.md
-      archive-and-index-guidelines.md
       rules/
       current/
       deliverables/

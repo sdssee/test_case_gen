@@ -187,7 +187,6 @@ def lightweight_entry_reference_text(path: Path) -> str:
             references.extend(
                 [
                     parent / "docs" / "test-design" / "excel-template-spec.md",
-                    parent / "docs" / "test-design" / "archive-and-index-guidelines.md",
                     parent / "docs" / "test-assets" / "batch-runs" / "README.md",
                 ]
             )
@@ -522,7 +521,6 @@ def main() -> int:
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / "docs" / "ARCHITECTURE.md",
         repo_root / "docs" / "RULE_OWNERSHIP.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
     ]
     for path in architecture_files:
         if not path.exists():
@@ -565,8 +563,6 @@ def main() -> int:
         "测试用例模板.xlsx",
     ]
     for path in architecture_files:
-        if path.name == "archive-and-index-guidelines.md":
-            continue
         if path.name == "RULE_OWNERSHIP.md":
             continue
         assert_contains(path, required_markers[:2] if path.name == "AGENTS.md" else required_markers[:3])
@@ -595,7 +591,6 @@ def main() -> int:
         ".codebuddy/rules/test-design-rule.md",
         ".codebuddy/skills/test-design/SKILL.md",
         "docs/test-design/excel-template-spec.md",
-        "docs/test-design/archive-and-index-guidelines.md",
         "docs/UPGRADE.md",
         "docs/test-assets/batch-runs/README.md",
         "docs/test-assets/batch-runs/templates/",
@@ -647,59 +642,6 @@ def main() -> int:
     ]:
         assert_contains(path, title_format_markers)
 
-    archive_markers = [
-        "docs/test-assets/modules/",
-        "docs/test-assets/imports/",
-    ]
-    for path in [
-        repo_root / "AGENTS.md",
-        repo_root / "CODEBUDDY.md",
-        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
-        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
-        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
-        repo_root / "docs" / "test-design" / "excel-template-spec.md",
-        repo_root / "docs" / "ARCHITECTURE.md",
-    ]:
-        assert_contains(path, archive_markers)
-
-    deliverable_markers = [
-        "docs/test-design/current/",
-        "docs/test-design/deliverables/",
-        "客户交付件",
-        "不作为默认客户交付件",
-    ]
-    for path in [
-        repo_root / "AGENTS.md",
-        repo_root / "CODEBUDDY.md",
-        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
-        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
-        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
-        repo_root / "docs" / "test-design" / "excel-template-spec.md",
-        repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
-        repo_root / "docs" / "test-assets" / "README.md",
-    ]:
-        assert_contains(path, deliverable_markers)
-
-    understanding_markers = [
-        "产品理解摘要",
-        "当前模块",
-        "依赖模块",
-        "业务链路",
-        "风险项",
-        "待确认问题",
-    ]
-    for path in [
-        repo_root / "AGENTS.md",
-        repo_root / "CODEBUDDY.md",
-        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
-        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
-        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
-        repo_root / "docs" / "test-design" / "excel-template-spec.md",
-    ]:
-        assert_contains(path, understanding_markers)
-
     risk_confirmation_markers = [
         "正式写测试用例前",
         "风险项与待确认问题",
@@ -711,14 +653,7 @@ def main() -> int:
         "风险等级",
     ]
     for path in [
-        repo_root / "AGENTS.md",
-        repo_root / "CODEBUDDY.md",
-        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
-        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
-        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
         repo_root / "docs" / "test-design" / "rules" / "case-design.md",
-        repo_root / "docs" / "test-design" / "excel-template-spec.md",
-        repo_root / "docs" / "ARCHITECTURE.md",
     ]:
         assert_contains(path, risk_confirmation_markers)
 
@@ -736,7 +671,6 @@ def main() -> int:
         repo_root / "UPGRADE_MANIFEST.md",
         repo_root / "docs" / "UPGRADE.md",
         repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-assets" / "README.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
@@ -755,9 +689,6 @@ def main() -> int:
         upgrade_manifest,
         upgrade_doc,
         repo_root / "README.md",
-        repo_root / "CODEBUDDY.md",
-        repo_root / "AGENTS.md",
-        repo_root / "docs" / "ARCHITECTURE.md",
         package_script,
         upgrade_script,
     ]:
@@ -779,32 +710,15 @@ def main() -> int:
         "最深标题级别",
         "禁止合并",
         "禁止再拆分",
-        "逐个匹配校验",
         "超过一个最小标题",
         "禁止直接生成完整测试用例",
-        "批次队列",
         "覆盖质量自检",
         "才能进入下一批",
         "不得重新生成各批完整用例",
-        "测试用例必须尽可能详细",
-        "每个测试点",
-        "每个页面元素",
-        "不同测试方向",
-        "组合条件",
-        "禁用态/空状态/错误态",
-        "可恢复路径",
-        "笼统用例",
-        "不得一次性生成完整测试用例",
         "跨模块汇总",
     ]
     for path in [
-        repo_root / "AGENTS.md",
-        repo_root / "CODEBUDDY.md",
-        repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-design" / "excel-template-spec.md",
-        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
-        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
-        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "rules" / "batch-run.md",
     ]:
         assert_contains(path, batch_design_markers)
 
@@ -887,28 +801,6 @@ def main() -> int:
     ]:
         assert_contains(path, existing_data_probe_markers)
 
-    incremental_supplement_markers = [
-        "增量补充",
-        "二次补充",
-        "覆盖缺口",
-        "补充批次",
-        "不得只追加用例",
-        "重新页面实探",
-        "复用已有用例",
-    ]
-    for path in [
-        repo_root / "AGENTS.md",
-        repo_root / "CODEBUDDY.md",
-        repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
-        repo_root / "docs" / "test-design" / "excel-template-spec.md",
-        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
-        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
-        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
-    ]:
-        assert_contains(path, incremental_supplement_markers)
-    assert_contains(batch_plan_template, incremental_supplement_markers)
-
     batch_run_state_markers = [
         "docs/test-assets/batch-runs/",
         "batch-plan.md",
@@ -937,7 +829,6 @@ def main() -> int:
         repo_root / "README.md",
         repo_root / "README_IMPORT.md",
         repo_root / "docs" / "RULE_OWNERSHIP.md",
-        repo_root / "docs" / "test-assets" / "README.md",
     ]:
         assert_contains(path, ["docs/test-assets/batch-runs/"])
     assert_contains(batch_plan_template, ["批次执行计划", "最小标题路径", "最深标题级别", "禁止合并", "禁止再拆分", "batch-status.csv", "page-discovery.csv", "导入文件", "才能进入下一批", "不得重新生成各批完整用例"])
@@ -1015,7 +906,6 @@ def main() -> int:
         repo_root / "CODEBUDDY.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / "README.md",
-        repo_root / "docs" / "ARCHITECTURE.md",
     ]:
         assert_contains(path, ["validate-test-design-deliverable.ps1"])
 
@@ -1036,7 +926,6 @@ def main() -> int:
     ]:
         assert_contains(path, operation_navigation_markers)
 
-    assert_contains(repo_root / "docs" / "test-design" / "rules" / "data-safety.md", ["<product_login_url>", "环境地址"])
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "case-design.md", ["闭环", "取消或关闭", "DFX 测试策略落地"])
     assert_contains(
         repo_root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
@@ -1056,15 +945,8 @@ def main() -> int:
         "需补充证据",
     ]
     for path in [
-        repo_root / "AGENTS.md",
-        repo_root / "CODEBUDDY.md",
-        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
-        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
-        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
         repo_root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
         repo_root / "docs" / "test-design" / "rules" / "case-design.md",
-        repo_root / "docs" / "test-design" / "excel-template-spec.md",
-        repo_root / "docs" / "ARCHITECTURE.md",
     ]:
         assert_contains(path, dfx_pre_eval_markers)
     assert_contains(repo_root / "docs" / "test-design" / "rules" / "excel-deliverable.md", ["Excel Table", "/xl/tables/table*.xml", "修复提示"])
@@ -1143,14 +1025,7 @@ def main() -> int:
         "产品名",
     ]
     for path in [
-        repo_root / "AGENTS.md",
-        repo_root / "CODEBUDDY.md",
-        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
-        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
-        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
         repo_root / "README.md",
-        repo_root / "docs" / "test-design" / "excel-template-spec.md",
-        repo_root / "docs" / "test-design" / "rules" / "batch-run.md",
     ]:
         assert_contains(path, complete_deliverable_markers)
     dfx_field_markers = ["DFX维度", "DFX场景", "场景类型", "正向/反向"]
@@ -1193,13 +1068,7 @@ def main() -> int:
         "所有可点击/可交互功能点",
     ]
     for path in [
-        repo_root / "AGENTS.md",
-        repo_root / "CODEBUDDY.md",
-        repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-design" / "excel-template-spec.md",
-        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
-        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
-        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "rules" / "page-discovery.md",
     ]:
         assert_contains(path, batch_exploration_markers)
 

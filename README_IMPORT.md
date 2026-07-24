@@ -45,7 +45,7 @@ your-project/
 - 大范围分批：`batch-run.md`
 - Excel 交付件：`excel-deliverable.md`
 - 测试系统导入：`import-template.md`
-- 数据安全与脱敏：`data-safety.md`
+- 页面实探数据操作边界：`data-safety.md`
 
 这种结构让 Skill、Rule、AGENTS、CODEBUDDY 保持低于 10000 字符，避免 CodeBuddy 加载入口时出现截断或规则遗漏。
 

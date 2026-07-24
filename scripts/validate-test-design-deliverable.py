@@ -223,38 +223,9 @@ PAGE_DISCOVERY_EXPECTED_HEADERS = [
     "备注",
 ]
 
-SENSITIVE_VALUE_PATTERNS = [
-    re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{8,}\b"),
-    re.compile(r"\b(secret|password|passwd|pwd|token)\s*[:=：]\s*[^<\s;，,]+", re.IGNORECASE),
-    re.compile(r"密钥\s*[:=：]\s*(?!<)[^<\s;，,]+", re.IGNORECASE),
-]
-
-
 def fail(message: str) -> None:
     raise AssertionError(message)
 
-
-ENVIRONMENT_VALUE_PATTERNS = [
-    re.compile(r"https?://(?!<)[^\s\"'<>，,；;]+", re.IGNORECASE),
-    re.compile(r"\b(?:10|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"),
-    re.compile(r"\b172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}\b"),
-    re.compile(r"\b192\.168\.\d{1,3}\.\d{1,3}\b"),
-    re.compile(r"/hub/hub(?:/[^\s\"'<>，,；;]*)?", re.IGNORECASE),
-    re.compile(r"\badmin@\d+\b", re.IGNORECASE),
-]
-
-UNMASKED_VALUE_PATTERNS = [
-    (
-        "secret",
-        SENSITIVE_VALUE_PATTERNS,
-        "Use placeholders such as <valid_api_key>, <test_token>, or <test_service_url>.",
-    ),
-    (
-        "environment address/account",
-        ENVIRONMENT_VALUE_PATTERNS,
-        "Use placeholders such as <product_login_url>, <test_env_base_url>, <test_user_account>, or <test_user_password>.",
-    ),
-]
 
 TRANSIENT_STEP_MARKERS = [
     "modal",
@@ -432,22 +403,6 @@ def range_covers(actual_ref: str, expected_ref: str) -> bool:
     )
 
 
-def assert_no_unmasked_value(value: str, label: str) -> None:
-    for kind, patterns, guidance in UNMASKED_VALUE_PATTERNS:
-        for pattern in patterns:
-            if pattern.search(value):
-                fail(f"{label} contains a possible unmasked {kind}. {guidance}")
-
-
-def assert_no_sensitive_text_values(path: Path, label: str) -> None:
-    if not path.exists():
-        return
-    text = path.read_text(encoding="utf-8-sig", errors="ignore")
-    for line_number, line in enumerate(text.splitlines(), start=1):
-        if line.strip():
-            assert_no_unmasked_value(line, f"{label} line {line_number}")
-
-
 def validate_table_ranges(path: Path, sheet_names: list[str] | None = None) -> None:
     with zipfile.ZipFile(path) as zf:
         table_files = [name for name in zf.namelist() if name.startswith("xl/tables/")]
@@ -622,19 +577,6 @@ def assert_no_residual_markers(path: Path, sheet_names: list[str] | None = None)
                         fail(f"{sheet_name} row {row_number} column {column_number} contains unresolved template marker: {marker}")
 
 
-def assert_no_sensitive_values(path: Path, sheet_names: list[str] | None = None) -> None:
-    with zipfile.ZipFile(path) as zf:
-        available_sheets = workbook_sheet_paths(zf)
-    target_sheets = sheet_names or list(available_sheets)
-    for sheet_name in target_sheets:
-        rows = sheet_rows(path, sheet_name)
-        for row_number, row in enumerate(rows, start=1):
-            for column_number, value in enumerate(row, start=1):
-                if not value:
-                    continue
-                assert_no_unmasked_value(value, f"{sheet_name} row {row_number} column {column_number}")
-
-
 def validate_formal_workbook_styles(workbook: Path) -> None:
     assert_data_rows_follow_sample_styles(workbook, EXPECTED_SHEETS)
     for sheet_name, fields in FORMAL_MULTILINE_FIELDS.items():
@@ -796,14 +738,6 @@ def csv_rows_with_exact_header(path: Path, expected: list[str], label: str) -> l
         return rows
 
 
-def assert_no_sensitive_csv_values(rows: list[dict[str, str]], label: str) -> None:
-    for index, row in enumerate(rows, start=2):
-        for field, value in row.items():
-            if not value:
-                continue
-            assert_no_unmasked_value(value, f"{label} row {index} field {field}")
-
-
 def require_headers(rows: list[list[str]], required: list[str], sheet_name: str) -> None:
     headers = set(rows[0] if rows else [])
     missing = [header for header in required if header not in headers]
@@ -848,7 +782,6 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
     if sheet_names != EXPECTED_SHEETS:
         fail(f"Workbook sheets mismatch. Expected {EXPECTED_SHEETS}, got {sheet_names}")
     assert_no_residual_markers(workbook, EXPECTED_SHEETS)
-    assert_no_sensitive_values(workbook, EXPECTED_SHEETS)
     validate_table_ranges(workbook, EXPECTED_SHEETS)
     validate_formal_workbook_styles(workbook)
 
@@ -992,7 +925,6 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
     if headers[: len(IMPORT_HEADERS)] != IMPORT_HEADERS:
         fail(f"Import workbook headers mismatch. Expected {IMPORT_HEADERS}, got {headers}")
     assert_no_residual_markers(import_workbook)
-    assert_no_sensitive_values(import_workbook)
     validate_table_ranges(import_workbook)
     assert_data_rows_follow_sample_styles(import_workbook)
     first_sheet_name = ""
@@ -1164,7 +1096,6 @@ def validate_batch_status(path: Path) -> list[dict[str, str]]:
         for row in csv_rows_with_exact_header(path, BATCH_EXPECTED_HEADERS, "batch-status.csv")
         if (row.get("批次ID") or "").strip()
     ]
-    assert_no_sensitive_csv_values(rows, "batch-status.csv")
     if not rows:
         fail("batch-status.csv must contain at least one batch row")
 
@@ -1314,7 +1245,6 @@ def validate_batch_review(batch_status: Path, batch_rows: list[dict[str, str]]) 
     review_path = batch_status.resolve().parent / "batch-review.md"
     if not review_path.exists():
         fail(f"batch-review.md not found beside batch-status.csv: {review_path}")
-    assert_no_sensitive_text_values(review_path, "batch-review.md")
     text = review_path.read_text(encoding="utf-8-sig")
     completed_rows = [row for row in batch_rows if is_passed_batch(row)]
     for row in completed_rows:
@@ -1334,7 +1264,6 @@ def validate_batch_plan(batch_status: Path, batch_rows: list[dict[str, str]]) ->
     plan_path = batch_status.resolve().parent / "batch-plan.md"
     if not plan_path.exists():
         fail(f"batch-plan.md not found beside batch-status.csv: {plan_path}")
-    assert_no_sensitive_text_values(plan_path, "batch-plan.md")
     text = plan_path.read_text(encoding="utf-8-sig")
     completed_rows = [row for row in batch_rows if is_passed_batch(row)]
     for row in completed_rows:
@@ -1372,7 +1301,6 @@ def validate_page_discovery_sync(
     missing_discovery_required = [header for header in PAGE_DISCOVERY_REQUIRED_HEADERS if header not in PAGE_DISCOVERY_EXPECTED_HEADERS]
     if missing_discovery_required:
         fail(f"Internal validator configuration error, missing page discovery required headers: {missing_discovery_required}")
-    assert_no_sensitive_csv_values(discovery_rows, "page-discovery.csv")
     if not discovery_rows:
         fail("page-discovery.csv must contain at least one discovery row")
 

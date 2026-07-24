@@ -8,7 +8,7 @@
 - 涉及页面、截图、原型、浏览器或 computer use：追加读取 `page-discovery.md`。
 - 范围超过一个最小标题、全产品、大模块或多个菜单：追加读取 `batch-run.md`。
 - 需要导入测试系统：追加读取 `import-template.md`。
-- 涉及历史用例、跨模块依赖、补充用例或产品资产归档：追加读取 `product-map-sync.md`。
+- 涉及历史用例、跨模块依赖或补充任务：按需读取 `../archive-and-index-guidelines.md` 和指定模块归档。
 
 ## 入口瘦身约束
 

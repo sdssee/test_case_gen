@@ -15,7 +15,6 @@
 | `.codebuddy/rules/test-design-rule.md` | CodeBuddy Code/CLI 硬规则。 |
 | `docs/test-design/codebuddy-test-design-template.xlsx` | 正式测试设计模板，固定 8 个 Sheet。 |
 | `docs/test-design/测试用例模板.xlsx` | 测试系统导入模板，使用时复制副本，不修改原模板。 |
-| `docs/test-assets/product-map.xlsx` | 内部产品测试知识图谱，不作为默认客户交付件。 |
 | `docs/RULE_OWNERSHIP.md` | 规则归属矩阵，避免重复和漂移。 |
 
 详细规则按任务读取 `docs/test-design/rules/`；Excel 字段以 `docs/test-design/excel-template-spec.md` 为准；归档和跨模块依赖以 `docs/test-design/archive-and-index-guidelines.md` 为准。
@@ -57,7 +56,6 @@ python scripts/test_design_excel_tools.py complete-deliverables `
   --module-path "一级模块>二级菜单>三级菜单" `
   --batch-status docs/test-assets/batch-runs/<任务>/batch-status.csv `
   --page-discovery docs/test-assets/batch-runs/<任务>/page-discovery.csv `
-  --product-map docs/test-assets/product-map.xlsx `
   --scripts-path docs/test-assets/batch-runs/<任务>/artifacts/scripts
 ```
 
@@ -69,10 +67,10 @@ python scripts/test_design_excel_tools.py complete-deliverables `
 
 - 测试策略以 `DFX维度` 和 `DFX场景` 为主字段，`场景类型`、`正向/反向` 已废弃；详细矩阵见 `docs/test-design/rules/dfx-test-strategy.md`。
 - 每条功能测试用例必须把 DFX 落到测试数据、操作步骤、预期结果和恢复路径。
-- 页面实探必须记录所有可点击、可输入、可选择、可测试元素，并写入 `page-discovery.csv`、页面元素覆盖清单和产品版图。
+- 页面实探记录到 `page-discovery.csv`，并编译到页面元素覆盖清单。
 - 已有数据只能查看和只读深探；敏感操作只允许作用于本次创建且带测试标识的数据。
 - 客户交付件放在 `docs/test-design/current/` 或 `docs/test-design/deliverables/`。
-- 内部资产归档到 `docs/test-assets/modules/`、`docs/test-assets/imports/` 和 `docs/test-assets/product-map.xlsx`。
+- 最终测试设计和导入副本分别归档到 `docs/test-assets/modules/`、`docs/test-assets/imports/`。
 
 ## 校验
 
@@ -88,7 +86,7 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
 ```
 
-大范围任务追加 `-BatchStatusPath <batch-status.csv>`；有导入文件时追加 `-ImportWorkbookPath <导入文件.xlsx>`。如果同级存在 `page-discovery.csv`，校验会自动启用产品版图同步检查。
+批次任务追加 `-BatchStatusPath <batch-status.csv> -PageDiscoveryPath <page-discovery.csv>`；有导入文件时追加 `-ImportWorkbookPath <导入文件.xlsx>`。
 
 当前批次生成了 Python/JSON/CSV/Markdown/TXT 中间分片时，执行前先预检：
 

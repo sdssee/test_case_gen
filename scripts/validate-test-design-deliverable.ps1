@@ -4,8 +4,6 @@ param(
 
   [string]$BatchStatusPath,
 
-  [string]$ProductMapPath,
-
   [string]$PageDiscoveryPath,
 
   [string]$ImportWorkbookPath
@@ -26,12 +24,6 @@ if ($BatchStatusPath) {
     $candidatePageDiscovery = Join-Path (Split-Path -Parent $BatchStatusPath) "page-discovery.csv"
     $PageDiscoveryPath = $candidatePageDiscovery
   }
-}
-if ($PageDiscoveryPath -and -not $ProductMapPath) {
-  $ProductMapPath = Join-Path (Split-Path -Parent $scriptDir) "docs\test-assets\product-map.xlsx"
-}
-if ($ProductMapPath) {
-  $argsList += @("--product-map", $ProductMapPath)
 }
 if ($PageDiscoveryPath) {
   $argsList += @("--page-discovery", $PageDiscoveryPath)

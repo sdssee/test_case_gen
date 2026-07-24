@@ -314,7 +314,6 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     design_template = repo_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
     system_template = repo_root / "docs" / "test-design" / "测试用例模板.xlsx"
-    product_map = repo_root / "docs" / "test-assets" / "product-map.xlsx"
     version_file = repo_root / "VERSION"
     upgrade_manifest = repo_root / "UPGRADE_MANIFEST.md"
     upgrade_doc = repo_root / "docs" / "UPGRADE.md"
@@ -333,7 +332,6 @@ def main() -> int:
         rules_dir / "batch-run.md",
         rules_dir / "excel-deliverable.md",
         rules_dir / "import-template.md",
-        rules_dir / "product-map-sync.md",
         rules_dir / "data-safety.md",
         rules_dir / "dfx-test-strategy.md",
     ]
@@ -349,9 +347,7 @@ def main() -> int:
         fail(f"Missing design template: {design_template}")
     if not system_template.exists():
         fail(f"Missing system import template: {system_template}")
-    if not product_map.exists():
-        fail(f"Missing product map: {product_map}")
-    for workbook in [design_template, system_template, product_map]:
+    for workbook in [design_template, system_template]:
         validate_no_excel_table_parts(workbook)
     for path in [
         version_file,
@@ -452,47 +448,6 @@ def main() -> int:
     if not system_sheets:
         fail("System import template should contain at least one sheet")
 
-    expected_product_map_sheets = [
-        "产品模块地图",
-        "业务对象地图",
-        "业务链路地图",
-        "页面元素地图",
-        "用例资产索引",
-        "模块能力索引",
-        "跨模块依赖关系",
-        "可复用测试数据",
-        "变更影响分析",
-        "变更记录",
-    ]
-    product_map_sheets = workbook_sheets(product_map)
-    if product_map_sheets != expected_product_map_sheets:
-        fail(
-            "Product map sheets mismatch.\n"
-            f"Expected: {expected_product_map_sheets}\n"
-            f"Actual:   {product_map_sheets}"
-        )
-
-    expected_product_map_headers = {
-        1: ["产品/系统", "一级模块", "二级模块", "三级模块", "页面/入口", "菜单路径/URL", "模块功能摘要", "归档测试设计路径", "覆盖状态", "最后更新时间", "待确认问题"],
-        2: ["产品/系统", "业务对象", "来源模块", "消费模块", "关键字段", "关键状态", "状态生产者", "状态消费者", "创建用例ID", "状态变更用例ID", "归档测试设计路径", "待确认问题"],
-        3: ["链路ID", "链路名称", "起始模块", "中间模块", "结束模块", "业务对象", "关键状态流转", "主流程用例ID", "跨模块用例ID", "依赖测试数据", "风险点", "归档测试设计路径"],
-        4: ["产品/系统", "模块", "页面/入口", "菜单路径/URL", "元素名称/文案", "元素类型", "交互方式", "前置状态/权限", "关联用例ID", "覆盖状态", "发现来源", "最后更新时间", "备注"],
-        5: ["产品/系统", "模块", "功能点", "用例ID", "用例标题", "测试类型", "执行方式", "是否可复用为前置条件", "是否跨模块", "关联业务对象", "关联业务链路", "归档测试设计路径", "最后更新时间"],
-        6: ["产品/系统", "模块", "功能点", "能力/数据对象", "能力描述", "关键状态", "可复用前置条件", "关联用例ID", "归档测试设计路径", "限制/待确认问题", "最后更新时间"],
-        7: ["产品/系统", "当前模块", "依赖模块", "依赖业务对象", "依赖功能点/能力", "依赖类型", "引用用例ID", "当前模块用例ID", "使用方式", "风险/待确认问题", "最后更新时间"],
-        8: ["产品/系统", "模块", "数据对象", "测试数据标识", "数据用途", "可执行敏感操作", "创建/维护方式", "关联用例ID", "清理策略", "敏感信息处理", "最后更新时间"],
-        9: ["变更ID", "需求/任务", "变更模块", "影响模块", "影响业务对象", "影响业务链路", "需复核历史用例ID", "需新增/修改用例", "风险等级", "处理状态", "分析日期", "备注"],
-        10: ["版本", "日期", "变更人/来源", "变更类型", "影响模块", "变更内容", "是否已同步产品版图", "备注"],
-    }
-    for sheet_index, expected in expected_product_map_headers.items():
-        actual = first_row_values(product_map, sheet_index)
-        if actual != expected:
-            fail(
-                f"Product map headers mismatch on sheet {sheet_index}.\n"
-                f"Expected: {expected}\n"
-                f"Actual:   {actual}"
-            )
-
     expected_headers = [
         "一级模块系统编号",
         "一级模块名称",
@@ -550,7 +505,7 @@ def main() -> int:
             fail(f"System import template is missing dropdown values: {marker}")
 
     formula_errors = re.compile(r"#REF!|#DIV/0!|#VALUE!|#NAME\?|#N/A")
-    for path in [design_template, system_template, product_map]:
+    for path in [design_template, system_template]:
         with zipfile.ZipFile(path) as zf:
             for item in zf.namelist():
                 if item.startswith("xl/worksheets/") and item.endswith(".xml"):
@@ -592,7 +547,7 @@ def main() -> int:
     expected_batch_status_header = (
         "批次ID,一级模块,二级菜单,三级菜单/页面域,批次范围,状态,页面数,元素总数,已覆盖元素数,"
         "待确认元素数,功能用例数,性能场景数,异常用例数,边界用例数,权限/状态用例数,数据一致性用例数,"
-        "页面遍历完成,功能用例完成,性能设计完成,异常边界权限覆盖完成,页面元素覆盖完成,产品版图已更新,"
+        "页面遍历完成,功能用例完成,性能设计完成,异常边界权限覆盖完成,页面元素覆盖完成,"
         "覆盖质量自检,未覆盖元素清单路径,归档路径,导入文件路径,导入文件已生成,最小标题路径,待确认问题,下一步动作"
     )
     actual_batch_status_header = read_text(batch_status_template).splitlines()[0]
@@ -693,7 +648,6 @@ def main() -> int:
         assert_contains(path, title_format_markers)
 
     archive_markers = [
-        "product-map.xlsx",
         "docs/test-assets/modules/",
         "docs/test-assets/imports/",
     ]
@@ -705,7 +659,6 @@ def main() -> int:
         repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
     ]:
         assert_contains(path, archive_markers)
 
@@ -723,6 +676,7 @@ def main() -> int:
         repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / "docs" / "ARCHITECTURE.md",
+        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-assets" / "README.md",
     ]:
@@ -762,10 +716,8 @@ def main() -> int:
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
         repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
-        repo_root / "docs" / "test-design" / "rules" / "product-map-sync.md",
         repo_root / "docs" / "test-design" / "rules" / "case-design.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "ARCHITECTURE.md",
     ]:
         assert_contains(path, risk_confirmation_markers)
@@ -785,7 +737,6 @@ def main() -> int:
         repo_root / "docs" / "UPGRADE.md",
         repo_root / "docs" / "ARCHITECTURE.md",
         repo_root / "docs" / "test-assets" / "README.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
@@ -850,7 +801,6 @@ def main() -> int:
         repo_root / "AGENTS.md",
         repo_root / "CODEBUDDY.md",
         repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
@@ -870,7 +820,6 @@ def main() -> int:
         repo_root / "CODEBUDDY.md",
         repo_root / "docs" / "ARCHITECTURE.md",
         repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
@@ -890,7 +839,6 @@ def main() -> int:
         repo_root / "CODEBUDDY.md",
         repo_root / "docs" / "ARCHITECTURE.md",
         repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
@@ -911,7 +859,6 @@ def main() -> int:
         repo_root / "CODEBUDDY.md",
         repo_root / "docs" / "ARCHITECTURE.md",
         repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
@@ -933,7 +880,6 @@ def main() -> int:
         repo_root / "CODEBUDDY.md",
         repo_root / "docs" / "ARCHITECTURE.md",
         repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
@@ -955,7 +901,6 @@ def main() -> int:
         repo_root / "CODEBUDDY.md",
         repo_root / "docs" / "ARCHITECTURE.md",
         repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
@@ -985,15 +930,7 @@ def main() -> int:
         "不得重新生成各批完整用例",
     ]
     for path in [
-        repo_root / "AGENTS.md",
-        repo_root / "CODEBUDDY.md",
-        repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
-        repo_root / "docs" / "test-design" / "excel-template-spec.md",
-        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
-        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
-        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
+        repo_root / "docs" / "test-design" / "rules" / "batch-run.md",
     ]:
         assert_contains(path, batch_run_state_markers)
     for path in [
@@ -1004,7 +941,6 @@ def main() -> int:
     ]:
         assert_contains(path, ["docs/test-assets/batch-runs/"])
     assert_contains(batch_plan_template, ["批次执行计划", "最小标题路径", "最深标题级别", "禁止合并", "禁止再拆分", "batch-status.csv", "page-discovery.csv", "导入文件", "才能进入下一批", "不得重新生成各批完整用例"])
-    assert_contains(batch_plan_template, ["标准模板", "CSV writer", "示例产品", "<valid_api_key>", "执行中或待开始"])
     assert_contains(batch_review_template, ["批次执行复盘", "页面数", "元素总数", "导入文件路径", "最终交付约束", "不得重新生成各批完整用例"])
     expected_page_discovery_header = (
         "批次ID,一级模块,二级菜单,三级菜单/页面域,最小标题路径,页面/入口,菜单路径/URL,发现方式,角色/权限,数据状态,"
@@ -1039,7 +975,6 @@ def main() -> int:
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
         repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
         batch_plan_template,
@@ -1060,7 +995,6 @@ def main() -> int:
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
         repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
         batch_plan_template,
@@ -1071,24 +1005,9 @@ def main() -> int:
         "CSV writer",
         "字段错位",
         "执行中或待开始",
-        "示例产品",
-        "用例资产索引",
-        "页面元素地图",
-        "<valid_api_key>",
-        "<test_token>",
-        "<test_service_url>",
     ]
     for path in [
-        repo_root / "AGENTS.md",
-        repo_root / "CODEBUDDY.md",
-        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
-        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
-        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
-        repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-assets" / "batch-runs" / "README.md",
-        repo_root / "docs" / "test-assets" / "batch-runs" / "templates" / "batch-plan-template.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
-        repo_root / "docs" / "test-design" / "excel-template-spec.md",
+        repo_root / "docs" / "test-design" / "rules" / "batch-run.md",
     ]:
         assert_contains(path, strict_batch_quality_markers)
     for path in [
@@ -1158,7 +1077,7 @@ def main() -> int:
             "navigation_markers",
             "full navigation",
             "must not assume",
-            "validate_product_map_sync",
+            "validate_page_discovery_sync",
             "validate_import_workbook",
             "validate_batch_granularity",
             "validate_batch_import_workbooks",
@@ -1178,23 +1097,19 @@ def main() -> int:
             "PAGE_DISCOVERY_EXPECTED_HEADERS",
             "csv_rows_with_exact_header",
             "assert_no_sensitive_values",
-            "PRODUCT_MAP_REQUIRED_REAL_SHEETS",
             "SENSITIVE_VALUE_PATTERNS",
             "最小标题路径",
             "--import-workbook",
             "default_page_discovery_path",
-            "default_product_map_path",
-            "--product-map",
             "--page-discovery",
             "--batch-status",
             "page-discovery.csv",
-            "product-map",
             "generated workbook copies",
         ],
     )
     assert_contains(
         deliverable_validator_ps1,
-        ["ProductMapPath", "PageDiscoveryPath", "ImportWorkbookPath", "--product-map", "--page-discovery", "--import-workbook", "page-discovery.csv"],
+        ["PageDiscoveryPath", "ImportWorkbookPath", "--page-discovery", "--import-workbook", "page-discovery.csv"],
     )
     assert_contains(
         excel_tools,
@@ -1204,7 +1119,6 @@ def main() -> int:
             "fix-formal-styles",
             "init-batch-run",
             "finalize-deliverables",
-            "sync-product-map",
             "header_map",
             "IMPORT_AUTO_FIELDS",
             "wrap_text=True",
@@ -1217,7 +1131,6 @@ def main() -> int:
             "--batch-status is required when --page-discovery is provided",
             "apply_template_workbook_format",
             "extend_validation_ranges",
-            "sync_product_map",
             "complete_deliverables",
             "deliverable_names",
             "canonical_module_parts",
@@ -1283,7 +1196,6 @@ def main() -> int:
         repo_root / "AGENTS.md",
         repo_root / "CODEBUDDY.md",
         repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
@@ -1302,37 +1214,12 @@ def main() -> int:
         repo_root / "AGENTS.md",
         repo_root / "CODEBUDDY.md",
         repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
         repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
     ]:
         assert_contains(path, module_two_pass_markers)
-
-    product_map_persistence_markers = [
-        "不是临时分析结果",
-        "必须沉淀",
-        "product-map.xlsx",
-        "产品模块地图",
-        "页面元素地图",
-        "业务对象地图",
-        "业务链路地图",
-        "模块能力索引",
-        "跨模块依赖关系",
-        "变更记录",
-    ]
-    for path in [
-        repo_root / "AGENTS.md",
-        repo_root / "CODEBUDDY.md",
-        repo_root / "docs" / "ARCHITECTURE.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
-        repo_root / "docs" / "test-design" / "excel-template-spec.md",
-        repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
-        repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
-        repo_root / ".codebuddy" / "rules" / "test-design-rule.md",
-    ]:
-        assert_contains(path, product_map_persistence_markers)
 
     batch_complete_markers = [
         "每一批测试设计",
@@ -1352,7 +1239,6 @@ def main() -> int:
     for path in [
         repo_root / "AGENTS.md",
         repo_root / "CODEBUDDY.md",
-        repo_root / "docs" / "test-design" / "archive-and-index-guidelines.md",
         repo_root / "docs" / "test-design" / "excel-template-spec.md",
         repo_root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         repo_root / ".codebuddy" / ".rules" / "test-design-rule.mdc",

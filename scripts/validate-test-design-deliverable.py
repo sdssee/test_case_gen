@@ -45,7 +45,6 @@ BATCH_REQUIRED_HEADERS = [
     "性能设计完成",
     "异常边界权限覆盖完成",
     "页面元素覆盖完成",
-    "产品版图已更新",
     "覆盖质量自检",
     "导入文件路径",
     "导入文件已生成",
@@ -74,7 +73,6 @@ BATCH_EXPECTED_HEADERS = [
     "性能设计完成",
     "异常边界权限覆盖完成",
     "页面元素覆盖完成",
-    "产品版图已更新",
     "覆盖质量自检",
     "未覆盖元素清单路径",
     "归档路径",
@@ -106,7 +104,6 @@ BATCH_PASS_BOOLEAN_FIELDS = [
     "性能设计完成",
     "异常边界权限覆盖完成",
     "页面元素覆盖完成",
-    "产品版图已更新",
     "导入文件已生成",
 ]
 
@@ -224,51 +221,6 @@ PAGE_DISCOVERY_EXPECTED_HEADERS = [
     "未覆盖/待确认原因",
     "证据路径",
     "备注",
-]
-
-PRODUCT_MAP_PAGE_ELEMENT_HEADERS = [
-    "产品/系统",
-    "模块",
-    "页面/入口",
-    "菜单路径/URL",
-    "元素名称/文案",
-    "元素类型",
-    "交互方式",
-    "关联用例ID",
-    "覆盖状态",
-    "发现来源",
-]
-
-PRODUCT_MAP_CASE_INDEX_HEADERS = [
-    "产品/系统",
-    "模块",
-    "功能点",
-    "用例ID",
-    "用例标题",
-    "归档测试设计路径",
-]
-
-PRODUCT_MAP_CHANGE_HEADERS = [
-    "版本",
-    "日期",
-    "变更人/来源",
-    "变更类型",
-    "影响模块",
-    "变更内容",
-    "是否已同步产品版图",
-]
-
-PRODUCT_MAP_REQUIRED_REAL_SHEETS = [
-    "产品模块地图",
-    "业务对象地图",
-    "业务链路地图",
-    "页面元素地图",
-    "用例资产索引",
-    "模块能力索引",
-    "跨模块依赖关系",
-    "可复用测试数据",
-    "变更影响分析",
-    "变更记录",
 ]
 
 SENSITIVE_VALUE_PATTERNS = [
@@ -1411,9 +1363,8 @@ def validate_batch_plan(batch_status: Path, batch_rows: list[dict[str, str]]) ->
             )
 
 
-def validate_product_map_sync(
+def validate_page_discovery_sync(
     workbook_data: dict[str, object],
-    product_map: Path,
     page_discovery: Path,
     batch_rows: list[dict[str, str]] | None = None,
 ) -> None:
@@ -1423,74 +1374,18 @@ def validate_product_map_sync(
         fail(f"Internal validator configuration error, missing page discovery required headers: {missing_discovery_required}")
     assert_no_sensitive_csv_values(discovery_rows, "page-discovery.csv")
     if not discovery_rows:
-        fail("page-discovery.csv must contain at least one discovery row when product map sync validation is enabled")
-
-    if not product_map.exists():
-        fail(f"Product map not found: {product_map}")
-
-    product_page_rows_raw = sheet_rows(product_map, "页面元素地图")
-    product_case_rows_raw = sheet_rows(product_map, "用例资产索引")
-    product_change_rows_raw = sheet_rows(product_map, "变更记录")
-    require_headers(product_page_rows_raw, PRODUCT_MAP_PAGE_ELEMENT_HEADERS, "product-map 页面元素地图")
-    require_headers(product_case_rows_raw, PRODUCT_MAP_CASE_INDEX_HEADERS, "product-map 用例资产索引")
-    require_headers(product_change_rows_raw, PRODUCT_MAP_CHANGE_HEADERS, "product-map 变更记录")
-
-    product_page_rows = row_dicts(product_page_rows_raw, "product-map 页面元素地图")
-    product_case_rows = row_dicts(product_case_rows_raw, "product-map 用例资产索引")
-    product_change_rows = row_dicts(product_change_rows_raw, "product-map 变更记录")
-    if not product_page_rows:
-        fail("product-map 页面元素地图 must contain synced page elements")
-    if not product_case_rows:
-        fail("product-map 用例资产索引 must contain synced case assets")
-    if not product_change_rows:
-        fail("product-map 变更记录 must record this product map sync")
-    for label, rows in [
-        ("product-map 页面元素地图", product_page_rows),
-        ("product-map 用例资产索引", product_case_rows),
-        ("product-map 变更记录", product_change_rows),
-    ]:
-        if not any("示例" not in "".join(row.values()) for row in rows):
-            fail(f"{label} still only contains sample/template rows and has not been synced with real product facts")
-        sample_rows = [index for index, row in enumerate(rows, start=2) if "示例" in "".join(row.values())]
-        if sample_rows:
-            fail(f"{label} contains sample/template rows after sync: rows {sample_rows[:10]}")
-    assert_no_sensitive_values(product_map, PRODUCT_MAP_REQUIRED_REAL_SHEETS)
-    validate_table_ranges(product_map, PRODUCT_MAP_REQUIRED_REAL_SHEETS)
-
-    for sheet_name in PRODUCT_MAP_REQUIRED_REAL_SHEETS:
-        rows_raw = sheet_rows(product_map, sheet_name)
-        rows = row_dicts(rows_raw, f"product-map {sheet_name}")
-        if not rows:
-            fail(f"product-map {sheet_name} must contain real synced rows")
-        sample_rows = [index for index, row in enumerate(rows, start=2) if "示例" in "".join(row.values())]
-        if sample_rows:
-            fail(f"product-map {sheet_name} contains sample/template rows after sync: rows {sample_rows[:10]}")
+        fail("page-discovery.csv must contain at least one discovery row")
 
     coverage_rows = workbook_data["coverage_rows"]
     case_ids = workbook_data["case_ids"]
-    case_titles = workbook_data["case_titles"]
-    case_function_points = workbook_data["case_function_points"]
     assert isinstance(coverage_rows, list)
     assert isinstance(case_ids, set)
-    assert isinstance(case_titles, dict)
-    assert isinstance(case_function_points, dict)
 
     workbook_elements = {
         normalized_key(row.get("页面/入口", ""), row.get("元素名称/文案", ""))
         for row in coverage_rows
         if row.get("页面/入口") and row.get("元素名称/文案")
     }
-    product_elements = {
-        normalized_key(row.get("页面/入口", ""), row.get("元素名称/文案", ""))
-        for row in product_page_rows
-        if row.get("页面/入口") and row.get("元素名称/文案")
-    }
-    product_case_ids = {row.get("用例ID", "") for row in product_case_rows if row.get("用例ID")}
-    if len(product_case_ids) < len(case_ids):
-        fail(f"product-map 用例资产索引 has fewer unique case IDs than workbook 功能测试用例: {len(product_case_ids)} < {len(case_ids)}")
-    if len(product_elements) < len(workbook_elements):
-        fail(f"product-map 页面元素地图 has fewer unique page elements than workbook 页面元素覆盖清单: {len(product_elements)} < {len(workbook_elements)}")
-
     passed_batches = {
         row.get("批次ID", ""): row.get("最小标题路径", "").strip()
         for row in (batch_rows or [])
@@ -1559,9 +1454,6 @@ def validate_product_map_sync(
                 fail(f"page-discovery.csv row {index} generated create flow result must mention success/failure/next state: {page} / {element}")
         if normalized_key(page, element) not in workbook_elements:
             fail(f"page-discovery.csv row {index} element is missing from workbook 页面元素覆盖清单: {page} / {element}")
-        if normalized_key(page, element) not in product_elements:
-            fail(f"page-discovery.csv row {index} element is missing from product-map 页面元素地图: {page} / {element}")
-
         generated = row.get("是否已生成用例", "")
         linked_ids = parse_ids(row.get("关联用例ID", ""))
         if generated == "是":
@@ -1570,25 +1462,6 @@ def validate_product_map_sync(
             unknown_workbook = sorted(linked_ids - case_ids)
             if unknown_workbook:
                 fail(f"page-discovery.csv row {index} references case IDs missing from workbook: {unknown_workbook}")
-            unknown_product = sorted(linked_ids - product_case_ids)
-            if unknown_product:
-                fail(f"page-discovery.csv row {index} references case IDs missing from product-map 用例资产索引: {unknown_product}")
-
-    for case_id in sorted(case_ids):
-        if case_id not in product_case_ids:
-            fail(f"Workbook case ID is missing from product-map 用例资产索引: {case_id}")
-        product_rows = [row for row in product_case_rows if row.get("用例ID") == case_id]
-        if not any(row.get("用例标题") == case_titles[case_id] for row in product_rows):
-            fail(f"product-map 用例资产索引 title mismatch or missing for case ID: {case_id}")
-        if not any(row.get("功能点") == case_function_points[case_id] for row in product_rows):
-            fail(f"product-map 用例资产索引 功能点 mismatch or missing for case ID: {case_id}")
-
-    synced_changes = [
-        row for row in product_change_rows
-        if row.get("是否已同步产品版图") == "是" and row.get("变更内容")
-    ]
-    if not synced_changes:
-        fail("product-map 变更记录 must include at least one synced change row with 是否已同步产品版图=是")
     discovery_elements = {
         normalized_key(row.get("页面/入口", ""), row.get("元素名称/文案", ""))
         for row in discovery_rows
@@ -1610,10 +1483,6 @@ def validate_product_map_sync(
             )
 
 
-def default_product_map_path() -> Path:
-    return Path(__file__).resolve().parents[1] / "docs" / "test-assets" / "product-map.xlsx"
-
-
 def default_page_discovery_path(batch_status: Path | None) -> Path | None:
     if not batch_status:
         return None
@@ -1624,15 +1493,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate generated test design deliverable workbook.")
     parser.add_argument("--workbook", required=True, type=Path)
     parser.add_argument("--batch-status", type=Path)
-    parser.add_argument("--product-map", type=Path)
     parser.add_argument("--page-discovery", type=Path)
     parser.add_argument("--import-workbook", type=Path)
     args = parser.parse_args()
 
     if not args.page_discovery:
         args.page_discovery = default_page_discovery_path(args.batch_status)
-    if args.page_discovery and not args.product_map:
-        args.product_map = default_product_map_path()
     if args.page_discovery:
         discovered_batch_status = validate_batch_run_directory_from_page_discovery(args.page_discovery)
         if not args.batch_status:
@@ -1649,10 +1515,8 @@ def main() -> int:
         validate_batch_import_workbooks(args.batch_status, batch_rows)
     if args.import_workbook:
         validate_import_workbook(args.import_workbook, workbook_data)
-    if bool(args.product_map) != bool(args.page_discovery):
-        fail("--product-map and --page-discovery must be provided together")
-    if args.product_map and args.page_discovery:
-        validate_product_map_sync(workbook_data, args.product_map, args.page_discovery, batch_rows)
+    if args.page_discovery:
+        validate_page_discovery_sync(workbook_data, args.page_discovery, batch_rows)
     print("OK: test design deliverable quality checks passed.")
     return 0
 

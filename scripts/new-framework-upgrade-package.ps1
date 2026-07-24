@@ -55,10 +55,8 @@ $includeGlobs = @(
 )
 
 $protectedPrefixes = @(
-  "docs/test-assets/product-map.xlsx",
   "docs/test-assets/modules/",
   "docs/test-assets/imports/",
-  "docs/test-assets/indexes/",
   "docs/test-design/current/",
   "docs/test-design/deliverables/"
 )

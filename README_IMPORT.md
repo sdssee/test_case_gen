@@ -24,11 +24,9 @@ your-project/
       current/
       deliverables/
     test-assets/
-      product-map.xlsx
       modules/
       imports/
       batch-runs/
-      indexes/
   scripts/
 ```
 
@@ -48,7 +46,6 @@ your-project/
 - 大范围分批：`batch-run.md`
 - Excel 交付件：`excel-deliverable.md`
 - 测试系统导入：`import-template.md`
-- 产品版图同步：`product-map-sync.md`
 - 数据安全与脱敏：`data-safety.md`
 
 这种结构让 Skill、Rule、AGENTS、CODEBUDDY 保持低于 10000 字符，避免 CodeBuddy 加载入口时出现截断或规则遗漏。
@@ -85,7 +82,6 @@ python scripts/test_design_excel_tools.py complete-deliverables `
 ## 批次与资产
 
 - 客户交付件：`docs/test-design/current/`、`docs/test-design/deliverables/`
-- 内部产品版图：`docs/test-assets/product-map.xlsx`
 - 模块归档：`docs/test-assets/modules/`
 - 导入副本：`docs/test-assets/imports/`
 - 批次账本：`docs/test-assets/batch-runs/`
@@ -127,5 +123,3 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scrip
 - `docs/test-design/deliverables/`
 
 标识：PROTECTED_ASSET_DIRS
-
-如果 `asset_schema_version` 或 `product-map.xlsx` 结构变化，必须通过迁移脚本增量补齐旧资产，不能用空模板覆盖内网真实资产。

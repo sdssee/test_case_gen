@@ -45,10 +45,10 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 -BatchStatusPath <batch-status.csv>
 ```
 
-如需校验产品版图和页面实探同步，传入或自动发现：
+页面实探任务追加：
 
 ```powershell
--ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>
+-PageDiscoveryPath <page-discovery.csv>
 ```
 
 生成导入文件后追加：
@@ -57,4 +57,4 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 -ImportWorkbookPath <导入文件.xlsx>
 ```
 
-校验必须覆盖字段错位、下拉框、自动字段空值、模板数据验证、多行换行样式、页面元素覆盖关系、标题格式、编号步骤、性能设计、批次状态和产品版图同步。
+校验覆盖字段映射、模板格式、页面元素覆盖关系、标题与步骤、性能设计、批次状态和双 Excel 一致性。

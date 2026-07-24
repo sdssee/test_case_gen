@@ -107,18 +107,3 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scripts.ps1 -Path docs/test-assets/batch-runs/<任务>/artifacts/scripts
 ```
-
-## 外网到内网升级
-
-普通框架升级不要整包覆盖业务项目。
-
-- 外网生成升级包：`scripts/new-framework-upgrade-package.ps1`
-- 内网应用升级包：`scripts/upgrade-framework.ps1 -PackagePath <升级包>`
-
-受保护目录：
-
-- `docs/test-assets/`
-- `docs/test-design/current/`
-- `docs/test-design/deliverables/`
-
-标识：PROTECTED_ASSET_DIRS

@@ -74,10 +74,8 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scrip
 
 该预检会检查单文件大小、JSON 语法、Python 语法和中文弯引号风险。
 
-## 升级与 Git
+## Git
 
-- 外网到内网普通框架升级使用 `scripts/new-framework-upgrade-package.ps1` 和 `scripts/upgrade-framework.ps1`。
-- 普通框架升级不得覆盖 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。标识：PROTECTED_ASSET_DIRS。
 - 每次完成修改后运行 `git status`。
 - 修改完成且验证通过后，默认提交并推送到当前分支。
 - GitHub 提交信息使用中文。

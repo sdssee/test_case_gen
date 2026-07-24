@@ -91,22 +91,6 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scripts.ps1 -Path docs/test-assets/batch-runs/<任务>/artifacts/scripts
 ```
 
-## 升级
-
-外网生成升级包：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/new-framework-upgrade-package.ps1
-```
-
-内网应用升级包：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/upgrade-framework.ps1 -PackagePath <升级包>
-```
-
-升级默认保护 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`，不会覆盖内网真实资产；保护清单标识为 `PROTECTED_ASSET_DIRS`。`VERSION` 中的 `framework_version` 表示框架版本，`asset_schema_version` 表示内部资产结构版本。详细流程见 `docs/UPGRADE.md`。
-
 ## 维护
 
 - 规则变化先查 `docs/RULE_OWNERSHIP.md`。

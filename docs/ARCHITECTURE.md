@@ -11,7 +11,6 @@
 | 执行入口 | `.codebuddy/skills/test-design/SKILL.md`、`.codebuddy/.rules/test-design-rule.mdc`、`.codebuddy/rules/test-design-rule.md` | 保持低于 10000 字符，只承载读取路由、硬门禁、流程摘要和校验命令。 |
 | 模板契约 | `docs/test-design/excel-template-spec.md`、`docs/test-design/*.xlsx` | 定义 Excel Sheet、字段、枚举、下拉框、导入模板和样式约束。 |
 | 客户交付件 | `docs/test-design/current/`、`docs/test-design/deliverables/` | 保存本次任务范围内交付给客户或测试系统的测试设计和导入文件，不包含内部产品全量版图。 |
-| 升级机制 | `VERSION`、`UPGRADE_MANIFEST.md`、`docs/UPGRADE.md`、`scripts/new-framework-upgrade-package.ps1`、`scripts/upgrade-framework.ps1` | 支持外网生成框架升级包、内网受控应用升级包，并保护内网业务资产。 |
 
 规则归属和精简边界见 `docs/RULE_OWNERSHIP.md`。修改规则时，应先判断规则类型和权威源，再更新摘要引用和校验脚本。
 
@@ -33,7 +32,6 @@
 17. 测试系统导入文件由统一表头映射链路生成，随批次交付优先使用 `scripts/test_design_excel_tools.py complete-deliverables`；只需单独生成导入文件时才使用 `generate-import`。批次临时脚本只能调用统一工具或复用同等映射函数，禁止按固定列序号数组写入模板；生成后必须通过 `-ImportWorkbookPath` 校验字段错位、下拉框、自动字段空值、模板数据验证、多行换行样式和 DFX 标签落地。
 18. 测试用例必须尽可能详细，这是架构约束。每个测试点、每个页面元素都必须按 Skill 从主流程、异常、边界、权限、状态、数据一致性、组合条件、禁用态/空状态/错误态、兼容性/稳定性、性能影响、审计/日志/通知、副作用和可恢复路径等不同测试方向展开；禁止用一个笼统用例替代多个可验证方向。
 19. 模块或批次正式写测试用例前，必须先完成 DFX 覆盖评估，综合评估 DFX 12 维度 × 4 场景覆盖，权威规则为 `docs/test-design/rules/dfx-test-strategy.md`；评估结论必须明确适用、不适用、待确认和需补充证据的维度，并据此展开异常值、边界值和测试策略，不得只写一句笼统策略。每批至少考虑 DFT、DFB、DFS、DFR、DFU、DFP 的适用场景，涉及接口、兼容、维护、部署、运维、极端压测时追加 DFI、DFC、DFM、DFD、DFO、DFX。
-20. 外网到内网升级以脚本升级为主、手动确认兜底；普通框架升级不得覆盖 `docs/test-assets/`、`docs/test-design/current/`、`docs/test-design/deliverables/`。标识：PROTECTED_ASSET_DIRS。
 23. 每次修改规范或模板后必须运行稳定性自检。
 
 ## 变更同步规则
@@ -42,8 +40,6 @@
 - 改 Excel 字段或枚举：同步模板、`excel-template-spec.md`、自检脚本。
 - 改页面实探或测试数据规则：同步 `AGENTS.md`、`CODEBUDDY.md`、Skill、Rule。
 - 改导入模板规则：不得直接修改原 `测试用例模板.xlsx`，除非测试系统模板本身发生版本变化。
-- 改外网到内网升级机制：同步 `VERSION`、`UPGRADE_MANIFEST.md`、`docs/UPGRADE.md`、升级脚本和自检脚本。
-- 改内部资产结构：提升 `asset_schema_version`，补充升级清单和迁移脚本；迁移脚本只能读取旧资产并增量补齐。
 - 改规则归属或精简策略：同步 `docs/RULE_OWNERSHIP.md`、`docs/ARCHITECTURE.md` 和自检脚本。
 
 ## 发布前检查

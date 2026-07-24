@@ -1,63 +1,60 @@
-# Excel交付规则
+# Excel 交付件规则
 
 ## 正式测试设计
 
-正式测试设计固定包含8个Sheet：
+正式测试设计 Excel 默认包含 8 个 Sheet：
 
-1. 测试设计总览
-2. 需求用户故事拆解
-3. 测试场景矩阵
-4. 功能测试用例
-5. 性能测试设计
-6. 风险与待确认问题
-7. 自动化建议
-8. 页面元素覆盖清单
+1. `测试设计总览`
+2. `需求用户故事拆解`
+3. `测试场景矩阵`
+4. `功能测试用例`
+5. `性能测试设计`
+6. `风险与待确认问题`
+7. `自动化建议`
+8. `页面元素覆盖清单`
 
-不得增加测试系统导入Sheet；导入文件是独立Excel。
+正式测试设计工作簿不得新增 `测试系统导入用例` Sheet。
 
-## 模板写入
+## 页面元素覆盖清单
 
-- 统一编译器复制模板并清空所有示例数据，保留第2行样式、数据验证、列宽、冻结窗格和表头。
-- `测试设计总览`按模板横向填入第2行一条完整记录，禁止改写成A/B两列纵向键值表。
-- 新数据行继承模板样式，长文本自动换行并顶部对齐；功能用例和导入用例的步骤、预期、前置条件按内容动态调整行高并设置可执行宽度。
-- 清理空白数据行、Excel Table对象、模板占位符和其他模块残留。
-- 页面元素覆盖清单由`page-discovery.csv`确定性生成，只记录追踪关系，不承载完整用例正文。
+- `页面元素覆盖清单` 只是覆盖追踪矩阵，不是测试用例 Sheet。
+- 只记录页面元素、业务依据、覆盖状态、发现方式、素材来源和关联的 `覆盖用例 ID`。
+- 不得在该 Sheet 编写独立测试用例、操作步骤、测试数据或完整预期结果正文。
+- 所有功能测试用例必须写入 `功能测试用例` Sheet。
+- 所有性能测试场景必须写入 `性能测试设计` Sheet。
 
-## 唯一命名
+## 单元格格式
 
-- 文件名只使用真实1-N级菜单/模块路径，例如`一级模块_二级模块_测试设计.xlsx`和`一级模块_二级模块_导入用例.xlsx`。
-- 导入模板必填模块字段与文件名分离。真实路径不足三级时，只在导入字段内部复用最深已知模块名，不修改路径和文件名。
-- 不生成重复末级模块、`_final`、`_fixed`、`_new`等变体。
+- `前置条件`、`操作步骤`、`预期结果` 必须编号换行。
+- 多行字段必须启用自动换行。
+- 正式测试设计和导入文件不得保留 Excel Table 对象或 `/xl/tables/table*.xml` 部件；页面元素覆盖清单等 Sheet 使用普通单元格区域、样式和自动筛选，避免打开文件触发 Microsoft Excel 修复提示或部分内容损坏提示。
+- 表头、Sheet、字段顺序和枚举必须遵守 `docs/test-design/excel-template-spec.md`。
+- 正式测试设计和导入文件不得残留 `{NAV}`、`{NL}`、`{Q}`、`{E}`、`${...}`、`{{...}}`、`TODO`、`TBD` 等模板占位符或未完成标记。
 
-## 同源与原子交付
+## 交付件校验
 
-- 保留多个JSON分片；统一生成器在内存中汇总一次，并从同一结果生成正式Excel和导入Excel。
-- 分片中按固定8-Sheet标题保存本功能相关行；同键精确重复自动吸收，冲突内容在编译前定位到具体分片，不启动自动重试。
-- 两个临时Excel都通过结构和一一对应校验后，才以可回滚方式替换正式交付件。
-- 失败时保留上一组正确文件，不留下半新半旧文件。
-- 交付后清理已知旧重复文件、临时文件和可删除的`~$*.xlsx`锁文件。
-- 最终用户提示、批次状态和归档索引直接使用工具返回路径。
-
-## 确定性交付校验
-
-- 固定8个Sheet且文件可打开。
-- 必填字段、标题、步骤和预期非空。
-- 用例ID唯一，步骤编号合法。
-- 性能设计存在针对性内容或明确不适用结论。
-- 性能目标标明需求阈值、实测基线、建议目标、待确认或不适用；实测基线必须带测量来源，目标和通过标准必须使用一致的来源口径。
-- 正式与导入Excel的用例数量、名称、步骤和预期一一对应。
-- 导入枚举、自动字段空值、数据验证和样式合法。
-- 不检查或替换内网IP、URL、账号、密码、Token、密钥、Cookie、部署路径和测试载荷。
-- 不使用通用恢复关键词判断普通交互是否闭环；只对状态变更事务检查具体业务结果。
-
-## 命令
-
-唯一正常交付命令：
+生成正式测试设计 Excel 后，必须运行：
 
 ```powershell
-python scripts/test_design_excel_tools.py compile-deliverables --project-root . --shards-dir <run-dir>/artifacts/shards --formal-template docs/test-design/codebuddy-test-design-template.xlsx --import-template docs/test-design/测试用例模板.xlsx --module-path "<真实菜单路径>" --batch-status <batch-status.csv> --page-discovery <page-discovery.csv>
+powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
 ```
 
-`prepare-formal`和`complete-deliverables`只用于历史运行恢复或诊断，不作为新任务的正常执行路径。
+大范围任务追加：
 
-编译成功后批次状态为`待Review`，交付路径只由编译器回写。完成一次跨产物语义Review并写入`final-review.md`后，调用`complete-final-review`标记完成；不得在编译后手工把批次状态或路径改写为完成。
+```powershell
+-BatchStatusPath <batch-status.csv>
+```
+
+如需校验产品版图和页面实探同步，传入或自动发现：
+
+```powershell
+-ProductMapPath docs/test-assets/product-map.xlsx -PageDiscoveryPath <page-discovery.csv>
+```
+
+生成导入文件后追加：
+
+```powershell
+-ImportWorkbookPath <导入文件.xlsx>
+```
+
+校验必须覆盖字段错位、下拉框、自动字段空值、模板数据验证、多行换行样式、页面元素覆盖关系、标题格式、编号步骤、性能设计、批次状态和产品版图同步。

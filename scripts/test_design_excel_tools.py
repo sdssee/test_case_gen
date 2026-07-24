@@ -3,15 +3,9 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
-import os
-import re
 import shutil
 import subprocess
 import sys
-import tempfile
-import uuid
-from collections import OrderedDict
 from copy import copy, deepcopy
 from datetime import date
 from pathlib import Path
@@ -28,158 +22,13 @@ except ImportError as exc:  # pragma: no cover - depends on local runtime packag
 
 
 FORMAL_FUNCTION_SHEET = "功能测试用例"
-FORMAL_SHEETS = [
-    "测试设计总览",
-    "需求用户故事拆解",
-    "测试场景矩阵",
-    "功能测试用例",
-    "性能测试设计",
-    "风险与待确认问题",
-    "自动化建议",
-    "页面元素覆盖清单",
-]
-SHEET_ROW_KEYS = {
-    "测试设计总览": None,
-    "需求用户故事拆解": "Story ID/需求 ID",
-    "测试场景矩阵": "场景 ID",
-    "功能测试用例": "用例 ID",
-    "性能测试设计": "性能场景 ID",
-    "风险与待确认问题": "编号",
-    "自动化建议": "用例 ID/场景 ID",
-    "页面元素覆盖清单": "元素 ID",
-}
-SHEET_REQUIRED_FIELDS = {
-    "测试设计总览": [
-        "项目/模块",
-        "需求名称",
-        "版本/迭代",
-        "测试负责人",
-        "需求来源",
-        "测试范围",
-        "不测范围",
-        "测试类型",
-        "测试环境",
-        "主要风险",
-        "准入条件",
-        "准出条件",
-        "待确认问题",
-    ],
-    "需求用户故事拆解": ["Story ID/需求 ID", "用户故事/需求描述", "验收标准"],
-    "测试场景矩阵": [
-        "场景 ID",
-        "功能点",
-        "测试维度",
-        "DFX维度",
-        "DFX场景",
-        "测试对象/页面元素",
-        "输入数据/状态条件",
-        "观察点",
-        "优先级",
-        "是否生成用例",
-    ],
-    "功能测试用例": [
-        "用例 ID",
-        "Story ID/需求 ID",
-        "模块",
-        "功能点",
-        "用例标题",
-        "优先级",
-        "测试类型",
-        "DFX维度",
-        "DFX场景",
-        "前置条件",
-        "操作步骤",
-        "预期结果",
-        "是否适合自动化",
-    ],
-    "性能测试设计": [
-        "性能场景 ID",
-        "业务链路",
-        "性能测试类型",
-        "DFX维度",
-        "DFX场景",
-        "响应时间目标",
-        "监控指标",
-        "通过标准",
-        "是否纳入本轮测试",
-    ],
-    "风险与待确认问题": ["编号", "类型", "描述", "影响范围", "风险等级", "建议处理方式", "状态"],
-    "自动化建议": [
-        "用例 ID/场景 ID",
-        "自动化层级",
-        "自动化价值",
-        "自动化优先级",
-        "依赖数据",
-        "稳定性风险",
-        "建议框架/工具",
-    ],
-    "页面元素覆盖清单": [
-        "元素 ID",
-        "页面/入口",
-        "页面 URL/菜单路径",
-        "元素名称/文案",
-        "元素类型",
-        "交互方式",
-        "适用DFX维度",
-        "适用DFX场景",
-        "预期行为",
-        "覆盖状态",
-        "发现方式",
-    ],
-}
-FACT_STATUSES = {"已实测", "页面观察", "DFX设计", "待确认"}
-AMBIGUOUS_EXPECTED_PATTERNS = (
-    r"结果或错误",
-    r"成功或失败",
-    r"接受.{0,30}或.{0,30}截断",
-    r"提示.{0,30}或.{0,30}报错",
-    r"页面正常响应",
-    r"系统处理正确",
-    r"结果符合预期",
-)
-DESTRUCTIVE_PAYLOAD_PATTERNS = (
-    r"(?i)\brm\s+-rf\b",
-    r"(?i)\bformat\s+[a-z]:",
-    r"(?i)\bdel\s+/[fsq]",
-    r"(?i)\bdrop\s+(database|schema)\b",
-    r"(?i)\btruncate\s+table\b",
-)
-PERFORMANCE_SOURCE_MARKERS = ("需求阈值", "实测基线", "建议目标", "待确认", "不适用")
-PAGE_COVERAGE_STATUSES = {"已覆盖", "不适用", "不测范围", "待确认"}
-PAGE_FACT_SOURCE_TOKENS = {"页面实探", "页面观察", "DFX设计", "已实测", "待确认"}
-PAGE_FACT_REQUIRED_HEADERS = {
-    "批次ID",
-    "最小标题路径",
-    "页面/入口",
-    "元素名称/文案",
-    "元素类型",
-    "交互方式",
-    "适用DFX维度",
-    "适用DFX场景",
-    "选项取值/输入值",
-    "联动/依赖变化",
-    "结果分支/后续状态",
-    "完整点击路径",
-    "预期/观察行为",
-    "业务依据/规则来源",
-    "测试数据来源",
-    "事实状态",
-    "是否已生成用例",
-    "关联用例ID",
-    "覆盖状态",
-    "未覆盖/待确认原因",
-    "备注",
-}
 IMPORT_MULTILINE_FIELDS = ["测试步骤描述", "测试步骤预期结果", "前置条件", "测试用例说明", "备注"]
 FORMAL_MULTILINE_FIELDS = {
-    "测试设计总览": ["测试范围", "不测范围", "主要风险", "准入条件", "准出条件", "待确认问题"],
-    "需求用户故事拆解": ["用户故事/需求描述", "业务价值", "验收标准", "业务规则", "前置条件", "后置影响", "待确认问题"],
-    "测试场景矩阵": ["测试对象/页面元素", "输入数据/状态条件", "观察点", "备注"],
     "功能测试用例": ["前置条件", "测试数据", "操作步骤", "预期结果", "备注"],
-    "性能测试设计": ["业务链路", "监控指标", "通过标准", "造数策略", "风险说明"],
+    "性能测试设计": ["前置条件/数据准备", "执行步骤", "监控指标", "通过标准", "风险备注"],
     "风险与待确认问题": ["描述", "影响范围", "建议处理方式"],
-    "自动化建议": ["依赖数据", "Mock 需求", "稳定性风险", "建议框架/工具", "备注"],
-    "页面元素覆盖清单": ["预期行为", "业务依据/规则来源", "待确认问题/备注"],
+    "自动化建议": ["建议说明", "前置条件", "维护要求"],
+    "页面元素覆盖清单": ["业务依据/规则来源", "待确认问题/备注"],
 }
 
 IMPORT_AUTO_FIELDS = {"测试用例系统编号", "作者"}
@@ -300,41 +149,6 @@ def set_wrap(ws, headers: dict[str, int], row_index: int, field_names: list[str]
         )
 
 
-def ensure_min_column_widths(ws, headers: dict[str, int], widths: dict[str, float]) -> None:
-    for field, minimum in widths.items():
-        column = headers.get(field)
-        if not column:
-            continue
-        letter = get_column_letter(column)
-        current = ws.column_dimensions[letter].width or 0
-        ws.column_dimensions[letter].width = max(current, minimum)
-
-
-def fit_row_height(
-    ws,
-    headers: dict[str, int],
-    row_index: int,
-    field_names: list[str],
-    minimum: float = 36,
-    maximum: float = 240,
-) -> None:
-    estimated_lines = 1
-    for field in field_names:
-        column = headers.get(field)
-        if not column:
-            continue
-        value = ws.cell(row=row_index, column=column).value
-        if value in (None, ""):
-            continue
-        width = ws.column_dimensions[get_column_letter(column)].width or 12
-        chars_per_line = max(8, int(width * 0.9))
-        lines = 0
-        for part in str(value).splitlines() or [""]:
-            lines += max(1, (len(part) + chars_per_line - 1) // chars_per_line)
-        estimated_lines = max(estimated_lines, lines)
-    ws.row_dimensions[row_index].height = min(maximum, max(minimum, estimated_lines * 16))
-
-
 def normalize_case_level(priority: str) -> str:
     value = (priority or "").upper()
     if value in {"L1", "L2", "L3", "L4"}:
@@ -376,21 +190,6 @@ def execution_mode(row: dict[str, str]) -> str:
 
 def module_names(module_path: str) -> list[str]:
     parts = [part.strip() for part in module_path.replace("/", ">").split(">") if part.strip()]
-    return (parts + [""] * 5)[:5]
-
-
-def import_module_names(module_path: str, product_name: str | None = None) -> list[str]:
-    """Map a real 1-N level path to import fields without changing file naming.
-
-    The current import template requires the first three module name columns. If
-    the real menu path is shallower, only the import fields reuse the deepest
-    known name; the canonical path and deliverable filename remain unchanged.
-    """
-    parts = canonical_module_parts(module_path, product_name)
-    if not parts:
-        parts = [module_path.strip() or "测试设计"]
-    while len(parts) < 3:
-        parts.append(parts[-1])
     return (parts + [""] * 5)[:5]
 
 
@@ -457,730 +256,6 @@ def copy_workbook(source: Path, target: Path) -> None:
     shutil.copy2(source, target)
 
 
-def atomic_publish_copies(copies: list[tuple[Path, Path]]) -> None:
-    """Publish a set of files as one rollback-capable operation."""
-    token = uuid.uuid4().hex
-    staged: list[tuple[Path, Path]] = []
-    backups: list[tuple[Path, Path]] = []
-    published: list[Path] = []
-    try:
-        for source, target in copies:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            stage = target.with_name(f".{target.name}.{token}.tmp")
-            shutil.copy2(source, stage)
-            staged.append((stage, target))
-        for _, target in staged:
-            if target.exists():
-                backup = target.with_name(f".{target.name}.{token}.bak")
-                os.replace(target, backup)
-                backups.append((backup, target))
-        for stage, target in staged:
-            os.replace(stage, target)
-            published.append(target)
-    except Exception:
-        for target in published:
-            if target.exists():
-                target.unlink()
-        for backup, target in backups:
-            if backup.exists():
-                os.replace(backup, target)
-        raise
-    finally:
-        for stage, _ in staged:
-            if stage.exists():
-                stage.unlink()
-        for backup, _ in backups:
-            if backup.exists():
-                backup.unlink()
-
-
-def cleanup_excel_lock_files(directories: set[Path]) -> None:
-    for directory in directories:
-        if not directory.exists():
-            continue
-        for lock_file in directory.glob("~$*.xlsx"):
-            try:
-                lock_file.unlink()
-            except OSError:
-                # An open Excel workbook owns its lock file; never fail delivery for it.
-                pass
-
-
-def legacy_repeated_leaf_names(module_path: str, product_name: str | None = None) -> tuple[str, str] | None:
-    parts = canonical_module_parts(module_path, product_name)
-    if not parts or len(parts) >= 3:
-        return None
-    legacy_parts = parts + [parts[-1]] * (3 - len(parts))
-    legacy_stem = safe_filename(">".join(legacy_parts))
-    current_stem = safe_filename(">".join(parts))
-    if legacy_stem == current_stem:
-        return None
-    return f"{legacy_stem}_测试设计.xlsx", f"{legacy_stem}_导入用例.xlsx"
-
-
-def prepare_formal_workbook(template: Path, output: Path) -> None:
-    """Copy the formal template and clear example data before model filling."""
-    output.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(template, output)
-    wb = load_workbook(output)
-    missing = [name for name in FORMAL_SHEETS if name not in wb.sheetnames]
-    if missing:
-        raise ValueError(f"Formal template is missing required sheets: {missing}")
-    for sheet_name in FORMAL_SHEETS:
-        clear_data_rows(wb[sheet_name])
-    remove_workbook_tables_and_refresh_filters(wb)
-    wb.save(output)
-
-
-def _section_rows(data: object, section_name: str) -> list[dict[str, object]]:
-    if not isinstance(data, dict):
-        raise ValueError("JSON shard root must be an object")
-    section = data.get(section_name)
-    if section is None:
-        return []
-    if isinstance(section, dict):
-        section = section.get("rows")
-    if not isinstance(section, list):
-        raise ValueError(f"{section_name} must be a rows array or an object containing a rows array")
-    invalid_rows = [index for index, row in enumerate(section, start=1) if not isinstance(row, dict)]
-    if invalid_rows:
-        raise ValueError(f"{section_name} contains non-object rows at positions: {invalid_rows}")
-    return section
-
-
-def _normalized_row(row: dict[str, object]) -> dict[str, str]:
-    return {
-        str(key).strip(): "" if value is None else str(value).strip()
-        for key, value in row.items()
-    }
-
-
-def _numbered_lines(value: str, label: str) -> None:
-    lines = [line.strip() for line in value.splitlines() if line.strip()]
-    if not lines:
-        raise ValueError(f"{label} must not be empty")
-    for expected_number, line in enumerate(lines, start=1):
-        match = re.match(r"^(\d+)\.\s*\S+", line)
-        if not match or int(match.group(1)) != expected_number:
-            raise ValueError(f"{label} must use consecutive numbered lines; got: {line}")
-
-
-def _validate_case_row(row: dict[str, str], source: Path, index: int) -> None:
-    label = f"{source.name} 功能测试用例 row {index}"
-    function_point = row["功能点"]
-    if not row["用例标题"].startswith(f"{function_point}-"):
-        raise ValueError(f"{label} title must start with 功能点-: {row['用例标题']}")
-    _numbered_lines(row["操作步骤"], f"{label} 操作步骤")
-    _numbered_lines(row["预期结果"], f"{label} 预期结果")
-    first_steps = "\n".join(row["操作步骤"].splitlines()[:3])
-    entry_markers = ("登录", "打开系统", "访问系统", "进入系统", "打开平台", "访问平台", "进入平台", "URL")
-    if not any(marker in first_steps for marker in entry_markers):
-        raise ValueError(f"{label} must start from the system/project entry")
-    if not any(marker in first_steps for marker in ("菜单", "模块", "导航", "路径", ">", "-", "—", "－", "页面")):
-        raise ValueError(f"{label} must include the business navigation path before control operations")
-    expected = row["预期结果"]
-    for pattern in AMBIGUOUS_EXPECTED_PATTERNS:
-        if re.search(pattern, expected):
-            raise ValueError(f"{label} contains an ambiguous expected result: {pattern}")
-    executable_text = "\n".join([row.get("测试数据", ""), row["操作步骤"]])
-    for pattern in DESTRUCTIVE_PAYLOAD_PATTERNS:
-        if re.search(pattern, executable_text):
-            raise ValueError(
-                f"{label} contains a destructive executable payload. "
-                "Use a non-destructive marker or read-only payload without masking internal test data."
-            )
-
-
-def _validate_performance_row(row: dict[str, str], source: Path, index: int) -> None:
-    target = row.get("响应时间目标", "")
-    if not any(marker in target for marker in PERFORMANCE_SOURCE_MARKERS):
-        raise ValueError(
-            f"{source.name} 性能测试设计 row {index} 响应时间目标 must identify its source as "
-            f"one of {PERFORMANCE_SOURCE_MARKERS}"
-        )
-    if "实测基线" in target:
-        evidence = "\n".join(
-            [
-                row.get("通过标准", ""),
-                row.get("造数策略", ""),
-                row.get("风险说明", ""),
-            ]
-        )
-        if not any(marker in evidence for marker in ("采样", "测量", "记录", "基线")):
-            raise ValueError(
-                f"{source.name} 性能测试设计 row {index} claims an 实测基线 without measurement provenance"
-            )
-    standard = row.get("通过标准", "")
-    located_markers = [
-        (target.find(marker), marker)
-        for marker in PERFORMANCE_SOURCE_MARKERS
-        if marker in target
-    ]
-    source_marker = min(located_markers)[1] if located_markers else ""
-    required_standard_markers = {
-        "需求阈值": ("需求", "验收"),
-        "实测基线": ("实测基线", "基线", "测量"),
-        "建议目标": ("建议", "待确认"),
-        "待确认": ("待确认",),
-        "不适用": ("不适用",),
-    }
-    if source_marker and not any(
-        marker in standard for marker in required_standard_markers[source_marker]
-    ):
-        raise ValueError(
-            f"{source.name} 性能测试设计 row {index} 通过标准 must preserve the "
-            f"{source_marker} provenance instead of presenting it as a confirmed threshold"
-        )
-
-
-def _validate_shard_row(
-    section_name: str,
-    row: dict[str, str],
-    allowed_headers: set[str],
-    source: Path,
-    index: int,
-) -> None:
-    unknown = sorted(set(row) - allowed_headers)
-    if unknown:
-        raise ValueError(f"{source.name} {section_name} row {index} has unknown fields: {unknown}")
-    missing = [field for field in SHEET_REQUIRED_FIELDS[section_name] if not row.get(field, "").strip()]
-    if missing:
-        raise ValueError(f"{source.name} {section_name} row {index} is missing required fields: {missing}")
-    if section_name == "功能测试用例":
-        _validate_case_row(row, source, index)
-    elif section_name == "性能测试设计":
-        _validate_performance_row(row, source, index)
-
-
-def load_design_shards(shards_dir: Path, formal_template: Path) -> dict[str, list[dict[str, str]]]:
-    """Load, validate and deterministically merge existing per-function JSON shards."""
-    if not shards_dir.exists():
-        raise ValueError(f"JSON shard directory not found: {shards_dir}")
-    generated_python = sorted(shards_dir.rglob("*.py"))
-    if generated_python:
-        names = ", ".join(path.name for path in generated_python[:5])
-        raise ValueError(
-            f"Run directories must not contain task-specific Python producers: {names}. "
-            "Use compile-deliverables with JSON shards instead."
-        )
-    shard_files = sorted(shards_dir.rglob("*.json"))
-    if not shard_files:
-        raise ValueError(f"No JSON shards found under: {shards_dir}")
-
-    template_wb = load_workbook(formal_template, read_only=True, data_only=False)
-    allowed_by_sheet = {
-        sheet_name: set(header_map(template_wb[sheet_name]))
-        for sheet_name in FORMAL_SHEETS
-    }
-    template_wb.close()
-    merged: dict[str, OrderedDict[str, dict[str, str]]] = {
-        sheet_name: OrderedDict() for sheet_name in FORMAL_SHEETS
-    }
-    singleton_overview: dict[str, str] | None = None
-
-    for shard_path in shard_files:
-        try:
-            with shard_path.open("r", encoding="utf-8-sig") as fp:
-                data = json.load(fp)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"{shard_path} failed JSON syntax validation: line {exc.lineno}, "
-                f"column {exc.colno}: {exc.msg}"
-            ) from exc
-        if not isinstance(data, dict):
-            raise ValueError(f"{shard_path} must contain a JSON object")
-        for section_name in FORMAL_SHEETS:
-            for index, raw_row in enumerate(_section_rows(data, section_name), start=1):
-                row = _normalized_row(raw_row)
-                _validate_shard_row(
-                    section_name,
-                    row,
-                    allowed_by_sheet[section_name],
-                    shard_path,
-                    index,
-                )
-                if section_name == "测试设计总览":
-                    if singleton_overview is None:
-                        singleton_overview = row
-                    elif singleton_overview != row:
-                        raise ValueError(
-                            f"Conflicting 测试设计总览 rows across JSON shards: {shard_path}"
-                        )
-                    continue
-                key_field = SHEET_ROW_KEYS[section_name]
-                assert key_field
-                key = row[key_field]
-                existing = merged[section_name].get(key)
-                if existing is None:
-                    merged[section_name][key] = row
-                elif existing != row:
-                    raise ValueError(
-                        f"Conflicting {section_name} key {key!r} across JSON shards: {shard_path}"
-                    )
-
-    if singleton_overview is None:
-        raise ValueError("JSON shards must contain exactly one 测试设计总览 row")
-    merged_rows: dict[str, list[dict[str, str]]] = {
-        section_name: list(rows.values()) for section_name, rows in merged.items()
-    }
-    merged_rows["测试设计总览"] = [singleton_overview]
-    for section_name in FORMAL_SHEETS[:-1]:
-        if not merged_rows[section_name]:
-            raise ValueError(f"JSON shards do not contain any rows for required section: {section_name}")
-
-    case_rows = merged_rows["功能测试用例"]
-    seen_bodies: dict[tuple[str, str], str] = {}
-    for row in case_rows:
-        body = (row["操作步骤"], row["预期结果"])
-        if body in seen_bodies:
-            raise ValueError(
-                f"Cases {seen_bodies[body]} and {row['用例 ID']} have identical steps and expected results"
-            )
-        seen_bodies[body] = row["用例 ID"]
-    automation_rows = merged_rows["自动化建议"]
-    seen_automation_bodies: dict[tuple[tuple[str, str], ...], str] = {}
-    for row in automation_rows:
-        body = tuple(
-            (field, value)
-            for field, value in row.items()
-            if field != SHEET_ROW_KEYS["自动化建议"]
-        )
-        if body in seen_automation_bodies:
-            raise ValueError(
-                f"Automation suggestions {seen_automation_bodies[body]} and "
-                f"{row['用例 ID/场景 ID']} are identical; write a targeted suggestion "
-                "or merge the referenced IDs into one row"
-            )
-        seen_automation_bodies[body] = row["用例 ID/场景 ID"]
-
-    function_order: OrderedDict[str, None] = OrderedDict()
-    for row in case_rows:
-        function_order.setdefault(row["功能点"], None)
-    function_rank = {name: index for index, name in enumerate(function_order)}
-    original_rank = {row["用例 ID"]: index for index, row in enumerate(case_rows)}
-    merged_rows["功能测试用例"] = sorted(
-        case_rows,
-        key=lambda row: (function_rank[row["功能点"]], original_rank[row["用例 ID"]]),
-    )
-    _validate_dfx_scenario_landing(merged_rows)
-    return merged_rows
-
-
-def _split_values(value: str) -> list[str]:
-    return [item.strip() for item in re.split(r"[,，;；、/\\\s]+", value or "") if item.strip()]
-
-
-def _dfx_pairs(dimensions: str, scenarios: str) -> set[tuple[str, str]]:
-    return {(dimension, scenario) for dimension in _split_values(dimensions) for scenario in _split_values(scenarios)}
-
-
-def _validate_dfx_scenario_landing(rows_by_sheet: dict[str, list[dict[str, str]]]) -> None:
-    function_rows = rows_by_sheet["功能测试用例"]
-    performance_rows = rows_by_sheet["性能测试设计"]
-    for scenario in rows_by_sheet["测试场景矩阵"]:
-        if scenario.get("是否生成用例", "").strip() != "是":
-            continue
-        scenario_pairs = _dfx_pairs(scenario.get("DFX维度", ""), scenario.get("DFX场景", ""))
-        story_id = scenario.get("Story ID/需求 ID", "").strip()
-        function_point = scenario.get("功能点", "").strip()
-        performance_dimension = any(
-            dimension in {"DFP性能", "DFO运维", "DFX极端"}
-            for dimension, _ in scenario_pairs
-        )
-        candidates = performance_rows if performance_dimension else function_rows
-        landed = False
-        for row in candidates:
-            if story_id and row.get("Story ID/需求 ID", "").strip() != story_id:
-                continue
-            if not performance_dimension and function_point and row.get("功能点", "").strip() != function_point:
-                continue
-            if scenario_pairs & _dfx_pairs(row.get("DFX维度", ""), row.get("DFX场景", "")):
-                landed = True
-                break
-        if not landed:
-            raise ValueError(
-                f"测试场景矩阵 {scenario.get('场景 ID', '')!r} declares generated DFX "
-                f"{sorted(scenario_pairs)} for {function_point!r}, but no matching "
-                f"{'performance scenario' if performance_dimension else 'functional case'} "
-                "exists for the same story/function"
-            )
-
-
-def _parse_case_ids(value: str) -> list[str]:
-    return [
-        item.strip()
-        for item in re.split(r"[,，;；\n]+", value or "")
-        if item.strip()
-    ]
-
-
-def _fact_text(source: dict[str, str]) -> str:
-    return " ".join(
-        (source.get(field) or "").strip()
-        for field in ["页面/入口", "元素名称/文案", "元素类型", "交互方式", "完整点击路径"]
-    )
-
-
-def _is_selection_fact(source: dict[str, str]) -> bool:
-    return any(marker in _fact_text(source) for marker in ("下拉", "级联", "选择", "单选", "复选", "枚举", "树选择", "开关"))
-
-
-def _is_input_fact(source: dict[str, str]) -> bool:
-    if any(marker in source.get("元素类型", "") for marker in ("按钮", "图标", "表格列", "分页", "链接")):
-        return False
-    return any(marker in _fact_text(source) for marker in ("输入", "文本框", "文本域", "搜索框", "查询框", "数字框", "日期框"))
-
-
-def _is_state_change_fact(source: dict[str, str]) -> bool:
-    return any(marker in _fact_text(source) for marker in ("新增", "创建", "编辑", "修改", "配置", "保存", "删除", "移除", "提交"))
-
-
-def _is_action_control(source: dict[str, str]) -> bool:
-    return any(marker in source.get("元素类型", "") for marker in ("按钮", "图标", "链接")) or any(
-        marker in source.get("元素名称/文案", "") for marker in ("确定", "保存", "提交", "取消", "删除", "关闭")
-    )
-
-
-def _is_independent_configurable_fact(source: dict[str, str]) -> bool:
-    return not _is_action_control(source) and (_is_selection_fact(source) or _is_input_fact(source)) and any(
-        marker in _fact_text(source) for marker in ("新增", "创建", "编辑", "修改", "配置", "表单", "弹窗", "抽屉")
-    )
-
-
-def _branch_values(value: str) -> list[str]:
-    return [part.strip() for part in re.split(r"[、;；\n]+", value or "") if part.strip()]
-
-
-def _validate_fact_at_write(source: dict[str, str], label: str) -> None:
-    status = (source.get("事实状态") or "").strip()
-    if status not in FACT_STATUSES:
-        raise ValueError(f"{label} has invalid 事实状态 {status!r}; expected {sorted(FACT_STATUSES)}")
-    if not (source.get("页面/入口") or "").strip() or not (source.get("元素名称/文案") or "").strip():
-        raise ValueError(f"{label} must include 页面/入口 and 元素名称/文案")
-    for field in ("预期/观察行为", "业务依据/规则来源", "测试数据来源"):
-        value = (source.get(field) or "").strip()
-        if field == "预期/观察行为" and value in PAGE_FACT_SOURCE_TOKENS:
-            raise ValueError(f"{label} appears column-shifted: {field} contains source token {value!r}")
-        if field == "测试数据来源" and value in FACT_STATUSES:
-            raise ValueError(f"{label} appears column-shifted: {field} contains fact status {value!r}")
-    if status != "已实测":
-        return
-    if _is_selection_fact(source) or _is_input_fact(source):
-        for field in ("选项取值/输入值", "预期/观察行为", "结果分支/后续状态"):
-            if not (source.get(field) or "").strip():
-                raise ValueError(f"{label} is 已实测 but lacks {field}")
-    if _is_selection_fact(source) and not (source.get("联动/依赖变化") or "").strip():
-        raise ValueError(f"{label} is a tested finite selection but lacks 联动/依赖变化")
-    if _is_state_change_fact(source):
-        for field in ("预期/观察行为", "结果分支/后续状态"):
-            if not (source.get(field) or "").strip():
-                raise ValueError(f"{label} is a tested state-changing transaction but lacks {field}")
-
-
-def _read_page_facts(page_discovery: Path) -> tuple[list[str], list[dict[str, str]]]:
-    with page_discovery.open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.DictReader(fp)
-        headers = reader.fieldnames or []
-        rows = list(reader)
-    if not headers:
-        raise ValueError(f"page-discovery.csv has no header row: {page_discovery}")
-    missing = sorted(PAGE_FACT_REQUIRED_HEADERS - set(headers))
-    if missing:
-        raise ValueError(f"page-discovery.csv is missing standard headers: {missing}")
-    return headers, rows
-
-
-def upsert_page_facts(page_discovery: Path, facts: list[dict[str, object]]) -> dict[str, int]:
-    """Idempotently write one continuous exploration transaction with named CSV fields."""
-    headers, rows = _read_page_facts(page_discovery)
-    normalized_facts: list[dict[str, str]] = []
-    for index, raw in enumerate(facts, start=1):
-        unknown = sorted(set(raw) - set(headers))
-        if unknown:
-            raise ValueError(f"page fact {index} has unknown fields: {unknown}")
-        fact = {header: "" for header in headers}
-        fact.update({key: "" if value is None else str(value).strip() for key, value in raw.items()})
-        _validate_fact_at_write(fact, f"page fact {index}")
-        normalized_facts.append(fact)
-    if normalized_facts:
-        rows = [row for row in rows if (row.get("页面/入口") or "").strip() or (row.get("元素名称/文案") or "").strip()]
-
-    identity_fields = ("批次ID", "最小标题路径", "页面/入口", "元素名称/文案")
-    inserted = updated = absorbed = 0
-    for fact in normalized_facts:
-        identity = tuple(fact.get(field, "") for field in identity_fields)
-        matches = [
-            row for row in rows
-            if tuple((row.get(field) or "").strip() for field in identity_fields) == identity
-        ]
-        if not matches:
-            rows.append(fact)
-            inserted += 1
-            continue
-        if len(matches) > 1:
-            raise ValueError(f"page-discovery.csv has duplicate natural key: {identity}")
-        current = matches[0]
-        if all((current.get(header) or "").strip() == fact.get(header, "") for header in headers):
-            absorbed += 1
-            continue
-        old_status = (current.get("事实状态") or "").strip()
-        new_status = fact.get("事实状态", "")
-        progressing = old_status != "已实测" and new_status == "已实测"
-        conflicts = []
-        for header in headers:
-            incoming = fact.get(header, "")
-            existing = (current.get(header) or "").strip()
-            if not incoming:
-                continue
-            if existing and existing != incoming and not progressing:
-                conflicts.append(header)
-            else:
-                current[header] = incoming
-        if conflicts:
-            raise ValueError(f"page fact conflicts with existing natural key {identity}: {conflicts}")
-        updated += 1
-    with page_discovery.open("w", encoding="utf-8-sig", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=headers)
-        writer.writeheader()
-        writer.writerows(rows)
-    return {"inserted": inserted, "updated": updated, "absorbed": absorbed, "total": len(rows)}
-
-
-def page_fact_checkpoint(page_discovery: Path) -> dict[str, object]:
-    """Summarize execution decisions before case generation without writing another artifact."""
-    _, rows = _read_page_facts(page_discovery)
-    real_rows = [row for row in rows if (row.get("页面/入口") or "").strip() and (row.get("元素名称/文案") or "").strip()]
-    external_block_markers = (
-        "权限",
-        "账号",
-        "外部",
-        "跨系统",
-        "不可逆",
-        "共享环境",
-        "业务规则",
-        "需求确认",
-        "环境限制",
-        "数据准备",
-    )
-    page_action_markers = ("点击", "输入", "选择", "下拉", "按钮", "分页", "编辑", "创建", "删除", "保存")
-
-    def requires_user_confirmation(row: dict[str, str]) -> bool:
-        if (row.get("事实状态") or "").strip() != "待确认":
-            return False
-        reason = (row.get("未覆盖/待确认原因") or "").strip()
-        page_verifiable = any(marker in _fact_text(row) for marker in page_action_markers)
-        externally_blocked = any(marker in reason for marker in external_block_markers)
-        return not page_verifiable or externally_blocked
-
-    pending = [
-        {
-            "页面": row.get("页面/入口", ""),
-            "元素": row.get("元素名称/文案", ""),
-            "原因": row.get("未覆盖/待确认原因", ""),
-        }
-        for row in real_rows
-        if requires_user_confirmation(row)
-    ]
-    execute_on_page = [
-        {
-            "页面": row.get("页面/入口", ""),
-            "元素": row.get("元素名称/文案", ""),
-            "当前状态": row.get("事实状态", ""),
-        }
-        for row in real_rows
-        if (
-            (row.get("事实状态") or "").strip() in {"页面观察", "DFX设计"}
-            or (
-                (row.get("事实状态") or "").strip() == "待确认"
-                and not requires_user_confirmation(row)
-            )
-        )
-        and any(marker in _fact_text(row) for marker in page_action_markers)
-    ]
-    dimensions = sorted(
-        {
-            value
-            for row in real_rows
-            for value in _split_values(row.get("适用DFX维度", ""))
-        }
-    )
-    return {
-        "事实总数": len(real_rows),
-        "已实测": sum((row.get("事实状态") or "").strip() == "已实测" for row in real_rows),
-        "页面待执行": execute_on_page,
-        "需用户确认": pending,
-        "已识别DFX维度": dimensions,
-        "可进入用例规划": bool(real_rows) and not pending and not execute_on_page,
-    }
-
-
-def page_element_rows(
-    page_discovery: Path,
-    case_rows: list[dict[str, str]],
-) -> list[dict[str, str]]:
-    _, discovery_rows = _read_page_facts(page_discovery)
-    case_by_id = {row["用例 ID"]: row for row in case_rows}
-    elements: list[dict[str, str]] = []
-    primary_case_fields: dict[str, list[str]] = {}
-    for index, source in enumerate(discovery_rows, start=1):
-        element_name = (source.get("元素名称/文案") or "").strip()
-        if not element_name:
-            continue
-        _validate_fact_at_write(source, f"page-discovery.csv row {index}")
-        status = (source.get("事实状态") or "").strip()
-        linked_ids = _parse_case_ids(source.get("关联用例ID", ""))
-        generated = (source.get("是否已生成用例") or "").strip()
-        coverage = (source.get("覆盖状态") or "").strip()
-        reason = (source.get("未覆盖/待确认原因") or "").strip()
-        if generated not in {"是", "否"}:
-            raise ValueError(f"page-discovery.csv row {index} 是否已生成用例 must be 是 or 否")
-        if coverage not in PAGE_COVERAGE_STATUSES:
-            raise ValueError(
-                f"page-discovery.csv row {index} has invalid 覆盖状态 {coverage!r}; "
-                f"expected {sorted(PAGE_COVERAGE_STATUSES)}"
-            )
-        if coverage != "已覆盖" and not reason:
-            raise ValueError(
-                f"page-discovery.csv row {index} status {coverage} must include 未覆盖/待确认原因"
-            )
-        if status == "已实测" and coverage == "待确认":
-            raise ValueError(
-                f"page-discovery.csv row {index} is 已实测 but coverage is still 待确认; "
-                "link its primary case or record a resolved non-applicable/out-of-scope reason"
-            )
-        unknown_ids = [case_id for case_id in linked_ids if case_id not in case_by_id]
-        if unknown_ids:
-            raise ValueError(f"page-discovery.csv row {index} references unknown case IDs: {unknown_ids}")
-        if linked_ids and generated != "是":
-            raise ValueError(
-                f"page-discovery.csv row {index} links cases but 是否已生成用例 is not 是"
-            )
-        if generated == "是" and not linked_ids:
-            raise ValueError(
-                f"page-discovery.csv row {index} is generated but has no 关联用例ID"
-            )
-        if coverage == "已覆盖" and not linked_ids:
-            raise ValueError(
-                f"page-discovery.csv row {index} is 已覆盖 but has no 关联用例ID"
-            )
-        if generated == "否" and linked_ids:
-            raise ValueError(f"page-discovery.csv row {index} is not generated but links case IDs")
-        if generated == "否" and coverage == "已覆盖":
-            raise ValueError(f"page-discovery.csv row {index} is 已覆盖 but 是否已生成用例 is 否")
-        if generated == "是" and (_is_selection_fact(source) or _is_input_fact(source)):
-            branch_count = len(_branch_values(source.get("选项取值/输入值", "")))
-            if branch_count > 1 and len(linked_ids) < branch_count:
-                raise ValueError(
-                    f"page-discovery.csv row {index} records {branch_count} independently verified "
-                    f"options/input classes but only {len(linked_ids)} primary baseline cases"
-                )
-        if generated == "是" and _is_independent_configurable_fact(source):
-            for case_id in linked_ids:
-                primary_case_fields.setdefault(case_id, []).append(element_name)
-        linked_dimensions = {
-            case_by_id[case_id].get("DFX维度", "")
-            for case_id in linked_ids
-            if case_by_id[case_id].get("DFX维度", "")
-        }
-        declared_dimensions = {
-            item.strip()
-            for item in re.split(r"[,，;；]+", source.get("适用DFX维度", ""))
-            if item.strip()
-        }
-        missing_dimensions = sorted(linked_dimensions - declared_dimensions)
-        if missing_dimensions:
-            raise ValueError(
-                f"page-discovery.csv row {index} is missing linked case DFX dimensions: {missing_dimensions}"
-            )
-        story_ids = list(
-            OrderedDict.fromkeys(
-                case_by_id[case_id].get("Story ID/需求 ID", "")
-                for case_id in linked_ids
-                if case_by_id[case_id].get("Story ID/需求 ID", "")
-            )
-        )
-        remarks = "\n".join(
-            value
-            for value in [
-                (source.get("未覆盖/待确认原因") or "").strip(),
-                (source.get("备注") or "").strip(),
-                f"事实状态：{status}",
-            ]
-            if value
-        )
-        elements.append(
-            {
-                "元素 ID": f"EL-{len(elements) + 1:03d}",
-                "Story ID/需求 ID": ",".join(story_ids),
-                "页面/入口": (source.get("页面/入口") or "").strip(),
-                "页面 URL/菜单路径": (source.get("菜单路径/URL") or "").strip(),
-                "元素名称/文案": element_name,
-                "元素类型": (source.get("元素类型") or "").strip(),
-                "交互方式": (source.get("交互方式") or "").strip(),
-                "适用DFX维度": (source.get("适用DFX维度") or "").strip(),
-                "适用DFX场景": (source.get("适用DFX场景") or "").strip(),
-                "前置状态/权限": ";".join(
-                    value
-                    for value in [
-                        (source.get("角色/权限") or "").strip(),
-                        (source.get("数据状态") or "").strip(),
-                    ]
-                    if value
-                ),
-                "预期行为": (source.get("预期/观察行为") or "").strip(),
-                "业务依据/规则来源": (source.get("业务依据/规则来源") or "").strip(),
-                "覆盖用例 ID": ",".join(linked_ids),
-                "覆盖状态": coverage,
-                "发现方式": (source.get("发现方式") or "").strip(),
-                "素材来源": (source.get("测试数据来源") or "").strip(),
-                "待确认问题/备注": remarks,
-            }
-        )
-    conflicts = {
-        case_id: list(OrderedDict.fromkeys(fields))
-        for case_id, fields in primary_case_fields.items()
-        if len(list(OrderedDict.fromkeys(fields))) > 1
-    }
-    if conflicts:
-        case_id, fields = next(iter(conflicts.items()))
-        raise ValueError(
-            f"Case {case_id} is the primary validation for multiple independent configurable "
-            f"fields {fields}; split them into single-factor save cases"
-        )
-    if not elements:
-        raise ValueError(f"page-discovery.csv contains no real page element rows: {page_discovery}")
-    return elements
-
-
-def compile_formal_workbook(
-    formal_template: Path,
-    shards_dir: Path,
-    output: Path,
-    page_discovery: Path | None = None,
-) -> dict[str, list[dict[str, str]]]:
-    """Compile all eight formal sheets from validated functional shards and page facts."""
-    rows_by_sheet = load_design_shards(shards_dir, formal_template)
-    if page_discovery:
-        rows_by_sheet["页面元素覆盖清单"] = page_element_rows(
-            page_discovery,
-            rows_by_sheet["功能测试用例"],
-        )
-    if not rows_by_sheet["页面元素覆盖清单"]:
-        raise ValueError(
-            "页面元素覆盖清单 must be provided by page-discovery.csv or existing JSON shards"
-        )
-    prepare_formal_workbook(formal_template, output)
-    workbook = load_workbook(output)
-    for sheet_name in FORMAL_SHEETS:
-        worksheet = workbook[sheet_name]
-        headers = header_map(worksheet)
-        for row_index, values in enumerate(rows_by_sheet[sheet_name], start=2):
-            write_mapped_row(worksheet, headers, row_index, values)
-    remove_workbook_tables_and_refresh_filters(workbook)
-    workbook.save(output)
-    return rows_by_sheet
-
-
 def write_mapped_row(ws, headers: dict[str, int], row_index: int, values: dict[str, str]) -> None:
     copy_row_style(ws, 2 if ws.max_row >= 2 else 1, row_index)
     for field, value in values.items():
@@ -1195,31 +270,17 @@ def append_mapped_row(ws, values: dict[str, str]) -> None:
     write_mapped_row(ws, headers, row_index, values)
 
 
-PRODUCT_MAP_TEMPLATE_MARKERS = ("示例", "FLOW-DEMO-", "CHG-DEMO-", "TC-DEMO-", "AI_TEST_DEMO")
-
-
 def remove_rows_containing(ws, needles: list[str]) -> None:
     if not needles:
         return
     for row_index in range(ws.max_row, 1, -1):
         values = ["" if cell.value is None else str(cell.value) for cell in ws[row_index]]
         joined = "\n".join(values)
-        if any(needle and needle in joined for needle in needles) or any(
-            marker in joined for marker in PRODUCT_MAP_TEMPLATE_MARKERS
-        ):
+        if any(needle and needle in joined for needle in needles) or "示例" in joined:
             ws.delete_rows(row_index, 1)
 
 
-def update_batch_status_paths(
-    batch_status: Path,
-    batch_id: str | None,
-    archive_rel: str,
-    import_rel: str,
-    function_case_count: int | None = None,
-    performance_count: int | None = None,
-    page_discovery_completed: bool = False,
-    source_shards_validated: bool = False,
-) -> list[dict[str, str]]:
+def update_batch_status_paths(batch_status: Path, batch_id: str | None, archive_rel: str, import_rel: str) -> list[dict[str, str]]:
     if not batch_status:
         return []
     with batch_status.open("r", encoding="utf-8-sig", newline="") as fp:
@@ -1228,7 +289,7 @@ def update_batch_status_paths(
         rows = list(reader)
     if not headers:
         raise ValueError(f"batch-status.csv has no header row: {batch_status}")
-    required = {"批次ID", "归档路径", "导入文件路径"}
+    required = {"批次ID", "归档路径", "导入文件路径", "导入文件已生成"}
     missing = sorted(required - set(headers))
     if missing:
         raise ValueError(f"batch-status.csv is missing required finalize columns: {missing}")
@@ -1248,22 +309,7 @@ def update_batch_status_paths(
         )
         row["归档路径"] = archive_rel
         row["导入文件路径"] = import_rel
-        if "导入文件已生成" in row:
-            row["导入文件已生成"] = "是"
-        if "状态" in row:
-            row["状态"] = "待Review"
-        if page_discovery_completed and "页面实探状态" in row:
-            row["页面实探状态"] = "已完成"
-        if source_shards_validated and "JSON分片状态" in row:
-            row["JSON分片状态"] = "已完成"
-        if function_case_count is not None and "功能用例数" in row:
-            row["功能用例数"] = str(function_case_count)
-        if performance_count is not None and "性能场景数" in row:
-            row["性能场景数"] = str(performance_count)
-        if "最后更新时间" in row:
-            row["最后更新时间"] = date.today().isoformat()
-        if "下一步动作" in row:
-            row["下一步动作"] = "执行一次最终语义Review"
+        row["导入文件已生成"] = "是"
     with batch_status.open("w", encoding="utf-8-sig", newline="") as fp:
         writer = csv.DictWriter(fp, fieldnames=headers)
         writer.writeheader()
@@ -1271,76 +317,8 @@ def update_batch_status_paths(
     return changes
 
 
-def complete_final_review(
-    batch_status: Path,
-    review_file: Path,
-    batch_id: str | None = None,
-) -> None:
-    """Close a run only after the single semantic review has been recorded."""
-    if not review_file.exists():
-        raise ValueError(f"final review file not found: {review_file}")
-    if review_file.resolve().parent != batch_status.resolve().parent or review_file.name != "final-review.md":
-        raise ValueError("final review must be the run directory's final-review.md")
-    review_text = review_file.read_text(encoding="utf-8-sig").strip()
-    if len(review_text) < 20 or any(marker in review_text for marker in ("TODO", "TBD", "{NAV}", "${")):
-        raise ValueError("final-review.md must contain a concrete review conclusion without placeholders")
-    with batch_status.open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.DictReader(fp)
-        headers = reader.fieldnames or []
-        rows = list(reader)
-    target_rows = [row for row in rows if not batch_id or row.get("批次ID") == batch_id]
-    if not target_rows:
-        raise ValueError(f"No matching batch row found for batch_id={batch_id!r}")
-    for row in target_rows:
-        if row.get("状态", "").strip() not in {"待Review", "Review中"}:
-            raise ValueError(
-                f"batch {row.get('批次ID', '')} must be 待Review before final review completion"
-            )
-        if not row.get("归档路径", "").strip() or not row.get("导入文件路径", "").strip():
-            raise ValueError(f"batch {row.get('批次ID', '')} has no compiler-owned deliverable paths")
-        row["状态"] = "已完成"
-        if "下一步动作" in row:
-            row["下一步动作"] = "完成"
-        if "最后更新时间" in row:
-            row["最后更新时间"] = date.today().isoformat()
-    with batch_status.open("w", encoding="utf-8-sig", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=headers)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def preflight_finalize_metadata(
-    batch_status: Path | None,
-    batch_id: str | None,
-    product_map: Path | None,
-    page_discovery: Path | None,
-) -> None:
-    if product_map and not page_discovery:
-        raise ValueError("--product-map requires --page-discovery for product-map sync")
-    if page_discovery and not batch_status:
-        raise ValueError("--batch-status is required when --page-discovery is provided")
-    if page_discovery and not page_discovery.exists():
-        raise ValueError(f"page-discovery.csv not found: {page_discovery}")
-    if product_map and not product_map.exists():
-        raise ValueError(f"product-map.xlsx not found: {product_map}")
-    if not batch_status:
-        return
-    if not batch_status.exists():
-        raise ValueError(f"batch-status.csv not found: {batch_status}")
-    with batch_status.open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.DictReader(fp)
-        headers = reader.fieldnames or []
-        rows = list(reader)
-    required = {"批次ID", "归档路径", "导入文件路径"}
-    missing = sorted(required - set(headers))
-    if missing:
-        raise ValueError(f"batch-status.csv is missing required finalize columns: {missing}")
-    if not any(not batch_id or row.get("批次ID") == batch_id for row in rows):
-        raise ValueError(f"No matching batch row found for batch_id={batch_id!r}")
-
-
 def sync_batch_markdown_paths(batch_status: Path, changes: list[dict[str, str]]) -> None:
-    for markdown_name in ["batch-plan.md", "final-review.md", "batch-review.md"]:
+    for markdown_name in ["batch-plan.md", "batch-review.md"]:
         markdown_path = batch_status.resolve().parent / markdown_name
         if not markdown_path.exists():
             continue
@@ -1392,57 +370,26 @@ def write_single_csv_row(path: Path, values: dict[str, str]) -> None:
         writer.writerow(row)
 
 
-def migrate_page_discovery_fact_status(path: Path) -> None:
-    """Add provenance to historical discovery files without claiming old work was tested."""
-    if not path.exists():
-        return
-    with path.open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.DictReader(fp)
-        headers = reader.fieldnames or []
-        rows = list(reader)
-    if not headers:
-        raise ValueError(f"page-discovery.csv has no header row: {path}")
-    if "事实状态" not in headers:
-        insert_at = headers.index("是否已生成用例") if "是否已生成用例" in headers else len(headers)
-        headers.insert(insert_at, "事实状态")
-    for row in rows:
-        if row.get("事实状态"):
-            continue
-        row["事实状态"] = "待确认" if row.get("覆盖状态") == "待确认" else "页面观察"
-    with path.open("w", encoding="utf-8-sig", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=headers)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def init_batch_run(
-    project_root: Path,
-    run_id: str,
-    module_path: str,
-    batch_id: str,
-    product_name: str | None = None,
-    large_scope: bool = False,
-) -> Path:
+def init_batch_run(project_root: Path, run_id: str, module_path: str, batch_id: str, product_name: str | None = None) -> Path:
     run_dir = project_root / "docs" / "test-assets" / "batch-runs" / run_id
     templates_dir = project_root / "docs" / "test-assets" / "batch-runs" / "templates"
     required_templates = {
+        "batch-plan.md": templates_dir / "batch-plan-template.md",
         "batch-status.csv": templates_dir / "batch-status-template.csv",
+        "batch-review.md": templates_dir / "batch-review-template.md",
         "page-discovery.csv": templates_dir / "page-discovery-template.csv",
     }
-    if large_scope:
-        required_templates["batch-plan.md"] = templates_dir / "batch-plan-template.md"
     missing = [str(path) for path in required_templates.values() if not path.exists()]
     if missing:
         raise ValueError(f"Batch template files are missing: {missing}")
 
     run_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir = run_dir / "artifacts"
-    shards_dir = artifacts_dir / "shards"
-    shards_dir.mkdir(parents=True, exist_ok=True)
+    scripts_dir = artifacts_dir / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
 
-    created: dict[str, bool] = {}
     for target_name, template_path in required_templates.items():
-        created[target_name] = copy_template_if_missing(template_path, run_dir / target_name)
+        copy_template_if_missing(template_path, run_dir / target_name)
 
     product, modules = split_module_parts(module_path, product_name)
     level1 = modules[0] if len(modules) > 0 else ""
@@ -1450,60 +397,67 @@ def init_batch_run(
     level3 = modules[2] if len(modules) > 2 else ""
     leaf_path = ">".join(modules) or module_path
 
-    if created.get("batch-status.csv"):
-        write_single_csv_row(
-            run_dir / "batch-status.csv",
-            {
-                "批次ID": batch_id,
-                "一级模块": level1,
-                "二级菜单": level2,
-                "三级菜单/页面域": level3,
-                "最小标题路径": leaf_path,
-                "状态": "待开始",
-                "页面实探状态": "未开始",
-                "JSON分片状态": "未开始",
-                "功能用例数": "0",
-                "性能场景数": "0",
-                "最后更新时间": date.today().isoformat(),
-                "下一步动作": "开始页面实探并补充 page-discovery.csv",
-            },
-        )
-    if created.get("page-discovery.csv"):
-        write_single_csv_row(
-            run_dir / "page-discovery.csv",
-            {
-                "批次ID": batch_id,
-                "一级模块": level1,
-                "二级菜单": level2,
-                "三级菜单/页面域": level3,
-                "最小标题路径": leaf_path,
-                "菜单路径/URL": leaf_path,
-                "发现方式": "浏览器实探/页面资料",
-                "事实状态": "待确认",
-                "是否已生成用例": "否",
-                "覆盖状态": "待确认",
-                "备注": "按当前批次页面实探结果补充页面、元素、取值、联动和关联用例",
-            },
-        )
-    else:
-        migrate_page_discovery_fact_status(run_dir / "page-discovery.csv")
+    write_single_csv_row(
+        run_dir / "batch-status.csv",
+        {
+            "批次ID": batch_id,
+            "一级模块": level1,
+            "二级菜单": level2,
+            "三级菜单/页面域": level3,
+            "批次范围": leaf_path,
+            "状态": "待开始",
+            "页面数": "0",
+            "元素总数": "0",
+            "已覆盖元素数": "0",
+            "待确认元素数": "0",
+            "功能用例数": "0",
+            "性能场景数": "0",
+            "异常用例数": "0",
+            "边界用例数": "0",
+            "权限/状态用例数": "0",
+            "数据一致性用例数": "0",
+            "页面遍历完成": "否",
+            "功能用例完成": "否",
+            "性能设计完成": "否",
+            "异常边界权限覆盖完成": "否",
+            "页面元素覆盖完成": "否",
+            "产品版图已更新": "否",
+            "覆盖质量自检": "未通过",
+            "导入文件已生成": "否",
+            "最小标题路径": leaf_path,
+            "下一步动作": "开始页面实探并补充 page-discovery.csv",
+        },
+    )
+    write_single_csv_row(
+        run_dir / "page-discovery.csv",
+        {
+            "批次ID": batch_id,
+            "一级模块": level1,
+            "二级菜单": level2,
+            "三级菜单/页面域": level3,
+            "最小标题路径": leaf_path,
+            "菜单路径/URL": leaf_path,
+            "发现方式": "浏览器实探/页面资料",
+            "是否已生成用例": "否",
+            "覆盖状态": "待确认",
+            "备注": "按当前批次页面实探结果补充页面、元素、取值、联动和关联用例",
+        },
+    )
 
     init_note = (
-        "\n\n## 运行范围\n"
+        "\n\n## 批次初始化\n"
         f"- 产品/系统：{product}\n"
         f"- 模块路径：{leaf_path}\n"
         f"- 批次ID：{batch_id}\n"
         "- 执行要求：先补全 page-discovery.csv，再生成测试设计、导入文件和 batch-status.csv 覆盖数据。\n"
     )
-    for markdown_name in ["batch-plan.md"]:
+    for markdown_name in ["batch-plan.md", "batch-review.md"]:
         markdown_path = run_dir / markdown_name
-        if not markdown_path.exists():
-            continue
         text = markdown_path.read_text(encoding="utf-8-sig")
-        if "## 运行范围" not in text:
+        if "## 批次初始化" not in text:
             markdown_path.write_text(text.rstrip() + init_note, encoding="utf-8")
 
-    print(f"Ready: {run_dir}")
+    print(f"Initialized batch run: {run_dir}")
     return run_dir
 
 
@@ -1608,7 +562,7 @@ def sync_product_map(
                 "前置状态/权限": row.get("角色/权限", ""),
                 "关联用例ID": row.get("关联用例ID", ""),
                 "覆盖状态": row.get("覆盖状态", ""),
-                "发现来源": " / ".join(part for part in [row.get("事实状态", ""), row.get("发现方式", "")] if part),
+                "发现来源": row.get("发现方式", ""),
                 "最后更新时间": today,
                 "备注": row.get("备注", ""),
             },
@@ -1726,11 +680,14 @@ def finalize_deliverables(
     product_map: Path | None = None,
     page_discovery: Path | None = None,
     product_name: str | None = None,
-    source_shards_validated: bool = False,
-) -> dict[str, Path]:
+) -> None:
     project_root = project_root.resolve()
-    preflight_finalize_metadata(batch_status, batch_id, product_map, page_discovery)
     _, formal_name, import_name = deliverable_names(module_path, product_name)
+
+    apply_formal_workbook_styles(formal_workbook)
+    import_wb = load_workbook(import_workbook)
+    remove_workbook_tables_and_refresh_filters(import_wb)
+    import_wb.save(import_workbook)
 
     module_archive = project_root / "docs" / "test-assets" / "modules" / formal_name
     import_archive = project_root / "docs" / "test-assets" / "imports" / import_name
@@ -1738,66 +695,17 @@ def finalize_deliverables(
     deliverable_formal = project_root / "docs" / "test-design" / "deliverables" / formal_name
     deliverable_import = project_root / "docs" / "test-design" / "deliverables" / import_name
 
-    with tempfile.TemporaryDirectory(prefix="test-design-publish-") as temp_dir_name:
-        temp_dir = Path(temp_dir_name)
-        prepared_formal = temp_dir / formal_name
-        prepared_import = temp_dir / import_name
-        apply_formal_workbook_styles(formal_workbook, prepared_formal)
-        shutil.copy2(import_workbook, prepared_import)
-        import_wb = load_workbook(prepared_import)
-        remove_workbook_tables_and_refresh_filters(import_wb)
-        import_wb.save(prepared_import)
-        atomic_publish_copies(
-            [
-                (prepared_formal, module_archive),
-                (prepared_formal, current_copy),
-                (prepared_formal, deliverable_formal),
-                (prepared_import, import_archive),
-                (prepared_import, deliverable_import),
-            ]
-        )
-
-    target_dirs = {
-        module_archive.parent,
-        current_copy.parent,
-        deliverable_formal.parent,
-        import_archive.parent,
-    }
-    cleanup_excel_lock_files(target_dirs)
-    legacy_names = legacy_repeated_leaf_names(module_path, product_name)
-    if legacy_names:
-        legacy_formal, legacy_import = legacy_names
-        for directory, name in [
-            (module_archive.parent, legacy_formal),
-            (current_copy.parent, legacy_formal),
-            (deliverable_formal.parent, legacy_formal),
-            (import_archive.parent, legacy_import),
-            (deliverable_import.parent, legacy_import),
-        ]:
-            stale = directory / name
-            if stale.exists():
-                stale.unlink()
+    for target in [module_archive, current_copy, deliverable_formal]:
+        copy_workbook(formal_workbook, target)
+    for target in [import_archive, deliverable_import]:
+        copy_workbook(import_workbook, target)
 
     if batch_status:
-        formal_wb = load_workbook(module_archive, read_only=True, data_only=True)
-        function_case_count = len(non_empty_rows(
-            formal_wb["功能测试用例"],
-            header_map(formal_wb["功能测试用例"]),
-        ))
-        performance_count = len(non_empty_rows(
-            formal_wb["性能测试设计"],
-            header_map(formal_wb["性能测试设计"]),
-        ))
-        formal_wb.close()
         changes = update_batch_status_paths(
             batch_status,
             batch_id,
             relative_project_path(project_root, module_archive),
             relative_project_path(project_root, import_archive),
-            function_case_count,
-            performance_count,
-            page_discovery is not None,
-            source_shards_validated,
         )
         sync_batch_markdown_paths(batch_status, changes)
         cleanup_batch_artifacts(batch_status)
@@ -1810,14 +718,6 @@ def finalize_deliverables(
             relative_project_path(project_root, module_archive),
             product_name,
         )
-    return {
-        "formal": deliverable_formal,
-        "import": deliverable_import,
-        "current_formal": current_copy,
-        "formal_archive": module_archive,
-        "import_archive": import_archive,
-        "deliverable_formal": deliverable_formal,
-    }
 
 
 def run_python_script(script: Path, args: list[str]) -> None:
@@ -1838,94 +738,37 @@ def complete_deliverables(
     page_discovery: Path | None = None,
     product_name: str | None = None,
     scripts_path: Path | None = None,
-    source_shards_validated: bool = False,
-) -> dict[str, Path]:
+) -> None:
     project_root = project_root.resolve()
-    preflight_finalize_metadata(batch_status, batch_id, product_map, page_discovery)
     script_dir = Path(__file__).resolve().parent
     _, _, import_name = deliverable_names(module_path, product_name)
+    target_import = import_workbook or (project_root / "docs" / "test-assets" / "imports" / import_name)
+
     if scripts_path and scripts_path.exists():
         run_python_script(script_dir / "validate-generated-python-scripts.py", ["--path", str(scripts_path)])
 
-    with tempfile.TemporaryDirectory(prefix="test-design-complete-") as temp_dir_name:
-        temp_dir = Path(temp_dir_name)
-        staged_formal = temp_dir / "formal.xlsx"
-        staged_import = temp_dir / import_name
-        apply_formal_workbook_styles(formal_workbook, staged_formal)
-        generate_import_workbook(staged_formal, import_template, staged_import, module_path, product_name)
-        staged_validator_args = ["--workbook", str(staged_formal), "--import-workbook", str(staged_import)]
-        if batch_status:
-            staged_validator_args.extend(["--batch-status", str(batch_status)])
-        if page_discovery:
-            staged_validator_args.extend(["--page-discovery", str(page_discovery)])
-        run_python_script(script_dir / "validate-test-design-deliverable.py", staged_validator_args)
-        paths = finalize_deliverables(
-            project_root,
-            staged_formal,
-            staged_import,
-            module_path,
-            batch_status,
-            batch_id,
-            product_map,
-            page_discovery,
-            product_name,
-            source_shards_validated,
-        )
+    apply_formal_workbook_styles(formal_workbook)
+    generate_import_workbook(formal_workbook, import_template, target_import, module_path, product_name)
+    finalize_deliverables(
+        project_root,
+        formal_workbook,
+        target_import,
+        module_path,
+        batch_status,
+        batch_id,
+        product_map,
+        page_discovery,
+        product_name,
+    )
 
-    if import_workbook and import_workbook.resolve() != paths["import_archive"].resolve():
-        atomic_publish_copies([(paths["import_archive"], import_workbook)])
-
-    if product_map and page_discovery:
-        validator_args = [
-            "--workbook",
-            str(paths["formal_archive"]),
-            "--import-workbook",
-            str(paths["import_archive"]),
-            "--product-map",
-            str(product_map),
-            "--page-discovery",
-            str(page_discovery),
-        ]
-        if batch_status:
-            validator_args.extend(["--batch-status", str(batch_status)])
-        run_python_script(script_dir / "validate-test-design-deliverable.py", validator_args)
-    return paths
-
-
-def compile_deliverables(
-    project_root: Path,
-    shards_dir: Path,
-    formal_template: Path,
-    import_template: Path,
-    module_path: str,
-    batch_status: Path | None = None,
-    batch_id: str | None = None,
-    product_map: Path | None = None,
-    page_discovery: Path | None = None,
-    product_name: str | None = None,
-) -> dict[str, Path]:
-    """Compile validated shards and atomically publish the canonical workbook pair."""
-    preflight_finalize_metadata(batch_status, batch_id, product_map, page_discovery)
-    with tempfile.TemporaryDirectory(prefix="test-design-compile-") as temp_dir_name:
-        formal_draft = Path(temp_dir_name) / "formal-from-shards.xlsx"
-        compile_formal_workbook(
-            formal_template=formal_template,
-            shards_dir=shards_dir,
-            output=formal_draft,
-            page_discovery=page_discovery,
-        )
-        return complete_deliverables(
-            project_root=project_root,
-            formal_workbook=formal_draft,
-            import_template=import_template,
-            module_path=module_path,
-            batch_status=batch_status,
-            batch_id=batch_id,
-            product_map=product_map,
-            page_discovery=page_discovery,
-            product_name=product_name,
-            source_shards_validated=True,
-        )
+    validator_args = ["--workbook", str(formal_workbook), "--import-workbook", str(target_import)]
+    if batch_status:
+        validator_args.extend(["--batch-status", str(batch_status)])
+    if product_map:
+        validator_args.extend(["--product-map", str(product_map)])
+    if page_discovery:
+        validator_args.extend(["--page-discovery", str(page_discovery)])
+    run_python_script(script_dir / "validate-test-design-deliverable.py", validator_args)
 
 
 def generate_import_workbook(
@@ -1948,20 +791,9 @@ def generate_import_workbook(
     import_ws = import_wb[import_wb.sheetnames[0]]
     import_headers = header_map(import_ws)
     clear_data_rows(import_ws)
-    ensure_min_column_widths(
-        import_ws,
-        import_headers,
-        {
-            "测试用例名称": 34,
-            "测试步骤描述": 55,
-            "测试步骤预期结果": 55,
-            "测试用例说明": 26,
-            "前置条件": 32,
-            "备注": 28,
-        },
-    )
 
-    modules = import_module_names(module_path, product_name)
+    canonical_path = ">".join(canonical_module_parts(module_path, product_name)) or module_path
+    modules = module_names(canonical_path)
     write_row = 2
     for row_index in range(2, function_ws.max_row + 1):
         case = row_dict(function_ws, function_headers, row_index)
@@ -1998,26 +830,14 @@ def generate_import_workbook(
             if column:
                 import_ws.cell(row=write_row, column=column, value=value)
         set_wrap(import_ws, import_headers, write_row, IMPORT_MULTILINE_FIELDS)
-        fit_row_height(import_ws, import_headers, write_row, IMPORT_MULTILINE_FIELDS)
+        import_ws.row_dimensions[write_row].height = max(import_ws.row_dimensions[write_row].height or 18, 60)
         write_row += 1
 
     template_wb = load_workbook(import_template)
     apply_template_workbook_format(import_wb, template_wb)
-    ensure_min_column_widths(
-        import_ws,
-        import_headers,
-        {
-            "测试用例名称": 34,
-            "测试步骤描述": 55,
-            "测试步骤预期结果": 55,
-            "测试用例说明": 26,
-            "前置条件": 32,
-            "备注": 28,
-        },
-    )
     for row_index in range(2, import_ws.max_row + 1):
         set_wrap(import_ws, import_headers, row_index, IMPORT_MULTILINE_FIELDS)
-        fit_row_height(import_ws, import_headers, row_index, IMPORT_MULTILINE_FIELDS)
+        import_ws.row_dimensions[row_index].height = max(import_ws.row_dimensions[row_index].height or 18, 60)
     remove_workbook_tables_and_refresh_filters(import_wb)
     import_wb.save(output)
 
@@ -2037,22 +857,9 @@ def apply_formal_workbook_styles(workbook: Path, output: Path | None = None, tem
             continue
         ws = wb[sheet_name]
         headers = header_map(ws)
-        if sheet_name == FORMAL_FUNCTION_SHEET:
-            ensure_min_column_widths(
-                ws,
-                headers,
-                {
-                    "用例标题": 34,
-                    "前置条件": 30,
-                    "测试数据": 30,
-                    "操作步骤": 52,
-                    "预期结果": 52,
-                    "备注": 28,
-                },
-            )
         for row_index in range(2, ws.max_row + 1):
             set_wrap(ws, headers, row_index, fields)
-            fit_row_height(ws, headers, row_index, fields)
+            ws.row_dimensions[row_index].height = max(ws.row_dimensions[row_index].height or 18, 60)
     remove_workbook_tables_and_refresh_filters(wb)
     wb.save(target)
 
@@ -2073,17 +880,12 @@ def main() -> int:
     style.add_argument("--output", type=Path)
     style.add_argument("--template", type=Path)
 
-    prepare = sub.add_parser("prepare-formal", help="Copy the formal template and clear all example data before filling.")
-    prepare.add_argument("--template", required=True, type=Path)
-    prepare.add_argument("--output", required=True, type=Path)
-
     init = sub.add_parser("init-batch-run", help="Create a standard batch-run ledger from templates before page discovery.")
     init.add_argument("--project-root", required=True, type=Path)
     init.add_argument("--run-id", required=True)
     init.add_argument("--module-path", required=True)
     init.add_argument("--batch-id", default="BATCH-001")
     init.add_argument("--product-name")
-    init.add_argument("--large-scope", action="store_true", help="Also create a compact batch-plan.md for multi-page/module work.")
 
     finalize = sub.add_parser("finalize-deliverables", help="Copy validated workbooks to current/deliverables/internal archives and update batch-status paths.")
     finalize.add_argument("--project-root", required=True, type=Path)
@@ -2109,41 +911,6 @@ def main() -> int:
     complete.add_argument("--product-name")
     complete.add_argument("--scripts-path", type=Path)
 
-    compile_cmd = sub.add_parser(
-        "compile-deliverables",
-        help="Compile existing per-function JSON shards into all eight sheets and atomically publish both Excel files.",
-    )
-    compile_cmd.add_argument("--project-root", required=True, type=Path)
-    compile_cmd.add_argument("--shards-dir", required=True, type=Path)
-    compile_cmd.add_argument("--formal-template", required=True, type=Path)
-    compile_cmd.add_argument("--import-template", required=True, type=Path)
-    compile_cmd.add_argument("--module-path", required=True)
-    compile_cmd.add_argument("--batch-status", type=Path)
-    compile_cmd.add_argument("--batch-id")
-    compile_cmd.add_argument("--product-map", type=Path)
-    compile_cmd.add_argument("--page-discovery", type=Path)
-    compile_cmd.add_argument("--product-name")
-
-    upsert_facts = sub.add_parser(
-        "upsert-page-facts",
-        help="Idempotently write one page-exploration transaction from a JSON array on stdin.",
-    )
-    upsert_facts.add_argument("--page-discovery", required=True, type=Path)
-
-    checkpoint_facts = sub.add_parser(
-        "checkpoint-page-facts",
-        help="Print page execution, user-confirmation and DFX readiness before case generation.",
-    )
-    checkpoint_facts.add_argument("--page-discovery", required=True, type=Path)
-
-    review_complete = sub.add_parser(
-        "complete-final-review",
-        help="Mark a compiled batch complete after its single semantic final-review.md is recorded.",
-    )
-    review_complete.add_argument("--batch-status", required=True, type=Path)
-    review_complete.add_argument("--review-file", required=True, type=Path)
-    review_complete.add_argument("--batch-id")
-
     sync = sub.add_parser("sync-product-map", help="Sync product-map.xlsx from a formal workbook and page-discovery.csv.")
     sync.add_argument("--product-map", required=True, type=Path)
     sync.add_argument("--formal-workbook", required=True, type=Path)
@@ -2157,25 +924,15 @@ def main() -> int:
         generate_import_workbook(args.formal_workbook, args.import_template, args.output, args.module_path, args.product_name)
     elif args.command == "fix-formal-styles":
         apply_formal_workbook_styles(args.workbook, args.output, args.template)
-    elif args.command == "prepare-formal":
-        prepare_formal_workbook(args.template, args.output)
     elif args.command == "init-batch-run":
-        run_dir = init_batch_run(
-            args.project_root,
-            args.run_id,
-            args.module_path,
-            args.batch_id,
-            args.product_name,
-            args.large_scope,
-        )
-        print(f"RUN_DIR={run_dir.resolve()}")
+        init_batch_run(args.project_root, args.run_id, args.module_path, args.batch_id, args.product_name)
     elif args.command == "finalize-deliverables":
         if args.page_discovery and not args.batch_status:
             raise SystemExit(
                 "ERROR: --batch-status is required when --page-discovery is provided. "
-                "Keep batch-status.csv and page-discovery.csv in the same run directory."
+                "Run init-batch-run first and keep batch-plan.md, batch-status.csv, batch-review.md, and page-discovery.csv together."
             )
-        paths = finalize_deliverables(
+        finalize_deliverables(
             args.project_root,
             args.formal_workbook,
             args.import_workbook,
@@ -2186,15 +943,13 @@ def main() -> int:
             args.page_discovery,
             args.product_name,
         )
-        print(f"FORMAL_WORKBOOK={paths['formal'].resolve()}")
-        print(f"IMPORT_WORKBOOK={paths['import'].resolve()}")
     elif args.command == "complete-deliverables":
         if args.page_discovery and not args.batch_status:
             raise SystemExit(
                 "ERROR: --batch-status is required when --page-discovery is provided. "
-                "Keep batch-status.csv and page-discovery.csv in the same run directory."
+                "Run init-batch-run first and keep batch-plan.md, batch-status.csv, batch-review.md, and page-discovery.csv together."
             )
-        paths = complete_deliverables(
+        complete_deliverables(
             args.project_root,
             args.formal_workbook,
             args.import_template,
@@ -2207,44 +962,6 @@ def main() -> int:
             args.product_name,
             args.scripts_path,
         )
-        print(f"FORMAL_WORKBOOK={paths['formal'].resolve()}")
-        print(f"IMPORT_WORKBOOK={paths['import'].resolve()}")
-    elif args.command == "compile-deliverables":
-        if args.page_discovery and not args.batch_status:
-            raise SystemExit(
-                "ERROR: --batch-status is required when --page-discovery is provided. "
-                "Keep batch-status.csv and page-discovery.csv in the same run directory."
-            )
-        paths = compile_deliverables(
-            project_root=args.project_root,
-            shards_dir=args.shards_dir,
-            formal_template=args.formal_template,
-            import_template=args.import_template,
-            module_path=args.module_path,
-            batch_status=args.batch_status,
-            batch_id=args.batch_id,
-            product_map=args.product_map,
-            page_discovery=args.page_discovery,
-            product_name=args.product_name,
-        )
-        print(f"FORMAL_WORKBOOK={paths['formal'].resolve()}")
-        print(f"IMPORT_WORKBOOK={paths['import'].resolve()}")
-    elif args.command == "upsert-page-facts":
-        try:
-            payload = json.load(sys.stdin)
-        except json.JSONDecodeError as exc:
-            raise SystemExit(
-                f"ERROR: stdin must contain a JSON array of named page facts: {exc}"
-            ) from exc
-        if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
-            raise SystemExit("ERROR: stdin must contain a JSON array of page fact objects")
-        result = upsert_page_facts(args.page_discovery, payload)
-        print(json.dumps(result, ensure_ascii=False))
-    elif args.command == "checkpoint-page-facts":
-        print(json.dumps(page_fact_checkpoint(args.page_discovery), ensure_ascii=False, indent=2))
-    elif args.command == "complete-final-review":
-        complete_final_review(args.batch_status, args.review_file, args.batch_id)
-        print(f"FINAL_REVIEW={args.review_file.resolve()}")
     elif args.command == "sync-product-map":
         sync_product_map(
             args.product_map,

@@ -7,7 +7,7 @@
 - 所有任务：`docs/test-design/rules/case-design.md`、`excel-deliverable.md`、`data-safety.md`、`docs/test-design/rules/dfx-test-strategy.md`、`docs/test-design/excel-template-spec.md`。
 - 页面/截图/原型/浏览器/computer use：追加 `docs/test-design/rules/page-discovery.md`。
 - 全产品/大模块/多菜单/超过一个最小标题：追加 `docs/test-design/rules/batch-run.md`。
-- 测试系统导入：追加 `docs/test-design/rules/import-template.md`。
+- 所有任务都必须读取测试系统导入规则：`docs/test-design/rules/import-template.md`。
 
 ## 最高优先级规则
 
@@ -32,6 +32,6 @@
 22. 禁止创建承载全量测试用例正文的单一 Python/JSON/CSV/Markdown/临时脚本；脚本只能处理当前批次并放在 `artifacts/scripts/`。
 23. 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
 26. 当前批次 Python 临时脚本必须使用 `repr()`、`json.dumps(..., ensure_ascii=False)` 或结构化数据文件写入中文文本，执行前运行生成脚本预检，检查单文件大小、JSON 语法、Python 语法和中文弯引号风险。
-27. 测试系统导入文件必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，随批次交付优先使用 `scripts/test_design_excel_tools.py complete-deliverables`，只需单独生成导入文件时才使用 `generate-import`，保留下拉框、必填样式、标红字段和自动生成字段空值。
+27. 每次正式交付都必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立测试系统导入文件，不询问是否生成；统一使用 `scripts/test_design_excel_tools.py complete-deliverables` 同步生成，保留下拉框、必填样式、标红字段和自动生成字段空值。
 28. 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。
 29. 导入文件 `执行方式` 默认 `手动`；只有已有可运行、可维护且覆盖主要校验点的自动化资产，并且本次明确按自动化导入或关联资产时，才允许填写 `自动化`。

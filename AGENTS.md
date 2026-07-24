@@ -7,7 +7,7 @@
 - 基于需求文档、用户故事、接口文档、页面截图、原型、可访问页面、缺陷单或已有用例，生成结构化测试设计。
 - 正式交付物优先使用 `docs/test-design/codebuddy-test-design-template.xlsx`。
 - 正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
-- 需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，不修改原模板。
+- 每次正式交付都必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立测试系统导入文件，不修改原模板，也不询问是否需要生成。
 - 所有交付件统一放在 `docs/test-design/deliverables/`。
 
 ## 使用现有规范
@@ -25,8 +25,7 @@ Codex 应优先读取并遵守：
 
 - 页面、截图、原型、浏览器或 computer use：`docs/test-design/rules/page-discovery.md`
 - 全产品、大模块、多菜单或超过一个最小标题：`docs/test-design/rules/batch-run.md`
-- 测试系统导入：`docs/test-design/rules/import-template.md`
-- 所有任务基础规则：`docs/test-design/rules/case-design.md`、`excel-deliverable.md`、`data-safety.md`
+- 所有任务基础规则：`docs/test-design/rules/case-design.md`、`excel-deliverable.md`、`import-template.md`、`data-safety.md`
 - 异常、边界、性能、安全、兼容、可靠、可用性等测试策略：`docs/test-design/rules/dfx-test-strategy.md`
 
 ## 执行摘要
@@ -45,7 +44,7 @@ Codex 应优先读取并遵守：
 - 页面已有数据只能查看和只读深探，不得保存、提交、最终确认或改变状态；敏感操作只允许作用于本次创建且带测试标识的数据。
 - 弹窗、下拉、输入、编辑、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环。
 - 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
-- 导入文件随批次交付优先由 `scripts/test_design_excel_tools.py complete-deliverables` 统一生成；只需单独生成导入文件时才使用 `generate-import`，保留模板下拉框、必填样式、标红字段和自动生成字段空值。
+- 每次正式交付都由 `scripts/test_design_excel_tools.py complete-deliverables` 同步生成测试系统导入文件，保留模板下拉框、必填样式、标红字段和自动生成字段空值；不得把 `generate-import` 的单独转换结果作为完整交付。
 - 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。
 - 交付文件名只使用菜单/模块路径，不拼运行文件夹名、批次目录名或产品名；如 `module-path` 包含产品名前缀，传入 `--product-name` 自动去除，避免重复交付文件。
 - 导入文件 `执行方式` 默认 `手动`，也就是默认填写 `手动`；自动化建议或 AI 页面实探不能作为填写 `自动化` 的依据。
@@ -61,7 +60,7 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 交付件校验：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
+powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx>
 ```
 
 

@@ -36,11 +36,7 @@
 生成正式测试设计 Excel 后，必须运行：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
+powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx>
 ```
 
-生成导入文件后追加：
-
-```powershell
--ImportWorkbookPath <导入文件.xlsx>
-```
+正式测试设计与导入文件必须同时存在并一起通过校验。

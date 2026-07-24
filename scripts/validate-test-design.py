@@ -171,6 +171,11 @@ def main() -> int:
 
     tool = root / "scripts" / "test_design_excel_tools.py"
     assert_contains(tool, ["adjust_row_height", "apply_template_workbook_format", "complete-deliverables", "generate-import"])
+    assert_contains(root / "AGENTS.md", ["每次正式交付", "不询问是否需要生成", "complete-deliverables"])
+    assert_contains(
+        root / "scripts" / "validate-test-design-deliverable.py",
+        ['"--import-workbook", required=True'],
+    )
     assert_contains(
         root / "docs" / "test-design" / "excel-template-spec.md",
         ["自动调整行高", "水平左对齐", "docs/test-design/deliverables/"],

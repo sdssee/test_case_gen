@@ -2,6 +2,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$WorkbookPath,
 
+  [Parameter(Mandatory = $true)]
   [string]$ImportWorkbookPath
 )
 
@@ -14,9 +15,7 @@ if (-not (Test-Path $python)) {
 }
 
 $argsList = @((Join-Path $scriptDir "validate-test-design-deliverable.py"), "--workbook", $WorkbookPath)
-if ($ImportWorkbookPath) {
-  $argsList += @("--import-workbook", $ImportWorkbookPath)
-}
+$argsList += @("--import-workbook", $ImportWorkbookPath)
 
 & $python @argsList
 if ($LASTEXITCODE -ne 0) {

@@ -1443,12 +1443,11 @@ def default_page_discovery_path(batch_status: Path | None) -> Path | None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate generated test design deliverable workbook.")
     parser.add_argument("--workbook", required=True, type=Path)
-    parser.add_argument("--import-workbook", type=Path)
+    parser.add_argument("--import-workbook", required=True, type=Path)
     args = parser.parse_args()
 
     workbook_data = validate_workbook(args.workbook)
-    if args.import_workbook:
-        validate_import_workbook(args.import_workbook, workbook_data)
+    validate_import_workbook(args.import_workbook, workbook_data)
     print("OK: test design deliverable quality checks passed.")
     return 0
 

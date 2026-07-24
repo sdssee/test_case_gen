@@ -7,7 +7,7 @@
 - 基于需求文档、用户故事、接口文档、页面截图、原型、可访问页面、缺陷单或已有用例，生成结构化测试设计。
 - 正式交付物优先使用 `docs/test-design/codebuddy-test-design-template.xlsx`。
 - 正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
-- 需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，不修改原模板。
+- 每次正式交付都必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立测试系统导入文件，不修改原模板，也不询问是否需要生成。
 - 所有交付件统一放在 `docs/test-design/deliverables/`。
 
 ## 必读文件
@@ -19,6 +19,7 @@
 - `docs/test-design/rules/README.md`
 - `docs/test-design/rules/case-design.md`
 - `docs/test-design/rules/excel-deliverable.md`
+- `docs/test-design/rules/import-template.md`
 - `docs/test-design/rules/data-safety.md`
 - `docs/test-design/rules/dfx-test-strategy.md`
 - `docs/test-design/excel-template-spec.md`
@@ -27,7 +28,6 @@
 
 - 页面、截图、原型、浏览器或 computer use：`docs/test-design/rules/page-discovery.md`
 - 全产品、大模块、多菜单或超过一个最小标题：`docs/test-design/rules/batch-run.md`
-- 测试系统导入：`docs/test-design/rules/import-template.md`
 
 ## 不可违反的摘要规则
 
@@ -50,10 +50,10 @@
 
 ## 生成后校验
 
-正式测试设计生成后运行：
+正式测试设计和导入文件生成后一起校验：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
+powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx>
 ```
 
 

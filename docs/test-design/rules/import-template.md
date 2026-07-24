@@ -2,11 +2,11 @@
 
 ## 生成方式
 
-- 需要导入测试系统时，必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件。
+- 每次正式交付都必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立测试系统导入文件，不询问是否需要生成。
 - 不得修改原模板文件。
 - 不得在正式测试设计 Excel 中新增 `测试系统导入用例` Sheet。
 - 导入内容必须从 `功能测试用例` Sheet 派生。
-- 随批次交付优先使用 `scripts/test_design_excel_tools.py complete-deliverables` 统一生成；只需单独生成导入文件时才使用 `generate-import` 或同等表头映射逻辑。
+- 完整交付统一使用 `scripts/test_design_excel_tools.py complete-deliverables` 同步生成正式测试设计和导入文件；`generate-import` 仅用于维护或重新转换已有正式测试设计，不得替代完整交付。
 - 禁止批次脚本按固定列序号数组直接写入导入模板。
 
 ## 字段约束

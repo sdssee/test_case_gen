@@ -16,15 +16,15 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 2. `docs/test-design/rules/README.md`
 3. `docs/test-design/rules/case-design.md`
 4. `docs/test-design/rules/excel-deliverable.md`
-5. `docs/test-design/rules/data-safety.md`
-6. `docs/test-design/rules/dfx-test-strategy.md`
-7. `docs/test-design/excel-template-spec.md`
+5. `docs/test-design/rules/import-template.md`
+6. `docs/test-design/rules/data-safety.md`
+7. `docs/test-design/rules/dfx-test-strategy.md`
+8. `docs/test-design/excel-template-spec.md`
 
 按任务追加：
 
 - 页面、截图、原型、浏览器或 computer use：读取 `docs/test-design/rules/page-discovery.md`。
 - 全产品、大模块、多个菜单或超过一个最小标题：读取 `docs/test-design/rules/batch-run.md`。
-- 测试系统导入：读取 `docs/test-design/rules/import-template.md`。
 
 ## 标准工作流
 
@@ -36,7 +36,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 6. 页面深探：有页面、原型或窗口时，使用浏览器或 computer use 深遍历当前批次所有可点击、可输入、可选择、可测试元素，记录到正式 Excel 的页面元素覆盖清单。
 7. 用例设计：按小功能块连续编排，基于 DFX 覆盖评估结果覆盖功能、性能、异常、边界、接口、安全、可靠、维护、可用、部署、运维、业务和极端场景。
 8. Excel 生成：正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
-9. 导入文件：需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件副本；随批次交付优先使用 `scripts/test_design_excel_tools.py complete-deliverables`，只需单独生成导入文件时才使用 `generate-import`。
+9. 导入文件：每次正式交付都复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件副本，不询问是否生成；统一使用 `scripts/test_design_excel_tools.py complete-deliverables` 同步生成并校验。
 
 ## 不可违反的门禁
 
@@ -59,16 +59,10 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 
 ## 生成后校验
 
-正式测试设计：
+正式测试设计和导入文件必须一起校验：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
-```
-
-有导入文件时追加：
-
-```powershell
--ImportWorkbookPath <导入文件.xlsx>
+powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx>
 ```
 
 当前批次 Python 临时脚本执行前：

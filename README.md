@@ -32,7 +32,7 @@
 7. `自动化建议`
 8. `页面元素覆盖清单`
 
-正式测试设计不新增 `测试系统导入用例` Sheet。需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件。
+正式测试设计不新增 `测试系统导入用例` Sheet。每次正式交付都必须复制 `docs/test-design/测试用例模板.xlsx`，同步生成独立测试系统导入文件，无需询问是否生成。
 
 ## 主流程
 
@@ -46,7 +46,7 @@ python scripts/test_design_excel_tools.py complete-deliverables `
   --module-path "一级模块>二级菜单>三级菜单"
 ```
 
-只需要单独生成导入文件且不做批次收口时，可使用 `generate-import` 兼容命令。
+`generate-import` 仅用于维护或重新转换已有正式测试设计，不能替代包含正式测试设计和导入文件的一站式完整交付。
 
 交付文件名只使用菜单/模块路径，例如 `一级模块_二级菜单_三级菜单_测试设计.xlsx` 和 `一级模块_二级菜单_三级菜单_导入用例.xlsx`，不拼运行文件夹名、批次目录名或产品名。
 
@@ -68,7 +68,7 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 交付件校验：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
+powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx>
 ```
 
 

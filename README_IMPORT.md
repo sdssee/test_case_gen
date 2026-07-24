@@ -39,7 +39,7 @@ your-project/
 - 页面实探：`page-discovery.md`
 - 大范围分批：`batch-run.md`
 - Excel 交付件：`excel-deliverable.md`
-- 测试系统导入：`import-template.md`
+- 所有任务都读取测试系统导入规则：`import-template.md`
 - 页面实探数据操作边界：`data-safety.md`
 
 这种结构让 Skill、Rule、AGENTS、CODEBUDDY 保持低于 10000 字符，避免 CodeBuddy 加载入口时出现截断或规则遗漏。
@@ -51,13 +51,13 @@ your-project/
 根据以下需求生成测试设计 Excel，模板使用 docs/test-design/codebuddy-test-design-template.xlsx。
 如果涉及页面、截图、原型或可访问系统，请按 docs/test-design/rules/page-discovery.md 做页面实探。
 如果范围超过一个最小标题，请按 docs/test-design/rules/batch-run.md 分批执行。
-如果需要导入测试系统，请复制 docs/test-design/测试用例模板.xlsx 生成独立导入文件，不要修改原模板。
+每次正式交付都必须复制 docs/test-design/测试用例模板.xlsx 生成独立测试系统导入文件，不要修改原模板，也不需要询问是否生成。
 生成后请优先运行 scripts/test_design_excel_tools.py complete-deliverables 一站式生成导入文件、同步交付件并校验。
 ```
 
 ## 测试系统导入
 
-正式测试设计 Excel 不新增 `测试系统导入用例` Sheet。需要导入测试系统时，复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，并保留模板下拉框、必填样式、标红字段和自动生成字段空值。
+正式测试设计 Excel 不新增 `测试系统导入用例` Sheet。每次正式交付都同步复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，并保留模板下拉框、必填样式、标红字段和自动生成字段空值。
 
 推荐随批次交付使用统一收口工具：
 
@@ -69,7 +69,7 @@ python scripts/test_design_excel_tools.py complete-deliverables `
   --module-path "一级模块>二级菜单>三级菜单"
 ```
 
-只需要单独生成导入文件时，可使用 `generate-import` 兼容命令。
+`generate-import` 仅用于维护或重新转换已有正式测试设计，不作为完整交付流程。
 
 导入文件生成后，用 `-ImportWorkbookPath <导入文件.xlsx>` 追加校验。
 
@@ -84,5 +84,5 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 交付件校验：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx>
+powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx>
 ```

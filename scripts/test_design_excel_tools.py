@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import shutil
 import subprocess
 import sys
+import unicodedata
 from copy import copy, deepcopy
 from pathlib import Path
 
@@ -146,6 +148,47 @@ def set_wrap(ws, headers: dict[str, int], row_index: int, field_names: list[str]
             shrink_to_fit=cell.alignment.shrink_to_fit,
             indent=cell.alignment.indent,
         )
+
+
+def text_display_width(value: str) -> int:
+    width = 0
+    for char in value:
+        if char == "\t":
+            width += 4
+        elif unicodedata.east_asian_width(char) in {"W", "F"}:
+            width += 2
+        else:
+            width += 1
+    return width
+
+
+def wrapped_line_count(value: str, column_width: float) -> int:
+    usable_width = max(float(column_width) - 1, 1)
+    total = 0
+    for line in value.splitlines() or [""]:
+        total += max(1, math.ceil(text_display_width(line) / usable_width))
+    return total
+
+
+def adjust_row_height(ws, row_index: int, min_height: float | None = None, max_height: float = 409) -> None:
+    existing_height = ws.row_dimensions[row_index].height
+    default_height = ws.sheet_format.defaultRowHeight or 18
+    required_height = max(float(existing_height or 0), float(min_height or default_height))
+    default_width = ws.sheet_format.defaultColWidth or 8.43
+
+    for cell in ws[row_index]:
+        if cell.value is None:
+            continue
+        value = str(cell.value)
+        if not cell.alignment.wrap_text and "\n" not in value and "\r" not in value:
+            continue
+        column_width = ws.column_dimensions[get_column_letter(cell.column)].width or default_width
+        indent_width = float(cell.alignment.indent or 0) * 3
+        line_count = wrapped_line_count(value, max(float(column_width) - indent_width, 1))
+        font_size = float(cell.font.sz or 11)
+        required_height = max(required_height, line_count * font_size * 1.35 + 4)
+
+    ws.row_dimensions[row_index].height = min(required_height, max_height)
 
 
 def normalize_case_level(priority: str) -> str:
@@ -588,14 +631,14 @@ def generate_import_workbook(
             if column:
                 import_ws.cell(row=write_row, column=column, value=value)
         set_wrap(import_ws, import_headers, write_row, IMPORT_MULTILINE_FIELDS)
-        import_ws.row_dimensions[write_row].height = max(import_ws.row_dimensions[write_row].height or 18, 60)
+        adjust_row_height(import_ws, write_row)
         write_row += 1
 
     template_wb = load_workbook(import_template)
     apply_template_workbook_format(import_wb, template_wb)
     for row_index in range(2, import_ws.max_row + 1):
         set_wrap(import_ws, import_headers, row_index, IMPORT_MULTILINE_FIELDS)
-        import_ws.row_dimensions[row_index].height = max(import_ws.row_dimensions[row_index].height or 18, 60)
+        adjust_row_height(import_ws, row_index)
     remove_workbook_tables_and_refresh_filters(import_wb)
     import_wb.save(output)
 
@@ -617,7 +660,7 @@ def apply_formal_workbook_styles(workbook: Path, output: Path | None = None, tem
         headers = header_map(ws)
         for row_index in range(2, ws.max_row + 1):
             set_wrap(ws, headers, row_index, fields)
-            ws.row_dimensions[row_index].height = max(ws.row_dimensions[row_index].height or 18, 60)
+            adjust_row_height(ws, row_index)
     remove_workbook_tables_and_refresh_filters(wb)
     wb.save(target)
 

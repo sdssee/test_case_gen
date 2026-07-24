@@ -931,6 +931,8 @@ def main() -> int:
             "header_map",
             "IMPORT_AUTO_FIELDS",
             "wrap_text=True",
+            "adjust_row_height",
+            "wrapped_line_count",
             "remove_workbook_tables_and_refresh_filters",
             "auto_filter.ref",
             "性能测试设计",

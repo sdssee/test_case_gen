@@ -894,6 +894,7 @@ def main() -> int:
             "validate_batch_granularity",
             "validate_batch_import_workbooks",
             "assert_multiline_cells_wrapped",
+            "assert_cells_horizontal_alignment",
             "assert_no_residual_markers",
             "assert_transient_flow_closed",
             "validate_table_ranges",

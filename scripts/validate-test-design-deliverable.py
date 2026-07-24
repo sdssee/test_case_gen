@@ -486,6 +486,33 @@ def wrapped_style_ids(path: Path) -> set[int]:
     return wrapped
 
 
+def horizontal_alignment_style_ids(path: Path, expected_alignment: str) -> set[int]:
+    with zipfile.ZipFile(path) as zf:
+        try:
+            root = ET.fromstring(zf.read("xl/styles.xml"))
+        except KeyError:
+            return set()
+    matched: set[int] = set()
+    cell_xfs = root.find("x:cellXfs", NS)
+    if cell_xfs is None:
+        return matched
+    for index, xf in enumerate(cell_xfs.findall("x:xf", NS)):
+        alignment = xf.find("x:alignment", NS)
+        if alignment is not None and alignment.attrib.get("horizontal") == expected_alignment:
+            matched.add(index)
+    return matched
+
+
+def assert_cells_horizontal_alignment(path: Path, sheet_name: str, expected_alignment: str) -> None:
+    allowed_styles = horizontal_alignment_style_ids(path, expected_alignment)
+    rows = sheet_cell_rows(path, sheet_name)
+    for row_number, row in enumerate(rows, start=1):
+        for column_number, (ref, _, style_id) in enumerate(row, start=1):
+            if style_id not in allowed_styles:
+                cell_ref = ref or f"row {row_number} column {column_number}"
+                fail(f"{sheet_name} {cell_ref} must use horizontal alignment: {expected_alignment}")
+
+
 def assert_multiline_cells_wrapped(path: Path, sheet_name: str, field_names: list[str]) -> None:
     rows = sheet_cell_rows(path, sheet_name)
     if not rows:
@@ -931,6 +958,7 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
     with zipfile.ZipFile(import_workbook) as zf:
         sheet_paths = workbook_sheet_paths(zf)
         first_sheet_name = next(iter(sheet_paths))
+    assert_cells_horizontal_alignment(import_workbook, first_sheet_name, "left")
     assert_multiline_cells_wrapped(import_workbook, first_sheet_name, IMPORT_MULTILINE_FIELDS)
 
     rows = row_dicts(rows_raw, "测试系统导入文件")

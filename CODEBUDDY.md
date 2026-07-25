@@ -66,9 +66,3 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scrip
 ```
 
 该预检会检查单文件大小、JSON 语法、Python 语法和中文弯引号风险。
-
-## Git 约定
-
-- 每次完成修改后检查 Git 变更。
-- 修改完成且验证通过后，提交当前修改并推送到 `origin`。
-- Commit Message 使用中文，简洁说明本次修改内容。

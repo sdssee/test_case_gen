@@ -77,4 +77,3 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 - 规则变化先查 `docs/RULE_OWNERSHIP.md`。
 - 模板字段变化同步 `docs/test-design/excel-template-spec.md` 和校验脚本。
 - 修改完成后运行稳定性自检。
-- 每次修改验证通过后提交并推送，Commit Message 使用中文。

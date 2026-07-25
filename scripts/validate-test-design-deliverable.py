@@ -158,6 +158,27 @@ DFX_SCENARIOS = {
 }
 
 DEPRECATED_SCENARIO_HEADERS = {"场景类型", "正向/反向"}
+GENERATED_SCENARIO_REQUIRED_FIELDS = [
+    "场景 ID",
+    "Story ID/需求 ID",
+    "功能点",
+    "测试对象/页面元素",
+    "DFX维度",
+    "DFX场景",
+    "输入数据/状态条件",
+    "观察点",
+]
+SCENARIO_SIGNATURE_FIELDS = [
+    "Story ID/需求 ID",
+    "功能点",
+    "测试对象/页面元素",
+    "DFX维度",
+    "DFX场景",
+    "输入数据/状态条件",
+    "观察点",
+]
+CASE_MERGE_SIGNATURE_FIELDS = ["功能点", "前置条件", "测试数据", "操作步骤"]
+FINDING_DISPLAY_LIMIT = 20
 
 IMPORT_REQUIRED_FIELDS = ["一级模块名称", "二级模块名称", "三级模块名称", "测试用例名称", "测试类型", "测试用例级别", "执行方式"]
 IMPORT_AUTO_FIELDS = ["测试用例系统编号", "作者"]
@@ -722,6 +743,125 @@ def normalized_key(*values: str) -> tuple[str, ...]:
     return tuple(normalize(value) for value in values)
 
 
+def normalize_signature_value(value: str) -> str:
+    normalized = re.sub(r"[,，;；、/\\|]+", "|", value or "")
+    return re.sub(r"\s+", " ", normalized).strip().lower()
+
+
+def signature(row: dict[str, str], fields: list[str]) -> tuple[str, ...]:
+    return tuple(normalize_signature_value(row.get(field, "")) for field in fields)
+
+
+def format_findings(title: str, findings: dict[str, list[str]]) -> str:
+    lines = [title]
+    for category, messages in findings.items():
+        if not messages:
+            continue
+        lines.append(f"- {category}（共 {len(messages)} 项）")
+        lines.extend(f"  - {message}" for message in messages[:FINDING_DISPLAY_LIMIT])
+        if len(messages) > FINDING_DISPLAY_LIMIT:
+            lines.append(f"  - 其余 {len(messages) - FINDING_DISPLAY_LIMIT} 项已省略")
+    return "\n".join(lines)
+
+
+def emit_warnings(category: str, messages: list[str]) -> None:
+    if not messages:
+        return
+    print(f"WARNING: {category}（共 {len(messages)} 项）", file=sys.stderr)
+    for message in messages[:FINDING_DISPLAY_LIMIT]:
+        print(f"WARNING: {message}", file=sys.stderr)
+    if len(messages) > FINDING_DISPLAY_LIMIT:
+        print(f"WARNING: 其余 {len(messages) - FINDING_DISPLAY_LIMIT} 项已省略", file=sys.stderr)
+
+
+def format_row_numbers(rows: list[int]) -> str:
+    return "、".join(str(row) for row in rows)
+
+
+def validate_atomic_scenario_rows(scenario_rows: list[dict[str, str]]) -> None:
+    findings = {
+        "生成场景必填字段缺失": [],
+        "场景 ID 重复": [],
+        "DFX 原子映射无效": [],
+        "场景精确重复": [],
+    }
+    scene_ids: dict[str, list[int]] = {}
+    scenario_signatures: dict[tuple[str, ...], list[int]] = {}
+    dfx_groups: dict[tuple[str, ...], list[tuple[int, tuple[str, ...]]]] = {}
+
+    for index, row in enumerate(scenario_rows, start=2):
+        if row.get("是否生成用例", "") == "是":
+            missing = [field for field in GENERATED_SCENARIO_REQUIRED_FIELDS if not row.get(field, "").strip()]
+            if missing:
+                findings["生成场景必填字段缺失"].append(f"第 {index} 行缺少 {missing}")
+
+        scene_id_key = normalize_signature_value(row.get("场景 ID", ""))
+        if scene_id_key:
+            scene_ids.setdefault(scene_id_key, []).append(index)
+
+        dimensions = split_dfx_values(row.get("DFX维度", ""))
+        scenarios = split_dfx_values(row.get("DFX场景", ""))
+        if len(dimensions) != 1 or len(scenarios) != 1:
+            findings["DFX 原子映射无效"].append(
+                f"第 {index} 行必须且只能填写一个 DFX维度和一个 DFX场景，当前为 {dimensions} / {scenarios}"
+            )
+        elif dimensions[0] not in DFX_SCENARIOS:
+            findings["DFX 原子映射无效"].append(f"第 {index} 行 DFX维度无效：{dimensions[0]}")
+        elif scenarios[0] not in DFX_SCENARIOS[dimensions[0]]:
+            findings["DFX 原子映射无效"].append(
+                f"第 {index} 行 {dimensions[0]} 不允许使用 DFX场景：{scenarios[0]}"
+            )
+
+        row_signature = signature(row, SCENARIO_SIGNATURE_FIELDS)
+        scenario_signatures.setdefault(row_signature, []).append(index)
+        dfx_key = signature(row, ["功能点", "测试对象/页面元素", "DFX维度", "DFX场景"])
+        dfx_groups.setdefault(dfx_key, []).append((index, row_signature))
+
+    for rows in scene_ids.values():
+        if len(rows) > 1:
+            findings["场景 ID 重复"].append(f"第 {format_row_numbers(rows)} 行使用相同场景 ID")
+    for rows in scenario_signatures.values():
+        if len(rows) > 1:
+            findings["场景精确重复"].append(f"第 {format_row_numbers(rows)} 行的场景签名完全相同，应合并")
+
+    repeated_dfx_warnings = []
+    for key, grouped_rows in dfx_groups.items():
+        if not all(key) or len(grouped_rows) < 2:
+            continue
+        distinct_signatures = {row_signature for _, row_signature in grouped_rows}
+        if len(distinct_signatures) > 1:
+            rows = [row_number for row_number, _ in grouped_rows]
+            repeated_dfx_warnings.append(
+                f"测试场景矩阵第 {format_row_numbers(rows)} 行重复使用同一功能点、对象和 DFX 组合，"
+                "请确认输入/状态/观察点差异确有必要"
+            )
+    emit_warnings("DFX 组合重复提示，不影响退出码", repeated_dfx_warnings)
+
+    if any(findings.values()):
+        fail(format_findings("测试场景矩阵轻量 DFX 硬校验未通过：", findings))
+
+
+def warn_case_merge_candidates(function_rows: list[dict[str, str]]) -> None:
+    groups: dict[tuple[str, ...], list[tuple[int, str]]] = {}
+    for index, row in enumerate(function_rows, start=2):
+        merge_signature = signature(row, CASE_MERGE_SIGNATURE_FIELDS)
+        if not merge_signature[0] or not merge_signature[-1]:
+            continue
+        groups.setdefault(merge_signature, []).append((index, row.get("用例 ID", "")))
+    warnings = []
+    for rows in groups.values():
+        if len(rows) < 2:
+            continue
+        row_numbers = [row_number for row_number, _ in rows]
+        case_ids = [case_id for _, case_id in rows if case_id]
+        case_id_text = "、".join(case_ids) if case_ids else "未填写"
+        warnings.append(
+            f"功能测试用例第 {format_row_numbers(row_numbers)} 行具有相同功能点、前置条件、测试数据和操作步骤"
+            f"（用例 ID：{case_id_text}），可评估是否合并；不得为消除警告破坏 DFX 对应或业务闭环"
+        )
+    emit_warnings("用例合并候选提示，不影响退出码", warnings)
+
+
 def csv_row_dicts(path: Path, required: list[str], label: str) -> list[dict[str, str]]:
     if not path.exists():
         fail(f"{label} not found: {path}")
@@ -816,19 +956,26 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
     assert_no_deprecated_scenario_headers(scenario_rows_raw, "测试场景矩阵")
     require_headers(
         scenario_rows_raw,
-        ["场景 ID", "功能点", "测试维度", "DFX维度", "DFX场景", "是否生成用例"],
+        [
+            "场景 ID",
+            "Story ID/需求 ID",
+            "功能点",
+            "测试维度",
+            "DFX维度",
+            "DFX场景",
+            "测试对象/页面元素",
+            "输入数据/状态条件",
+            "观察点",
+            "是否生成用例",
+        ],
         "测试场景矩阵",
     )
     scenario_rows = row_dicts(scenario_rows_raw, "测试场景矩阵")
     if not scenario_rows:
         fail("测试场景矩阵 must contain at least one DFX-driven scenario")
+    validate_atomic_scenario_rows(scenario_rows)
     generated_scenario_dfx: set[tuple[str, str]] = set()
-    for index, row in enumerate(scenario_rows, start=2):
-        dimensions, scenarios = assert_dfx_mapping(
-            row.get("DFX维度", ""),
-            row.get("DFX场景", ""),
-            f"测试场景矩阵 row {index}",
-        )
+    for row in scenario_rows:
         if row.get("是否生成用例", "") == "是":
             generated_scenario_dfx.update(dfx_pairs(row.get("DFX维度", ""), row.get("DFX场景", "")))
 
@@ -873,6 +1020,7 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
         )
         if row.get("前置条件"):
             assert_numbered(row["前置条件"], f"功能测试用例 row {index} 前置条件")
+    warn_case_merge_candidates(function_rows)
 
     performance_rows_raw = sheet_rows(workbook, "性能测试设计")
     require_headers(performance_rows_raw, ["性能场景 ID", "业务链路", "性能测试类型", "DFX维度", "DFX场景", "是否纳入本轮测试"], "性能测试设计")

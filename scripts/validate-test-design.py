@@ -174,11 +174,22 @@ def main() -> int:
     assert_contains(root / "AGENTS.md", ["每次正式交付", "不询问是否需要生成", "complete-deliverables"])
     assert_contains(
         root / "scripts" / "validate-test-design-deliverable.py",
-        ['"--import-workbook", required=True'],
+        [
+            '"--import-workbook", required=True',
+            "validate_atomic_scenario_rows",
+            "warn_case_merge_candidates",
+            "FINDING_DISPLAY_LIMIT",
+        ],
     )
     assert_contains(
         root / "docs" / "test-design" / "excel-template-spec.md",
-        ["自动调整行高", "水平左对齐", "docs/test-design/deliverables/"],
+        [
+            "自动调整行高",
+            "水平左对齐",
+            "docs/test-design/deliverables/",
+            "功能点` 作为父场景",
+            "每个场景行只允许一个主 `DFX维度`",
+        ],
     )
 
     print("OK: test design templates and lightweight project structure are aligned.")

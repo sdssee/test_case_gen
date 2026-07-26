@@ -13,16 +13,7 @@ MAX_PYTHON_BYTES = 200 * 1024
 MAX_JSON_BYTES = 256 * 1024
 SCAN_EXTS = {".py", ".json", ".csv", ".md", ".txt"}
 
-FORBIDDEN_QUOTE_CHARS = {
-    "\u201c": "left double smart quote",
-    "\u201d": "right double smart quote",
-    "\u2018": "left single smart quote",
-    "\u2019": "right single smart quote",
-    "\u300c": "corner quote",
-    "\u300d": "corner quote",
-    "\u300e": "white corner quote",
-    "\u300f": "white corner quote",
-}
+SMART_QUOTE_HINT_CHARS = "“”‘’「」『』"
 
 
 def fail(message: str) -> None:
@@ -37,17 +28,11 @@ def iter_generated_files(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in SCAN_EXTS)
 
 
-def validate_forbidden_quotes(path: Path) -> None:
-    text = path.read_text(encoding="utf-8-sig")
-    for line_number, line in enumerate(text.splitlines(), start=1):
-        for char, label in FORBIDDEN_QUOTE_CHARS.items():
-            column = line.find(char)
-            if column >= 0:
-                fail(
-                    f"{path}:{line_number}:{column + 1} contains {label} U+{ord(char):04X}. "
-                    "Generated Python scripts must serialize Chinese text with repr/json.dumps "
-                    "or use plain ASCII quote delimiters with escaped content."
-                )
+def validate_utf8(path: Path) -> None:
+    try:
+        path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        fail(f"{path} is not valid UTF-8 text: {exc}")
 
 
 def validate_file_size(path: Path) -> None:
@@ -72,7 +57,12 @@ def validate_compile(path: Path) -> None:
     try:
         py_compile.compile(str(path), doraise=True)
     except py_compile.PyCompileError as exc:
-        fail(f"{path} failed Python syntax validation:\n{exc.msg}")
+        syntax_error = getattr(exc, "exc_value", None)
+        error_line = getattr(syntax_error, "text", "") or ""
+        hint = ""
+        if any(char in error_line for char in SMART_QUOTE_HINT_CHARS):
+            hint = "\nHint: Chinese quote characters may appear in business text, but must not be used as Python string delimiters."
+        fail(f"{path} failed Python syntax validation:\n{exc.msg}{hint}")
 
 
 def validate_json(path: Path) -> None:
@@ -93,13 +83,20 @@ def main() -> int:
         print(f"OK: no generated Python/JSON/text intermediate files found under {args.path}")
         return 0
 
+    errors: list[str] = []
     for path in files:
-        validate_file_size(path)
+        validators = [validate_file_size, validate_utf8]
         if path.suffix.lower() == ".py":
-            validate_forbidden_quotes(path)
-            validate_compile(path)
+            validators.append(validate_compile)
         elif path.suffix.lower() == ".json":
-            validate_json(path)
+            validators.append(validate_json)
+        for validator in validators:
+            try:
+                validator(path)
+            except Exception as exc:
+                errors.append(str(exc))
+    if errors:
+        fail(f"Generated intermediate validation found {len(errors)} issue(s):\n- " + "\n- ".join(errors))
     print(f"OK: validated {len(files)} generated intermediate file(s).")
     return 0
 

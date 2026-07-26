@@ -179,6 +179,8 @@ def main() -> int:
             "validate_atomic_scenario_rows",
             "warn_case_merge_candidates",
             "validate_evidence_status_consistency",
+            "ui_symbol_style_issues",
+            "NAVIGATION_ACTION_PATTERN",
             "UNRESOLVED_COVERAGE_NOTE_PATTERN",
             "FINDING_DISPLAY_LIMIT",
         ],
@@ -193,7 +195,12 @@ def main() -> int:
             "每个场景行只允许一个主 `DFX维度`",
             "待实探：",
             "已覆盖` 不得与上述未解决前缀并存",
+            "一级菜单-二级菜单-目标页面",
         ],
+    )
+    assert_contains(
+        root / "scripts" / "validate-generated-python-scripts.py",
+        ["SMART_QUOTE_HINT_CHARS", "Generated intermediate validation found", "validate_compile", "validate_utf8"],
     )
 
     print("OK: test design templates and lightweight project structure are aligned.")

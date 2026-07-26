@@ -28,7 +28,7 @@
 - 禁止使用单个 Python、JSON、CSV、Markdown 或文本文件承载多个批次或全产品的完整用例正文。
 - Python 中间脚本建议小于 200KB，JSON、CSV、Markdown、TXT 建议小于 256KB。
 - 中间文件应按当前最小标题路径、页面域或功能块拆分，用完即清理。
-- Python 只承载模板填充或格式转换逻辑；中文数据优先使用结构化文件读取，并通过 `repr()` 或 `json.dumps(..., ensure_ascii=False)` 安全写入。
+- Python 只承载模板填充或格式转换逻辑；中文数据优先从 UTF-8 结构化文件读取，并通过 `repr()` 或 `json.dumps(..., ensure_ascii=False)` 安全写入。禁止全局替换 Python 源码引号；复杂、多行或包含嵌套引号的逻辑不得放入 `python -c`，应写入当前批次小型脚本并预检后执行。
 
 ## 汇总原则
 

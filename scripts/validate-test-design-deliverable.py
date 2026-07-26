@@ -182,6 +182,21 @@ FINDING_DISPLAY_LIMIT = 20
 UNRESOLVED_COVERAGE_NOTE_PATTERN = re.compile(
     r"^\s*(待实探|待确认|未验证|需验证|功能不明)\s*[：:]"
 )
+UI_WRAPPER_PATTERN = re.compile(
+    r"(?:点击|进入|打开|选择|切换|勾选|展开|关闭)[^，。；;\r\n]{0,16}"
+    r"[\[【「『“‘](?=[^\]】」』”’\r\n]{0,59}[\u4e00-\u9fffA-Za-z])"
+    r"[^\]】」』”’\r\n]{1,60}[\]】」』”’]"
+    r"|[\[【「『“‘](?=[^\]】」』”’\r\n]{0,59}[\u4e00-\u9fffA-Za-z])"
+    r"[^\]】」』”’\r\n]{1,60}[\]】」』”’]"
+    r"(?:按钮|菜单|字段|输入框|下拉框|页签|页面|选项|图标)"
+)
+NAVIGATION_ACTION_PATTERN = re.compile(
+    r"(?:进入|依次进入|导航至|打开|点击[^，。；;\r\n]{0,12}菜单)[^。；;\r\n]{0,120}"
+)
+FORBIDDEN_NAVIGATION_SEPARATOR_PATTERN = re.compile(
+    r"(?<=[\u4e00-\u9fffA-Za-z\]】」』”’])\s*(?:->|→|>)\s*"
+    r"(?=[\u4e00-\u9fffA-Za-z\[【「『“‘])"
+)
 
 IMPORT_REQUIRED_FIELDS = ["一级模块名称", "二级模块名称", "三级模块名称", "测试用例名称", "测试类型", "测试用例级别", "执行方式"]
 IMPORT_AUTO_FIELDS = ["测试用例系统编号", "作者"]
@@ -670,6 +685,17 @@ def assert_complete_operation_steps(text: str, label: str) -> None:
         fail(f"{label} must not assume the tester is already on the target module page")
 
 
+def ui_symbol_style_issues(text: str) -> list[str]:
+    issues: list[str] = []
+    for line in (line.strip() for line in text.splitlines() if line.strip()):
+        if UI_WRAPPER_PATTERN.search(line):
+            issues.append(f"UI名称不得使用括号或引号包裹: {line}")
+        navigation_action = NAVIGATION_ACTION_PATTERN.search(line)
+        if navigation_action and FORBIDDEN_NAVIGATION_SEPARATOR_PATTERN.search(navigation_action.group(0)):
+            issues.append(f"导航路径必须使用一级菜单-二级菜单-目标页面格式: {line}")
+    return issues
+
+
 def assert_transient_flow_closed(steps: str, expected: str, label: str) -> None:
     normalized_steps = re.sub(r"\s+", "", steps or "").lower()
     combined = re.sub(r"\s+", "", f"{steps}\n{expected}").lower()
@@ -1022,6 +1048,7 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
     case_titles: dict[str, str] = {}
     case_function_points: dict[str, str] = {}
     function_dfx: set[tuple[str, str]] = set()
+    ui_symbol_findings: list[str] = []
     for index, row in enumerate(function_rows, start=2):
         case_id = row.get("用例 ID", "")
         function_point = row.get("功能点", "")
@@ -1045,6 +1072,9 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
         function_dfx.update(dfx_pairs(row.get("DFX维度", ""), row.get("DFX场景", "")))
         assert_numbered(row.get("操作步骤", ""), f"功能测试用例 row {index} 操作步骤")
         assert_complete_operation_steps(row.get("操作步骤", ""), f"功能测试用例 row {index} 操作步骤")
+        ui_symbol_findings.extend(
+            f"row {index}: {issue}" for issue in ui_symbol_style_issues(row.get("操作步骤", ""))
+        )
         assert_numbered(row.get("预期结果", ""), f"功能测试用例 row {index} 预期结果")
         assert_transient_flow_closed(
             row.get("操作步骤", ""),
@@ -1053,6 +1083,8 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
         )
         if row.get("前置条件"):
             assert_numbered(row["前置条件"], f"功能测试用例 row {index} 前置条件")
+    if ui_symbol_findings:
+        fail(format_findings("功能测试用例操作步骤符号格式错误", {"操作步骤": ui_symbol_findings}))
     warn_case_merge_candidates(function_rows)
 
     performance_rows_raw = sheet_rows(workbook, "性能测试设计")

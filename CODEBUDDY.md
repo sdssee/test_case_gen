@@ -31,7 +31,7 @@
 
 ## 不可违反的摘要规则
 
-- `前置条件`、`操作步骤`、`预期结果` 必须编号换行；`操作步骤` 必须从系统或项目入口开始写完整导航路径。
+- `前置条件`、`操作步骤`、`预期结果` 必须编号换行；`操作步骤` 必须从系统或项目入口开始，导航统一使用 `一级菜单-二级菜单-目标页面`，UI 名称不使用括号或引号包裹。
 - `用例标题` 和导入文件 `测试用例名称` 必须使用 `功能点-当前用例标题` 格式。
 - 页面元素覆盖清单只是覆盖追踪矩阵，不写独立测试步骤或完整预期。
 - 页面已有数据只能查看、搜索、筛选、排序、分页、打开详情、进入编辑页观察或打开危险操作确认弹窗，不得保存、提交、最终确认或改变状态。
@@ -67,4 +67,4 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 powershell -ExecutionPolicy Bypass -File scripts/validate-generated-python-scripts.ps1 -Path <artifacts/scripts>
 ```
 
-该预检会检查单文件大小、JSON 语法、Python 语法和中文弯引号风险。
+该预检会一次汇总单文件大小、JSON 语法、Python 语法和文本编码问题；合法中文正文标点不作为错误。

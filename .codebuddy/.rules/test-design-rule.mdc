@@ -40,3 +40,5 @@
 27. 每次正式交付都必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立测试系统导入文件，不询问是否生成；统一使用 `scripts/test_design_excel_tools.py complete-deliverables` 同步生成，保留下拉框、必填样式、标红字段和自动生成字段空值。
 28. 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。
 29. 导入文件 `执行方式` 默认 `手动`；只有已有可运行、可维护且覆盖主要校验点的自动化资产，并且本次明确按自动化导入或关联资产时，才允许填写 `自动化`。
+30. 正式测试设计必须以 `codebuddy-test-design-template.xlsx` 为唯一结构与样式基线；通用 xlsx Skill 只用于读取、渲染和视觉检查，禁止临时脚本通过 `Workbook()`、`create_sheet()` 或直接修改 Excel XML 写入正式交付件。
+31. 正式 Excel 只能由 `scripts/test_design_excel_tools.py complete-deliverables` 基于模板生成；统一工具失败时立即停止并保留原交付件，禁止手工降级生成。

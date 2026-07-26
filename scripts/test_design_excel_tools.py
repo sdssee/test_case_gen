@@ -4,9 +4,11 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unicodedata
 from copy import copy, deepcopy
 from pathlib import Path
@@ -118,6 +120,85 @@ def extend_validation_ranges(ws, max_row: int) -> None:
         validation.sqref = " ".join(ranges)
 
 
+def normalized_headers(ws) -> list[str]:
+    headers = ["" if cell.value is None else str(cell.value).strip() for cell in ws[1]]
+    while headers and not headers[-1]:
+        headers.pop()
+    return headers
+
+
+def refresh_existing_filter(ws, max_row: int) -> None:
+    if not ws.auto_filter.ref:
+        return
+    min_col, min_row, max_col, _ = range_boundaries(ws.auto_filter.ref)
+    ws.auto_filter.ref = (
+        f"{get_column_letter(min_col)}{min_row}:"
+        f"{get_column_letter(max_col)}{max(max_row, 2)}"
+    )
+
+
+def rebuild_formal_workbook_from_template(source: Path, template: Path, output: Path) -> None:
+    if not source.exists():
+        raise ValueError(f"Formal workbook not found: {source}")
+    if not template.exists():
+        raise ValueError(f"Formal workbook template not found: {template}")
+
+    source_wb = load_workbook(source)
+    template_wb = load_workbook(template)
+    if source_wb.sheetnames != template_wb.sheetnames:
+        raise ValueError(
+            "Formal workbook sheets must match the template exactly before delivery. "
+            f"Expected {template_wb.sheetnames}, got {source_wb.sheetnames}"
+        )
+
+    for sheet_name in template_wb.sheetnames:
+        source_ws = source_wb[sheet_name]
+        target_ws = template_wb[sheet_name]
+        expected_headers = normalized_headers(target_ws)
+        actual_headers = normalized_headers(source_ws)
+        if actual_headers != expected_headers:
+            raise ValueError(
+                f"{sheet_name} headers must match the formal template exactly. "
+                f"Expected {expected_headers}, got {actual_headers}"
+            )
+
+        source_rows = []
+        for row_index in range(2, source_ws.max_row + 1):
+            unexpected_values = [
+                source_ws.cell(row=row_index, column=column).value
+                for column in range(len(expected_headers) + 1, source_ws.max_column + 1)
+            ]
+            if any(value is not None and str(value).strip() for value in unexpected_values):
+                raise ValueError(
+                    f"{sheet_name} row {row_index} contains data outside the formal template columns"
+                )
+            values = [
+                source_ws.cell(row=row_index, column=column).value
+                for column in range(1, len(expected_headers) + 1)
+            ]
+            if any(value is not None and str(value).strip() for value in values):
+                source_rows.append(values)
+
+        clear_data_rows(target_ws)
+        write_row = 2
+        for values in source_rows:
+            copy_template_row_format(target_ws, target_ws, 2, write_row)
+            for column, value in enumerate(values, start=1):
+                target_ws.cell(row=write_row, column=column, value=value)
+            write_row += 1
+
+        extend_validation_ranges(target_ws, max(target_ws.max_row, 200))
+        refresh_existing_filter(target_ws, target_ws.max_row)
+        fields = FORMAL_MULTILINE_FIELDS.get(sheet_name, [])
+        headers = header_map(target_ws)
+        for row_index in range(2, target_ws.max_row + 1):
+            set_wrap(target_ws, headers, row_index, fields)
+            adjust_row_height(target_ws, row_index)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    template_wb.save(output)
+
+
 def apply_template_sheet_format(template_ws, target_ws) -> None:
     copy_column_dimensions(template_ws, target_ws)
     if target_ws.max_row >= 2 and template_ws.max_row >= 2:
@@ -182,7 +263,8 @@ def adjust_row_height(ws, row_index: int, min_height: float | None = None, max_h
         value = str(cell.value)
         if not cell.alignment.wrap_text and "\n" not in value and "\r" not in value:
             continue
-        column_width = ws.column_dimensions[get_column_letter(cell.column)].width or default_width
+        column_dimension = ws.column_dimensions.get(get_column_letter(cell.column))
+        column_width = (column_dimension.width if column_dimension else None) or default_width
         indent_width = float(cell.alignment.indent or 0) * 3
         line_count = wrapped_line_count(value, max(float(column_width) - indent_width, 1))
         font_size = float(cell.font.sz or 11)
@@ -291,11 +373,21 @@ def safe_filename(value: str) -> str:
     return cleaned or "测试设计"
 
 
-def copy_workbook(source: Path, target: Path) -> None:
+def atomic_copy_workbook(source: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     if source.resolve() == target.resolve():
         return
-    shutil.copy2(source, target)
+    handle = tempfile.NamedTemporaryFile(
+        prefix=f".{target.stem}.", suffix=target.suffix, dir=target.parent, delete=False
+    )
+    temporary = Path(handle.name)
+    handle.close()
+    try:
+        shutil.copy2(source, temporary)
+        os.replace(temporary, target)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def update_batch_status_paths(batch_status: Path, batch_id: str | None, archive_rel: str, import_rel: str) -> list[dict[str, str]]:
@@ -496,16 +588,25 @@ def finalize_deliverables(
     project_root = project_root.resolve()
     _, formal_name, import_name = deliverable_names(module_path, product_name)
 
-    apply_formal_workbook_styles(formal_workbook)
-    import_wb = load_workbook(import_workbook)
-    remove_workbook_tables_and_refresh_filters(import_wb)
-    import_wb.save(import_workbook)
-
     deliverable_formal = project_root / "docs" / "test-design" / "deliverables" / formal_name
     deliverable_import = project_root / "docs" / "test-design" / "deliverables" / import_name
 
-    copy_workbook(formal_workbook, deliverable_formal)
-    copy_workbook(import_workbook, deliverable_import)
+    script_dir = Path(__file__).resolve().parent
+    run_python_script(
+        script_dir / "validate-test-design-deliverable.py",
+        [
+            "--workbook",
+            str(formal_workbook),
+            "--import-workbook",
+            str(import_workbook),
+            "--formal-template",
+            str(project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"),
+        ],
+    )
+    atomic_copy_workbook(formal_workbook, deliverable_formal)
+    atomic_copy_workbook(import_workbook, deliverable_import)
+
+
 def run_python_script(script: Path, args: list[str]) -> None:
     completed = subprocess.run([sys.executable, str(script), *args], check=False)
     if completed.returncode:
@@ -522,21 +623,41 @@ def complete_deliverables(
 ) -> None:
     project_root = project_root.resolve()
     script_dir = Path(__file__).resolve().parent
-    _, _, import_name = deliverable_names(module_path, product_name)
+    _, formal_name, import_name = deliverable_names(module_path, product_name)
+    formal_template = project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
+    deliverable_dir = project_root / "docs" / "test-design" / "deliverables"
+    deliverable_formal = deliverable_dir / formal_name
+    deliverable_import = deliverable_dir / import_name
     target_import = import_workbook or (project_root / "docs" / "test-design" / "deliverables" / import_name)
 
-    apply_formal_workbook_styles(formal_workbook)
-    generate_import_workbook(formal_workbook, import_template, target_import, module_path, product_name)
-    finalize_deliverables(
-        project_root,
-        formal_workbook,
-        target_import,
-        module_path,
-        product_name,
-    )
+    with tempfile.TemporaryDirectory(prefix="test-design-deliverables-") as temporary_dir:
+        temporary_root = Path(temporary_dir)
+        temporary_formal = temporary_root / "formal.xlsx"
+        temporary_import = temporary_root / "import.xlsx"
+        rebuild_formal_workbook_from_template(formal_workbook, formal_template, temporary_formal)
+        generate_import_workbook(
+            temporary_formal,
+            import_template,
+            temporary_import,
+            module_path,
+            product_name,
+        )
+        validator_args = [
+            "--workbook",
+            str(temporary_formal),
+            "--import-workbook",
+            str(temporary_import),
+            "--formal-template",
+            str(formal_template),
+        ]
+        run_python_script(script_dir / "validate-test-design-deliverable.py", validator_args)
 
-    validator_args = ["--workbook", str(formal_workbook), "--import-workbook", str(target_import)]
-    run_python_script(script_dir / "validate-test-design-deliverable.py", validator_args)
+        formal_targets = {formal_workbook.resolve(), deliverable_formal.resolve()}
+        import_targets = {target_import.resolve(), deliverable_import.resolve()}
+        for target in formal_targets:
+            atomic_copy_workbook(temporary_formal, target)
+        for target in import_targets:
+            atomic_copy_workbook(temporary_import, target)
 
 
 def generate_import_workbook(
@@ -611,25 +732,12 @@ def generate_import_workbook(
 
 
 def apply_formal_workbook_styles(workbook: Path, output: Path | None = None, template: Path | None = None) -> None:
-    target = output or workbook
-    if output:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(workbook, output)
-    wb = load_workbook(target)
     template_path = template or (Path(__file__).resolve().parents[1] / "docs" / "test-design" / "codebuddy-test-design-template.xlsx")
-    if template_path.exists():
-        template_wb = load_workbook(template_path)
-        apply_template_workbook_format(wb, template_wb)
-    for sheet_name, fields in FORMAL_MULTILINE_FIELDS.items():
-        if sheet_name not in wb.sheetnames:
-            continue
-        ws = wb[sheet_name]
-        headers = header_map(ws)
-        for row_index in range(2, ws.max_row + 1):
-            set_wrap(ws, headers, row_index, fields)
-            adjust_row_height(ws, row_index)
-    remove_workbook_tables_and_refresh_filters(wb)
-    wb.save(target)
+    target = output or workbook
+    with tempfile.TemporaryDirectory(prefix="test-design-formal-") as temporary_dir:
+        temporary = Path(temporary_dir) / "formal.xlsx"
+        rebuild_formal_workbook_from_template(workbook, template_path, temporary)
+        atomic_copy_workbook(temporary, target)
 
 
 def main() -> int:

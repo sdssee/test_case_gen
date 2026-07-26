@@ -508,6 +508,212 @@ def sheet_cell_rows(path: Path, sheet_name: str) -> list[list[tuple[str, str, in
     return rows
 
 
+def xml_signature(element: ET.Element | None) -> tuple:
+    if element is None:
+        return ()
+    attributes = dict(element.attrib)
+    local_name = element.tag.rsplit("}", 1)[-1]
+    if local_name in {"b", "i", "strike", "outline", "shadow", "condense", "extend"} and "val" not in attributes:
+        attributes["val"] = "1"
+    if local_name == "patternFill" and "patternType" not in attributes:
+        attributes["patternType"] = "none"
+    return (
+        element.tag,
+        tuple(sorted(attributes.items())),
+        (element.text or "").strip(),
+        tuple(sorted(xml_signature(child) for child in element)),
+    )
+
+
+def workbook_style_signatures(path: Path) -> dict[int, tuple]:
+    with zipfile.ZipFile(path) as zf:
+        root = ET.fromstring(zf.read("xl/styles.xml"))
+    fonts = [xml_signature(item) for item in root.findall("x:fonts/x:font", NS)]
+    fills = [xml_signature(item) for item in root.findall("x:fills/x:fill", NS)]
+    borders = [xml_signature(item) for item in root.findall("x:borders/x:border", NS)]
+    custom_formats = {
+        item.attrib.get("numFmtId", ""): item.attrib.get("formatCode", "")
+        for item in root.findall("x:numFmts/x:numFmt", NS)
+    }
+    signatures: dict[int, tuple] = {}
+    for index, xf in enumerate(root.findall("x:cellXfs/x:xf", NS)):
+        font_id = int(xf.attrib.get("fontId", "0"))
+        fill_id = int(xf.attrib.get("fillId", "0"))
+        border_id = int(xf.attrib.get("borderId", "0"))
+        num_fmt_id = xf.attrib.get("numFmtId", "0")
+        own_attributes = tuple(
+            sorted(
+                (key, value)
+                for key, value in xf.attrib.items()
+                if key not in {
+                    "fontId",
+                    "fillId",
+                    "borderId",
+                    "numFmtId",
+                    "xfId",
+                    "applyFont",
+                    "applyFill",
+                    "applyBorder",
+                    "applyAlignment",
+                    "applyNumberFormat",
+                    "applyProtection",
+                    "pivotButton",
+                    "quotePrefix",
+                }
+            )
+        )
+        signatures[index] = (
+            fonts[font_id] if font_id < len(fonts) else (),
+            fills[fill_id] if fill_id < len(fills) else (),
+            borders[border_id] if border_id < len(borders) else (),
+            custom_formats.get(num_fmt_id, f"builtin:{num_fmt_id}"),
+            own_attributes,
+            tuple(sorted(xml_signature(child) for child in xf)),
+        )
+    return signatures
+
+
+def trimmed_headers(path: Path, sheet_name: str) -> list[str]:
+    rows = sheet_rows(path, sheet_name)
+    headers = list(rows[0] if rows else [])
+    while headers and not headers[-1]:
+        headers.pop()
+    return headers
+
+
+def worksheet_structure(path: Path, sheet_name: str) -> dict[str, object]:
+    with zipfile.ZipFile(path) as zf:
+        sheet_paths = workbook_sheet_paths(zf)
+        root = ET.fromstring(zf.read(sheet_paths[sheet_name]))
+    columns: dict[int, tuple[str, str, str]] = {}
+    for column in root.findall("x:cols/x:col", NS):
+        start = int(column.attrib["min"])
+        end = int(column.attrib["max"])
+        signature = (
+            column.attrib.get("width", ""),
+            column.attrib.get("hidden", ""),
+            column.attrib.get("bestFit", ""),
+        )
+        for index in range(start, end + 1):
+            columns[index] = signature
+    header_row = root.find(".//x:sheetData/x:row[@r='1']", NS)
+    pane = root.find("x:sheetViews/x:sheetView/x:pane", NS)
+    auto_filter = root.find("x:autoFilter", NS)
+    validations = []
+    for validation in root.findall("x:dataValidations/x:dataValidation", NS):
+        ranges = []
+        for item in validation.attrib.get("sqref", "").split():
+            min_col, min_row, max_col, max_row = parse_a1_range(item)
+            ranges.append((min_col, min_row, max_col, max_row))
+        attributes = tuple(
+            sorted(
+                (key, value)
+                for key, value in validation.attrib.items()
+                if key == "type"
+                or (
+                    key not in {"sqref"}
+                    and not key.endswith("}uid")
+                    and value not in {"0", "false", "False"}
+                )
+            )
+        )
+        validations.append((attributes, tuple(xml_signature(child) for child in validation), tuple(ranges)))
+    return {
+        "columns": columns,
+        "header_height": "" if header_row is None else header_row.attrib.get("ht", ""),
+        "pane": None if pane is None else tuple(sorted(pane.attrib.items())),
+        "auto_filter": None if auto_filter is None else auto_filter.attrib.get("ref", ""),
+        "validations": validations,
+    }
+
+
+def assert_formal_template_invariants(workbook: Path, template: Path) -> None:
+    if not template.exists():
+        fail(f"Formal workbook template not found: {template}")
+    with zipfile.ZipFile(template) as zf:
+        template_sheets = list(workbook_sheet_paths(zf))
+    with zipfile.ZipFile(workbook) as zf:
+        workbook_sheets = list(workbook_sheet_paths(zf))
+    if workbook_sheets != template_sheets:
+        fail(f"Formal workbook sheets must match template exactly. Expected {template_sheets}, got {workbook_sheets}")
+
+    workbook_styles = workbook_style_signatures(workbook)
+    template_styles = workbook_style_signatures(template)
+    for sheet_name in template_sheets:
+        workbook_value_rows = sheet_rows(workbook, sheet_name)
+        last_data_row = max(
+            (index for index, row in enumerate(workbook_value_rows, start=1) if any(row)),
+            default=1,
+        )
+        expected_headers = trimmed_headers(template, sheet_name)
+        actual_headers = trimmed_headers(workbook, sheet_name)
+        if actual_headers != expected_headers:
+            fail(
+                f"{sheet_name} headers must match formal template exactly. "
+                f"Expected {expected_headers}, got {actual_headers}"
+            )
+
+        expected_structure = worksheet_structure(template, sheet_name)
+        actual_structure = worksheet_structure(workbook, sheet_name)
+        for field, label in [
+            ("columns", "column widths"),
+            ("header_height", "header row height"),
+            ("pane", "freeze panes"),
+        ]:
+            if actual_structure[field] != expected_structure[field]:
+                fail(f"{sheet_name} {label} must match the formal template")
+
+        expected_filter = expected_structure["auto_filter"]
+        actual_filter = actual_structure["auto_filter"]
+        if bool(expected_filter) != bool(actual_filter):
+            fail(f"{sheet_name} auto filter presence must match the formal template")
+        if expected_filter and actual_filter:
+            expected_bounds = parse_a1_range(str(expected_filter))
+            actual_bounds = parse_a1_range(str(actual_filter))
+            if actual_bounds[:3] != expected_bounds[:3]:
+                fail(f"{sheet_name} auto filter columns must match the formal template")
+            if actual_bounds[3] < last_data_row:
+                fail(f"{sheet_name} auto filter must cover the last data row {last_data_row}")
+
+        expected_validations = expected_structure["validations"]
+        actual_validations = actual_structure["validations"]
+        if len(actual_validations) != len(expected_validations):
+            fail(f"{sheet_name} data validation count must match the formal template")
+        for index, (expected, actual) in enumerate(zip(expected_validations, actual_validations), start=1):
+            if actual[:2] != expected[:2]:
+                fail(f"{sheet_name} data validation {index} rule must match the formal template")
+            expected_bases = [(item[0], item[1], item[2]) for item in expected[2]]
+            actual_bases = [(item[0], item[1], item[2]) for item in actual[2]]
+            if actual_bases != expected_bases:
+                fail(f"{sheet_name} data validation {index} columns must match the formal template")
+            for expected_range, actual_range in zip(expected[2], actual[2]):
+                if expected_range[1] <= 2 <= expected_range[3] and actual_range[3] < last_data_row:
+                    fail(f"{sheet_name} data validation {index} must cover the last data row {last_data_row}")
+
+        template_rows = sheet_cell_rows(template, sheet_name)
+        workbook_rows = sheet_cell_rows(workbook, sheet_name)
+        if not template_rows or not workbook_rows:
+            fail(f"{sheet_name} must contain the template header and sample style row")
+        header_columns = len(expected_headers)
+        for column in range(header_columns):
+            expected_style = template_rows[0][column][2] if column < len(template_rows[0]) else 0
+            actual_style = workbook_rows[0][column][2] if column < len(workbook_rows[0]) else 0
+            if workbook_styles.get(actual_style) != template_styles.get(expected_style):
+                fail(f"{sheet_name} header column {column + 1} style must match the formal template")
+
+        template_sample = template_rows[1] if len(template_rows) > 1 else []
+        for row_number, row in enumerate(workbook_rows[1:], start=2):
+            if not any(value for _, value, _ in row):
+                continue
+            for column in range(header_columns):
+                expected_style = template_sample[column][2] if column < len(template_sample) else 0
+                actual_style = row[column][2] if column < len(row) else 0
+                if workbook_styles.get(actual_style) != template_styles.get(expected_style):
+                    fail(
+                        f"{sheet_name} row {row_number} column {column + 1} style must match the formal template sample row 2"
+                    )
+
+
 def wrapped_style_ids(path: Path) -> set[int]:
     with zipfile.ZipFile(path) as zf:
         try:
@@ -1000,13 +1206,15 @@ def first_worksheet_xml(path: Path) -> str:
         return zf.read(paths[first_sheet]).decode("utf-8", errors="ignore")
 
 
-def validate_workbook(workbook: Path) -> dict[str, object]:
+def validate_workbook(workbook: Path, formal_template: Path | None = None) -> dict[str, object]:
     if not workbook.exists():
         fail(f"Workbook not found: {workbook}")
     with zipfile.ZipFile(workbook) as zf:
         sheet_names = list(workbook_sheet_paths(zf))
     if sheet_names != EXPECTED_SHEETS:
         fail(f"Workbook sheets mismatch. Expected {EXPECTED_SHEETS}, got {sheet_names}")
+    if formal_template:
+        assert_formal_template_invariants(workbook, formal_template)
     assert_no_residual_markers(workbook, EXPECTED_SHEETS)
     validate_table_ranges(workbook, EXPECTED_SHEETS)
     validate_formal_workbook_styles(workbook)
@@ -1660,9 +1868,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate generated test design deliverable workbook.")
     parser.add_argument("--workbook", required=True, type=Path)
     parser.add_argument("--import-workbook", required=True, type=Path)
+    parser.add_argument(
+        "--formal-template",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "docs" / "test-design" / "codebuddy-test-design-template.xlsx",
+    )
     args = parser.parse_args()
 
-    workbook_data = validate_workbook(args.workbook)
+    workbook_data = validate_workbook(args.workbook, args.formal_template)
     validate_import_workbook(args.import_workbook, workbook_data)
     print("OK: test design deliverable quality checks passed.")
     return 0

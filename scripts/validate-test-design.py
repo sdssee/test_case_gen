@@ -170,8 +170,20 @@ def main() -> int:
         fail("两份 CodeBuddy Rule 镜像内容不一致")
 
     tool = root / "scripts" / "test_design_excel_tools.py"
-    assert_contains(tool, ["adjust_row_height", "apply_template_workbook_format", "complete-deliverables", "generate-import"])
-    assert_contains(root / "AGENTS.md", ["每次正式交付", "不询问是否需要生成", "complete-deliverables"])
+    assert_contains(
+        tool,
+        [
+            "adjust_row_height",
+            "rebuild_formal_workbook_from_template",
+            "atomic_copy_workbook",
+            "complete-deliverables",
+            "generate-import",
+        ],
+    )
+    assert_contains(
+        root / "AGENTS.md",
+        ["每次正式交付", "不询问是否需要生成", "complete-deliverables", "唯一结构与样式基线", "手工降级生成"],
+    )
     assert_contains(
         root / "scripts" / "validate-test-design-deliverable.py",
         [
@@ -183,6 +195,8 @@ def main() -> int:
             "NAVIGATION_ACTION_PATTERN",
             "UNRESOLVED_COVERAGE_NOTE_PATTERN",
             "FINDING_DISPLAY_LIMIT",
+            "assert_formal_template_invariants",
+            '"--formal-template"',
         ],
     )
     assert_contains(

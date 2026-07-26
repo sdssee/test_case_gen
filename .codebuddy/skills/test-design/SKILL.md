@@ -37,7 +37,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
    - 完全相同场景合并；相同步骤用例仅作为合并候选，是否合并以 DFX 对应清晰且用例保持独立业务闭环为准。
 6. 分批执行：范围超过一个最小标题时，按最深标题级别建立批次队列，逐个最小标题路径执行，不能一次性生成完整测试用例。
 7. 用例设计：按小功能块连续编排，基于 DFX 覆盖评估结果覆盖功能、性能、异常、边界、接口、安全、可靠、维护、可用、部署、运维、业务和极端场景。
-8. Excel 生成：正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
+8. Excel 生成：正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet；通用 xlsx Skill 只用于读取、渲染和视觉检查，正式写入必须交给项目统一工具。
 9. 导入文件：每次正式交付都复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件副本，不询问是否生成；统一使用 `scripts/test_design_excel_tools.py complete-deliverables` 同步生成并校验。
 
 ## 不可违反的门禁
@@ -64,6 +64,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 交付文件名只使用菜单/模块路径，不拼运行文件夹名、批次目录名或产品名；如 `module-path` 包含产品名前缀，传入 `--product-name` 自动去除，避免重复交付文件。
 - 导入文件 `执行方式` 默认 `手动`；只有已有可运行、可维护并覆盖主要校验点的自动化资产且本次明确关联时，才允许 `自动化`。
 - 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。
+- 正式测试设计必须以 `codebuddy-test-design-template.xlsx` 为唯一基线；禁止临时脚本使用 `Workbook()`、`create_sheet()` 或直接修改 Excel XML 写入 `deliverables/*.xlsx`。`complete-deliverables` 失败时立即停止，不得手工降级生成。
 
 ## 生成后校验
 

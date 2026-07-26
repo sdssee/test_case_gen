@@ -5,7 +5,7 @@
 ## 核心目标
 
 - 基于需求文档、用户故事、接口文档、页面截图、原型、可访问页面、缺陷单或已有用例，生成结构化测试设计。
-- 正式交付物优先使用 `docs/test-design/codebuddy-test-design-template.xlsx`。
+- 正式交付物必须以 `docs/test-design/codebuddy-test-design-template.xlsx` 为唯一结构与样式基线，只复制模板并填充内容。
 - 正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
 - 每次正式交付都必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立测试系统导入文件，不修改原模板，也不询问是否需要生成。
 - 所有交付件统一放在 `docs/test-design/deliverables/`。
@@ -49,6 +49,8 @@ Codex 应优先读取并遵守：
 - 弹窗、下拉、输入、编辑、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环。
 - 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
 - 每次正式交付都由 `scripts/test_design_excel_tools.py complete-deliverables` 同步生成测试系统导入文件，保留模板下拉框、必填样式、标红字段和自动生成字段空值；不得把 `generate-import` 的单独转换结果作为完整交付。
+- 通用 xlsx/表格 Skill 只可用于读取、渲染和视觉检查，不得直接写入正式交付件；禁止临时脚本通过 `Workbook()`、`create_sheet()` 或直接修改 Excel XML 创建、重建或修补 `deliverables/*.xlsx`。
+- `complete-deliverables` 失败时必须停止交付并保留原文件，不得手工降级生成；只有基于正式模板重建的临时文件与导入文件一起通过校验后，才允许写入 `deliverables/`。
 - 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。
 - 交付文件名只使用菜单/模块路径，不拼运行文件夹名、批次目录名或产品名；如 `module-path` 包含产品名前缀，传入 `--product-name` 自动去除，避免重复交付文件。
 - 导入文件 `执行方式` 默认 `手动`，也就是默认填写 `手动`；自动化建议或 AI 页面实探不能作为填写 `自动化` 的依据。

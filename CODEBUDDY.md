@@ -5,7 +5,7 @@
 ## 核心目标
 
 - 基于需求文档、用户故事、接口文档、页面截图、原型、可访问页面、缺陷单或已有用例，生成结构化测试设计。
-- 正式交付物优先使用 `docs/test-design/codebuddy-test-design-template.xlsx`。
+- 正式交付物必须以 `docs/test-design/codebuddy-test-design-template.xlsx` 为唯一结构与样式基线，只复制模板并填充内容。
 - 正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
 - 每次正式交付都必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立测试系统导入文件，不修改原模板，也不询问是否需要生成。
 - 所有交付件统一放在 `docs/test-design/deliverables/`。
@@ -51,6 +51,8 @@
 - 交付文件名只使用菜单/模块路径，不拼运行文件夹名、批次目录名或产品名；如 `module-path` 包含产品名前缀，传入 `--product-name` 自动去除，避免重复交付文件。
 - 导入文件 `执行方式` 默认 `手动`，也就是默认填写 `手动`；只有已有可运行、可维护且覆盖主要校验点的自动化资产，并且本次明确按自动化导入或关联资产时，才允许 `自动化`。
 - 正式测试设计和导入文件只能填充内容；新增数据行必须沿用模板第 2 行示例数据格式，保留边框、字体、填充、对齐、数字格式和下拉验证范围。
+- 通用 xlsx Skill 只可用于读取、渲染和视觉检查，不得直接写正式交付件；正式 Excel 只能由 `scripts/test_design_excel_tools.py complete-deliverables` 基于模板生成。
+- 统一工具失败时必须停止并保留原交付件，禁止改用 `Workbook()`、`create_sheet()`、手工样式修补或直接修改 Excel XML。
 
 ## 生成后校验
 

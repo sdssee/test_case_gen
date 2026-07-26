@@ -42,3 +42,4 @@
 29. 导入文件 `执行方式` 默认 `手动`；只有已有可运行、可维护且覆盖主要校验点的自动化资产，并且本次明确按自动化导入或关联资产时，才允许填写 `自动化`。
 30. 正式测试设计必须以 `codebuddy-test-design-template.xlsx` 为唯一结构与样式基线；通用 xlsx Skill 只用于读取、渲染和视觉检查，禁止临时脚本通过 `Workbook()`、`create_sheet()` 或直接修改 Excel XML 写入正式交付件。
 31. 正式 Excel 只能由 `scripts/test_design_excel_tools.py complete-deliverables` 基于模板生成；统一工具失败时立即停止并保留原交付件，禁止手工降级生成。
+32. 任务开始时先确定交付语言；正式测试设计默认中文，所有说明性内容必须直接用中文生成。实际 UI 文案、ID、URL、代码、协议、产品/框架名及 API、UI、DFX、Mock 等必要技术术语可保留原文；调用 `complete-deliverables` 前集中自查并一次修正，禁止自动翻译和逐单元格重试。

@@ -179,6 +179,31 @@ SCENARIO_SIGNATURE_FIELDS = [
 ]
 CASE_MERGE_SIGNATURE_FIELDS = ["功能点", "前置条件", "测试数据", "操作步骤"]
 FINDING_DISPLAY_LIMIT = 20
+CHINESE_TEXT_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+ENGLISH_WORD_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_+.-]*")
+ALLOWED_ENGLISH_TERMS = {
+    "ai", "api", "boolean", "css", "csv", "db", "dfx", "dft", "dfp", "dfi", "dfc", "dfs", "dfr",
+    "dfm", "dfu", "dfd", "dfo", "dfb", "dom", "e2e", "excel", "html", "http", "https",
+    "id", "ip", "jmeter", "json", "k6", "l1", "l2", "l3", "l4", "locust", "mfa", "mock",
+    "jest", "mocha", "n/a", "number", "p0", "p1", "p2", "p3", "playwright", "qps", "sql", "string",
+    "supertest", "tcp", "token", "tps", "udp", "ui", "uri", "url", "uuid", "wiremock", "xml", "xpath",
+}
+CHINESE_DELIVERY_FIELDS = {
+    "测试设计总览": ["测试范围", "不测范围", "主要风险", "准入条件", "准出条件", "待确认问题"],
+    "需求用户故事拆解": [
+        "用户故事/需求描述", "角色", "业务价值", "验收标准", "业务规则", "前置条件", "后置影响", "待确认问题",
+    ],
+    "测试场景矩阵": ["功能点", "测试对象/页面元素", "输入数据/状态条件", "观察点", "备注"],
+    "功能测试用例": [
+        "模块", "功能点", "用例标题", "前置条件", "测试数据", "操作步骤", "预期结果", "关联风险", "备注",
+    ],
+    "性能测试设计": ["业务链路", "监控指标", "通过标准", "造数策略", "风险说明"],
+    "风险与待确认问题": ["描述", "影响范围", "建议处理方式"],
+    "自动化建议": ["自动化价值", "依赖数据", "Mock 需求", "稳定性风险", "备注"],
+    "页面元素覆盖清单": [
+        "元素类型", "交互方式", "前置状态/权限", "预期行为", "业务依据/规则来源", "发现方式", "待确认问题/备注",
+    ],
+}
 UNRESOLVED_COVERAGE_NOTE_PATTERN = re.compile(
     r"^\s*(待实探|待确认|未验证|需验证|功能不明)\s*[：:]"
 )
@@ -999,6 +1024,42 @@ def format_findings(title: str, findings: dict[str, list[str]]) -> str:
     return "\n".join(lines)
 
 
+def is_obvious_english_narrative(value: str) -> bool:
+    text = (value or "").strip()
+    if not text or CHINESE_TEXT_PATTERN.search(text):
+        return False
+    words = [word.lower().rstrip(".") for word in ENGLISH_WORD_PATTERN.findall(text)]
+    narrative_words = [
+        word
+        for word in words
+        if len(word) > 1
+        and word not in ALLOWED_ENGLISH_TERMS
+        and not any(character.isdigit() for character in word)
+    ]
+    return bool(narrative_words)
+
+
+def validate_chinese_delivery_language(workbook: Path) -> None:
+    findings: dict[str, list[str]] = {}
+    for sheet_name, fields in CHINESE_DELIVERY_FIELDS.items():
+        rows = row_dicts(sheet_rows(workbook, sheet_name), sheet_name)
+        for row_number, row in enumerate(rows, start=2):
+            for field in fields:
+                value = row.get(field, "").strip()
+                if not is_obvious_english_narrative(value):
+                    continue
+                findings.setdefault(sheet_name, []).append(
+                    f"第 {row_number} 行字段 {field} 存在明显全英文描述：{value[:80]}"
+                )
+    if findings:
+        fail(
+            format_findings(
+                "正式测试设计描述性内容必须使用中文；实际 UI 文案、标识符和必要技术术语可保留原文：",
+                findings,
+            )
+        )
+
+
 def emit_warnings(category: str, messages: list[str]) -> None:
     if not messages:
         return
@@ -1218,6 +1279,7 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     assert_no_residual_markers(workbook, EXPECTED_SHEETS)
     validate_table_ranges(workbook, EXPECTED_SHEETS)
     validate_formal_workbook_styles(workbook)
+    validate_chinese_delivery_language(workbook)
 
     scenario_rows_raw = sheet_rows(workbook, "测试场景矩阵")
     assert_no_deprecated_scenario_headers(scenario_rows_raw, "测试场景矩阵")

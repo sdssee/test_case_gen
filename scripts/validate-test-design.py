@@ -182,7 +182,16 @@ def main() -> int:
     )
     assert_contains(
         root / "AGENTS.md",
-        ["每次正式交付", "不询问是否需要生成", "complete-deliverables", "唯一结构与样式基线", "手工降级生成"],
+        [
+            "每次正式交付",
+            "不询问是否需要生成",
+            "complete-deliverables",
+            "唯一结构与样式基线",
+            "手工降级生成",
+            "正式测试设计默认使用中文",
+            "集中执行一次中文自查",
+            "不得把自动翻译写入 Excel 工具",
+        ],
     )
     assert_contains(
         root / "scripts" / "validate-test-design-deliverable.py",
@@ -196,6 +205,8 @@ def main() -> int:
             "UNRESOLVED_COVERAGE_NOTE_PATTERN",
             "FINDING_DISPLAY_LIMIT",
             "assert_formal_template_invariants",
+            "validate_chinese_delivery_language",
+            "CHINESE_DELIVERY_FIELDS",
             '"--formal-template"',
         ],
     )
@@ -210,6 +221,7 @@ def main() -> int:
             "待实探：",
             "已覆盖` 不得与上述未解决前缀并存",
             "一级菜单-二级菜单-目标页面",
+            "说明性字段默认使用中文",
         ],
     )
     assert_contains(

@@ -178,6 +178,8 @@ def main() -> int:
             '"--import-workbook", required=True',
             "validate_atomic_scenario_rows",
             "warn_case_merge_candidates",
+            "validate_evidence_status_consistency",
+            "UNRESOLVED_COVERAGE_NOTE_PATTERN",
             "FINDING_DISPLAY_LIMIT",
         ],
     )
@@ -189,6 +191,8 @@ def main() -> int:
             "docs/test-design/deliverables/",
             "功能点` 作为父场景",
             "每个场景行只允许一个主 `DFX维度`",
+            "待实探：",
+            "已覆盖` 不得与上述未解决前缀并存",
         ],
     )
 

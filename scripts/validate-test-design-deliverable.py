@@ -179,6 +179,9 @@ SCENARIO_SIGNATURE_FIELDS = [
 ]
 CASE_MERGE_SIGNATURE_FIELDS = ["功能点", "前置条件", "测试数据", "操作步骤"]
 FINDING_DISPLAY_LIMIT = 20
+UNRESOLVED_COVERAGE_NOTE_PATTERN = re.compile(
+    r"^\s*(待实探|待确认|未验证|需验证|功能不明)\s*[：:]"
+)
 
 IMPORT_REQUIRED_FIELDS = ["一级模块名称", "二级模块名称", "三级模块名称", "测试用例名称", "测试类型", "测试用例级别", "执行方式"]
 IMPORT_AUTO_FIELDS = ["测试用例系统编号", "作者"]
@@ -862,6 +865,36 @@ def warn_case_merge_candidates(function_rows: list[dict[str, str]]) -> None:
     emit_warnings("用例合并候选提示，不影响退出码", warnings)
 
 
+def validate_evidence_status_consistency(
+    risk_rows: list[dict[str, str]],
+    coverage_rows: list[dict[str, str]],
+) -> None:
+    pending_risk_warnings = []
+    for index, row in enumerate(risk_rows, start=2):
+        if normalize_signature_value(row.get("状态", "")) == "待实探":
+            risk_id = row.get("编号", "") or f"第 {index} 行"
+            pending_risk_warnings.append(
+                f"风险与待确认问题 {risk_id} 仍为待实探，请确认是否受环境、权限、数据或联调条件限制"
+            )
+    emit_warnings("待实探风险汇总，不影响退出码", pending_risk_warnings)
+
+    contradictions = []
+    for index, row in enumerate(coverage_rows, start=2):
+        note = row.get("待确认问题/备注", "")
+        if row.get("覆盖状态", "") == "已覆盖" and UNRESOLVED_COVERAGE_NOTE_PATTERN.match(note):
+            element = row.get("元素名称/文案", "") or row.get("元素 ID", "") or "未命名元素"
+            contradictions.append(
+                f"第 {index} 行元素“{element}”已标记已覆盖，但备注仍是未解决状态：{note}"
+            )
+    if contradictions:
+        fail(
+            format_findings(
+                "页面元素覆盖清单证据状态矛盾：",
+                {"已覆盖与未解决备注并存": contradictions},
+            )
+        )
+
+
 def csv_row_dicts(path: Path, required: list[str], label: str) -> list[dict[str, str]]:
     if not path.exists():
         fail(f"{label} not found: {path}")
@@ -1042,7 +1075,8 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
     risk_rows_raw = sheet_rows(workbook, "风险与待确认问题")
     require_headers(risk_rows_raw, ["编号", "类型", "关联DFX维度", "关联DFX场景", "描述", "影响范围", "建议处理方式"], "风险与待确认问题")
     risk_dfx: set[tuple[str, str]] = set()
-    for index, row in enumerate(row_dicts(risk_rows_raw, "风险与待确认问题"), start=2):
+    risk_rows = row_dicts(risk_rows_raw, "风险与待确认问题")
+    for index, row in enumerate(risk_rows, start=2):
         assert_dfx_mapping(row.get("关联DFX维度", ""), row.get("关联DFX场景", ""), f"风险与待确认问题 row {index}")
         risk_dfx.update(dfx_pairs(row.get("关联DFX维度", ""), row.get("关联DFX场景", "")))
 
@@ -1071,6 +1105,8 @@ def validate_workbook(workbook: Path) -> dict[str, object]:
                 fail(f"页面元素覆盖清单 row {index} references unknown case IDs: {unknown}")
         elif not row.get("待确认问题/备注", ""):
             fail(f"页面元素覆盖清单 row {index} status {status} must explain reason in 待确认问题/备注")
+
+    validate_evidence_status_consistency(risk_rows, coverage_rows)
 
     landed_dfx = function_dfx | performance_dfx | risk_dfx
     missing_landed_dfx = sorted(generated_scenario_dfx - landed_dfx)

@@ -191,6 +191,9 @@ def main() -> int:
             "正式测试设计默认使用中文",
             "集中执行一次中文自查",
             "不得把自动翻译写入 Excel 工具",
+            "测试设计执行与交付流程不涉及 Git",
+            "触发元素 → 状态出现 → 状态内操作 → 终态动作 → 页面/数据结果",
+            "相似用例告警必须在交付前分类",
         ],
     )
     assert_contains(
@@ -207,6 +210,10 @@ def main() -> int:
             "assert_formal_template_invariants",
             "validate_chinese_delivery_language",
             "CHINESE_DELIVERY_FIELDS",
+            "TRANSIENT_ACTION_PATTERNS",
+            "assert_expected_result_consistency",
+            "FORMAL_ALLOWED_VALUES",
+            "scenario_count",
             '"--formal-template"',
         ],
     )
@@ -222,6 +229,8 @@ def main() -> int:
             "已覆盖` 不得与上述未解决前缀并存",
             "一级菜单-二级菜单-目标页面",
             "说明性字段默认使用中文",
+            "是否生成用例` 只能填写 `是` 或 `否",
+            "是否适合自动化` 只能填写 `是`、`否` 或 `待评估",
         ],
     )
     assert_contains(

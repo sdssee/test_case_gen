@@ -291,32 +291,13 @@ def fail(message: str) -> None:
     raise AssertionError(message)
 
 
-TRANSIENT_STEP_MARKERS = [
-    "modal",
-    "dialog",
-    "drawer",
-    "dropdown",
-    "select",
-    "confirm",
-    "edit",
-    "delete",
-    "add variable",
-    "input",
-    "弹窗",
-    "对话框",
-    "抽屉",
-    "下拉",
-    "选择",
-    "确认框",
-    "编辑",
-    "删除",
-    "添加变量",
-    "输入",
-    "尝试点击",
-    "观察",
+TRANSIENT_ACTION_PATTERNS = [
+    re.compile(r"(?:点击|打开|展开|进入|切换)[^。；;\r\n]{0,30}(?:弹窗|对话框|抽屉|下拉(?:框|浮层)?|编辑态|删除确认框|确认弹窗)"),
+    re.compile(r"(?:点击|选择)[^。；;\r\n]{0,20}(?:编辑|删除|添加变量|新增变量)[^。；;\r\n]{0,20}(?:按钮|图标|入口|操作)?"),
+    re.compile(r"(?:open|show|expand|enter|click)[^.；;\r\n]{0,30}(?:modal|dialog|drawer|dropdown|edit mode|delete confirmation)", re.IGNORECASE),
 ]
 
-TERMINAL_STEP_MARKERS = [
+TERMINAL_ACTION_MARKERS = [
     "click OK",
     "click Cancel",
     "close",
@@ -325,7 +306,6 @@ TERMINAL_STEP_MARKERS = [
     "save",
     "submit",
     "not save",
-    "no data changed",
     "点击确定",
     "点击「确定」",
     "点击取消",
@@ -337,14 +317,30 @@ TERMINAL_STEP_MARKERS = [
     "返回列表",
     "保存",
     "提交",
-    "确认",
     "不保存",
     "关闭弹窗",
-    "弹窗关闭",
-    "列表不变",
-    "数据不变",
     "退出编辑",
 ]
+
+UNRESOLVED_EXPECTATION_PATTERNS = [
+    re.compile(r"路径\s*[A-Za-zＡ-Ｚａ-ｚ]\s*[/／或]\s*路径\s*[A-Za-zＡ-Ｚａ-ｚ]", re.IGNORECASE),
+    re.compile(r"或者?类似(?:提示|文案|结果)"),
+    re.compile(r"前端或后端(?:任一)?(?:路径|处理|校验)"),
+]
+
+EXPECTED_CONTRADICTION_PAIRS = [
+    (
+        re.compile(r"(?:弹窗|对话框|抽屉)(?![^。；;\r\n]{0,8}(?:保持打开|不关闭|仍显示))[^。；;\r\n]{0,8}(?:关闭|消失)"),
+        re.compile(r"(?:弹窗|对话框|抽屉)[^。；;\r\n]{0,8}(?:保持打开|不关闭|仍显示)"),
+    ),
+    (re.compile(r"(?:列表|数据).{0,8}(?:新增|增加|更新|删除|移除)"), re.compile(r"(?:列表|数据).{0,8}(?:不变|无变化)")),
+]
+
+FORMAL_ALLOWED_VALUES = {
+    ("测试场景矩阵", "是否生成用例"): {"是", "否"},
+    ("功能测试用例", "是否适合自动化"): {"是", "否", "待评估"},
+    ("性能测试设计", "是否纳入本轮测试"): {"是", "否", "待评估"},
+}
 
 
 def shared_strings(zf: zipfile.ZipFile) -> list[str]:
@@ -899,6 +895,9 @@ def assert_numbered(text: str, label: str) -> None:
     for line in lines:
         if not re.match(r"^\d+\.\s*\S+", line):
             fail(f"{label} must use numbered lines like '1. ...': {line}")
+    numbers = [int(re.match(r"^(\d+)\.", line).group(1)) for line in lines]
+    if numbers != list(range(1, len(lines) + 1)):
+        fail(f"{label} numbering must be continuous from 1: {numbers}")
 
 
 def assert_complete_operation_steps(text: str, label: str) -> None:
@@ -929,17 +928,42 @@ def ui_symbol_style_issues(text: str) -> list[str]:
 
 def assert_transient_flow_closed(steps: str, expected: str, label: str) -> None:
     normalized_steps = re.sub(r"\s+", "", steps or "").lower()
-    combined = re.sub(r"\s+", "", f"{steps}\n{expected}").lower()
     if not normalized_steps:
         return
-    has_transient_action = any(marker.lower() in normalized_steps for marker in TRANSIENT_STEP_MARKERS)
+    has_transient_action = any(pattern.search(steps or "") for pattern in TRANSIENT_ACTION_PATTERNS)
     if not has_transient_action:
         return
-    has_terminal_action = any(marker.lower() in combined for marker in TERMINAL_STEP_MARKERS)
+    has_terminal_action = any(marker.lower() in normalized_steps for marker in TERMINAL_ACTION_MARKERS)
     if not has_terminal_action:
         fail(
-            f"{label} opens or changes a transient UI state but does not describe a confirm/cancel/close/return/recovery path"
+            f"{label} opens or changes a transient UI state but its operation steps do not execute a confirm/cancel/close/return/recovery action"
         )
+
+
+def assert_expected_result_consistency(expected: str, label: str) -> None:
+    for pattern in UNRESOLVED_EXPECTATION_PATTERNS:
+        if pattern.search(expected or ""):
+            fail(f"{label} contains an unresolved alternative instead of one verifiable result")
+    lines = [re.sub(r"\s+", "", line) for line in (expected or "").splitlines() if line.strip()]
+    for line in lines:
+        for positive, negative in EXPECTED_CONTRADICTION_PAIRS:
+            if positive.search(line) and negative.search(line):
+                fail(f"{label} contains mutually contradictory results in one numbered item: {line}")
+
+
+def assert_allowed_values(
+    rows: list[dict[str, str]],
+    sheet_name: str,
+    field: str,
+    allowed: set[str],
+) -> None:
+    invalid = [
+        f"第 {index} 行={row.get(field, '') or '<空>'}"
+        for index, row in enumerate(rows, start=2)
+        if row.get(field, "") not in allowed
+    ]
+    if invalid:
+        fail(f"{sheet_name}.{field} 只能使用 {sorted(allowed)}：{'; '.join(invalid[:FINDING_DISPLAY_LIMIT])}")
 
 
 def parse_ids(text: str) -> set[str]:
@@ -1155,7 +1179,7 @@ def warn_case_merge_candidates(function_rows: list[dict[str, str]]) -> None:
             f"功能测试用例第 {format_row_numbers(row_numbers)} 行具有相同功能点、前置条件、测试数据和操作步骤"
             f"（用例 ID：{case_id_text}），可评估是否合并；不得为消除警告破坏 DFX 对应或业务闭环"
         )
-    emit_warnings("用例合并候选提示，不影响退出码", warnings)
+    emit_warnings("用例合并候选提示；交付前必须逐项分类为需合并、合理差异或校验误报", warnings)
 
 
 def validate_evidence_status_consistency(
@@ -1302,6 +1326,12 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     scenario_rows = row_dicts(scenario_rows_raw, "测试场景矩阵")
     if not scenario_rows:
         fail("测试场景矩阵 must contain at least one DFX-driven scenario")
+    assert_allowed_values(
+        scenario_rows,
+        "测试场景矩阵",
+        "是否生成用例",
+        FORMAL_ALLOWED_VALUES[("测试场景矩阵", "是否生成用例")],
+    )
     validate_atomic_scenario_rows(scenario_rows)
     generated_scenario_dfx: set[tuple[str, str]] = set()
     for row in scenario_rows:
@@ -1309,10 +1339,30 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
             generated_scenario_dfx.update(dfx_pairs(row.get("DFX维度", ""), row.get("DFX场景", "")))
 
     function_rows_raw = sheet_rows(workbook, "功能测试用例")
-    require_headers(function_rows_raw, ["用例 ID", "功能点", "用例标题", "测试类型", "DFX维度", "DFX场景", "操作步骤", "预期结果"], "功能测试用例")
+    require_headers(
+        function_rows_raw,
+        [
+            "用例 ID",
+            "功能点",
+            "用例标题",
+            "测试类型",
+            "DFX维度",
+            "DFX场景",
+            "操作步骤",
+            "预期结果",
+            "是否适合自动化",
+        ],
+        "功能测试用例",
+    )
     function_rows = row_dicts(function_rows_raw, "功能测试用例")
     if not function_rows:
         fail("功能测试用例 must contain at least one case")
+    assert_allowed_values(
+        function_rows,
+        "功能测试用例",
+        "是否适合自动化",
+        FORMAL_ALLOWED_VALUES[("功能测试用例", "是否适合自动化")],
+    )
 
     case_ids: set[str] = set()
     case_titles: dict[str, str] = {}
@@ -1346,6 +1396,7 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
             f"row {index}: {issue}" for issue in ui_symbol_style_issues(row.get("操作步骤", ""))
         )
         assert_numbered(row.get("预期结果", ""), f"功能测试用例 row {index} 预期结果")
+        assert_expected_result_consistency(row.get("预期结果", ""), f"功能测试用例 row {index} 预期结果")
         assert_transient_flow_closed(
             row.get("操作步骤", ""),
             row.get("预期结果", ""),
@@ -1362,6 +1413,12 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     performance_rows = row_dicts(performance_rows_raw, "性能测试设计")
     if not performance_rows:
         fail("性能测试设计 must contain at least one scenario or explicit not-applicable row")
+    assert_allowed_values(
+        performance_rows,
+        "性能测试设计",
+        "是否纳入本轮测试",
+        FORMAL_ALLOWED_VALUES[("性能测试设计", "是否纳入本轮测试")],
+    )
     performance_dfx: set[tuple[str, str]] = set()
     for index, row in enumerate(performance_rows, start=2):
         if row.get("是否纳入本轮测试", "") != "否":
@@ -1420,10 +1477,15 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
         "case_titles": case_titles,
         "case_function_points": case_function_points,
         "coverage_rows": coverage_rows,
+        "scenario_count": len(scenario_rows),
+        "case_count": len(function_rows),
+        "performance_count": len(performance_rows),
+        "risk_count": len(risk_rows),
+        "coverage_count": len(coverage_rows),
     }
 
 
-def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, object]) -> None:
+def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, object]) -> int:
     if not import_workbook.exists():
         fail(f"Import workbook not found: {import_workbook}")
     with zipfile.ZipFile(import_workbook) as zf:
@@ -1482,6 +1544,10 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
         assert_numbered(row.get("测试步骤描述", ""), f"Import workbook row {index} 测试步骤描述")
         assert_complete_operation_steps(row.get("测试步骤描述", ""), f"Import workbook row {index} 测试步骤描述")
         assert_numbered(row.get("测试步骤预期结果", ""), f"Import workbook row {index} 测试步骤预期结果")
+        assert_expected_result_consistency(
+            row.get("测试步骤预期结果", ""),
+            f"Import workbook row {index} 测试步骤预期结果",
+        )
         assert_transient_flow_closed(
             row.get("测试步骤描述", ""),
             row.get("测试步骤预期结果", ""),
@@ -1503,6 +1569,7 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
     }.items():
         if marker not in xml:
             fail(f"Import workbook is missing preserved {label} dropdown validation: {marker}")
+    return len(rows)
 
 
 def positive_int(value: str, field: str, batch_id: str) -> int:
@@ -1938,8 +2005,13 @@ def main() -> int:
     args = parser.parse_args()
 
     workbook_data = validate_workbook(args.workbook, args.formal_template)
-    validate_import_workbook(args.import_workbook, workbook_data)
-    print("OK: test design deliverable quality checks passed.")
+    import_count = validate_import_workbook(args.import_workbook, workbook_data)
+    print(
+        "OK: test design deliverable quality checks passed. "
+        f"场景={workbook_data['scenario_count']}，功能用例={workbook_data['case_count']}，"
+        f"性能设计={workbook_data['performance_count']}，风险={workbook_data['risk_count']}，"
+        f"元素覆盖={workbook_data['coverage_count']}，导入用例={import_count}。"
+    )
     return 0
 
 

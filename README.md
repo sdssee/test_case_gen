@@ -2,7 +2,7 @@
 
 测试设计规范包，用于让 CodeBuddy/Codex 按统一规则生成测试设计 Excel 和测试系统导入文件。
 
-本仓库不是业务应用代码。它提供可复制到业务项目根目录的 Memory、Skill、Rule、脚本和 Excel 模板。
+本项目不是业务应用代码。它提供可复制到业务项目根目录的 Memory、Skill、Rule、脚本和 Excel 模板。
 
 ## 核心入口
 

@@ -194,6 +194,15 @@ def main() -> int:
             "测试设计执行与交付流程不涉及 Git",
             "触发元素 → 状态出现 → 状态内操作 → 终态动作 → 页面/数据结果",
             "相似用例告警必须在交付前分类",
+            "不得询问用户是否需要深探",
+            "待确认理解问题非空时",
+        ],
+    )
+    assert_contains(
+        root / "docs" / "test-design" / "rules" / "page-discovery.md",
+        [
+            "待确认` 只能用于需求含义、业务规则、范围边界、角色职责或预期结果",
+            "把问题写入风险表不等于用户已经确认",
         ],
     )
     assert_contains(
@@ -203,6 +212,7 @@ def main() -> int:
             "validate_atomic_scenario_rows",
             "warn_case_merge_candidates",
             "validate_evidence_status_consistency",
+            "待实探风险未关闭",
             "ui_symbol_style_issues",
             "NAVIGATION_ACTION_PATTERN",
             "UNRESOLVED_COVERAGE_NOTE_PATTERN",

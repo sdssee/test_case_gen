@@ -1186,28 +1186,30 @@ def validate_evidence_status_consistency(
     risk_rows: list[dict[str, str]],
     coverage_rows: list[dict[str, str]],
 ) -> None:
-    pending_risk_warnings = []
+    findings = {
+        "待实探风险未关闭": [],
+        "已覆盖与未解决备注并存": [],
+    }
     for index, row in enumerate(risk_rows, start=2):
         if normalize_signature_value(row.get("状态", "")) == "待实探":
             risk_id = row.get("编号", "") or f"第 {index} 行"
-            pending_risk_warnings.append(
-                f"风险与待确认问题 {risk_id} 仍为待实探，请确认是否受环境、权限、数据或联调条件限制"
+            findings["待实探风险未关闭"].append(
+                f"风险与待确认问题 {risk_id} 仍为待实探；请先完成定向补探，"
+                "客观受限时改为需联调、待环境或缺权限并写明原因"
             )
-    emit_warnings("待实探风险汇总，不影响退出码", pending_risk_warnings)
 
-    contradictions = []
     for index, row in enumerate(coverage_rows, start=2):
         note = row.get("待确认问题/备注", "")
         if row.get("覆盖状态", "") == "已覆盖" and UNRESOLVED_COVERAGE_NOTE_PATTERN.match(note):
             element = row.get("元素名称/文案", "") or row.get("元素 ID", "") or "未命名元素"
-            contradictions.append(
+            findings["已覆盖与未解决备注并存"].append(
                 f"第 {index} 行元素“{element}”已标记已覆盖，但备注仍是未解决状态：{note}"
             )
-    if contradictions:
+    if any(findings.values()):
         fail(
             format_findings(
-                "页面元素覆盖清单证据状态矛盾：",
-                {"已覆盖与未解决备注并存": contradictions},
+                "风险与页面元素证据状态门禁未通过：",
+                findings,
             )
         )
 

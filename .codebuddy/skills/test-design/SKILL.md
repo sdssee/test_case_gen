@@ -24,6 +24,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 按任务追加：
 
 - 页面、截图、原型、浏览器或 computer use：读取 `docs/test-design/rules/page-discovery.md`。
+- 识别到总条数、页码、每页条数、翻页、跳页等分页证据：追加读取 `docs/test-design/rules/pagination.md`，未通过分页专项准出不得结束深探。
 - 全产品、大模块、多个菜单或超过一个最小标题：读取 `docs/test-design/rules/batch-run.md`。
 
 ## 标准工作流

@@ -62,6 +62,7 @@ REQUIRED_FILES = [
     "docs/test-design/rules/README.md",
     "docs/test-design/rules/case-design.md",
     "docs/test-design/rules/page-discovery.md",
+    "docs/test-design/rules/pagination.md",
     "docs/test-design/rules/batch-run.md",
     "docs/test-design/rules/excel-deliverable.md",
     "docs/test-design/rules/import-template.md",
@@ -196,6 +197,7 @@ def main() -> int:
             "相似用例告警必须在交付前分类",
             "不得询问用户是否需要深探",
             "待确认理解问题非空时",
+            "docs/test-design/rules/pagination.md",
         ],
     )
     assert_contains(
@@ -203,6 +205,23 @@ def main() -> int:
         [
             "待确认` 只能用于需求含义、业务规则、范围边界、角色职责或预期结果",
             "把问题写入风险表不等于用户已经确认",
+            "追加读取 `pagination.md`",
+        ],
+    )
+    assert_contains(
+        root / "docs" / "test-design" / "rules" / "pagination.md",
+        [
+            "分页区域不能只登记为一个笼统的“分页组件”",
+            "数据不足只影响实探证据等级，不减少分页场景和用例",
+            "每个实际可选页容量",
+            "分页专项准出必须同时满足",
+        ],
+    )
+    assert_contains(
+        root / "docs" / "test-design" / "rules" / "case-design.md",
+        [
+            "分页场景按 `pagination.md` 的实际能力和状态转换设计",
+            "数据不足只影响实探证据等级",
         ],
     )
     assert_contains(

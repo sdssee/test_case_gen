@@ -24,6 +24,7 @@ Codex 应优先读取并遵守：
 按任务追加读取：
 
 - 页面、截图、原型、浏览器或 computer use：`docs/test-design/rules/page-discovery.md`
+- 识别到总条数、页码、每页条数、翻页、跳页等分页证据：追加读取 `docs/test-design/rules/pagination.md`
 - 全产品、大模块、多菜单或超过一个最小标题：`docs/test-design/rules/batch-run.md`
 - 所有任务基础规则：`docs/test-design/rules/case-design.md`、`excel-deliverable.md`、`import-template.md`、`data-safety.md`
 - 异常、边界、性能、安全、兼容、可靠、可用性等测试策略：`docs/test-design/rules/dfx-test-strategy.md`

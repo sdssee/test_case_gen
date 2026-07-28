@@ -6,6 +6,7 @@
 
 - 所有任务：`docs/test-design/rules/case-design.md`、`excel-deliverable.md`、`data-safety.md`、`docs/test-design/rules/dfx-test-strategy.md`、`docs/test-design/excel-template-spec.md`。
 - 页面/截图/原型/浏览器/computer use：追加 `docs/test-design/rules/page-discovery.md`。
+- 识别到分页证据：追加 `docs/test-design/rules/pagination.md`，未通过分页专项准出不得结束深探。
 - 全产品/大模块/多菜单/超过一个最小标题：追加 `docs/test-design/rules/batch-run.md`。
 - 所有任务都必须读取测试系统导入规则：`docs/test-design/rules/import-template.md`。
 

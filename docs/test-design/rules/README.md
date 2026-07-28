@@ -6,6 +6,7 @@
 
 - 所有任务：读取 `case-design.md`、`excel-deliverable.md`、`import-template.md`、`data-safety.md`、`dfx-test-strategy.md`。
 - 涉及页面、截图、原型、浏览器或 computer use：追加读取 `page-discovery.md`。
+- 页面、DOM、截图、原型或可访问性信息出现分页证据：追加读取 `pagination.md`。
 - 范围超过一个最小标题、全产品、大模块或多个菜单：追加读取 `batch-run.md`。
 
 ## 入口瘦身约束

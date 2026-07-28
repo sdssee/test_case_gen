@@ -27,6 +27,7 @@
 按任务追加：
 
 - 页面、截图、原型、浏览器或 computer use：`docs/test-design/rules/page-discovery.md`
+- 识别到总条数、页码、每页条数、翻页、跳页等分页证据：追加读取 `docs/test-design/rules/pagination.md`
 - 全产品、大模块、多菜单或超过一个最小标题：`docs/test-design/rules/batch-run.md`
 
 ## 不可违反的摘要规则

@@ -658,6 +658,8 @@ def complete_deliverables(
             atomic_copy_workbook(temporary_formal, target)
         for target in import_targets:
             atomic_copy_workbook(temporary_import, target)
+    print(f"OK: 正式测试设计已写入 {deliverable_formal}")
+    print(f"OK: 测试系统导入文件已写入 {deliverable_import}")
 
 
 def generate_import_workbook(

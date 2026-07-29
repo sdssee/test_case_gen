@@ -8,6 +8,7 @@ import re
 import sys
 import zipfile
 from pathlib import Path
+from typing import Callable
 from xml.etree import ElementTree as ET
 
 NS = {
@@ -291,11 +292,23 @@ def fail(message: str) -> None:
     raise AssertionError(message)
 
 
-TRANSIENT_ACTION_PATTERNS = [
-    re.compile(r"(?:点击|打开|展开|进入|切换)[^。；;\r\n]{0,30}(?:弹窗|对话框|抽屉|下拉(?:框|浮层)?|编辑态|删除确认框|确认弹窗)"),
-    re.compile(r"(?:点击|选择)[^。；;\r\n]{0,20}(?:编辑|删除|添加变量|新增变量)[^。；;\r\n]{0,20}(?:按钮|图标|入口|操作)?"),
-    re.compile(r"(?:open|show|expand|enter|click)[^.；;\r\n]{0,30}(?:modal|dialog|drawer|dropdown|edit mode|delete confirmation)", re.IGNORECASE),
+DROPDOWN_ACTION_PATTERNS = [
+    re.compile(r"(?:点击|打开|展开|切换)[^。；;\r\n]{0,30}(?:下拉(?:框|浮层)?)"),
+    re.compile(r"(?:open|show|expand|click)[^.；;\r\n]{0,30}(?:dropdown)", re.IGNORECASE),
 ]
+
+NON_DROPDOWN_TRANSIENT_ACTION_PATTERNS = [
+    re.compile(r"(?:点击|打开|展开|进入|切换)[^。；;\r\n]{0,30}(?:弹窗|对话框|抽屉|编辑态|删除确认框|确认弹窗)"),
+    re.compile(r"(?:点击|选择)[^。；;\r\n]{0,20}(?:编辑|删除|添加变量|新增变量)[^。；;\r\n]{0,20}(?:按钮|图标|入口|操作)?"),
+    re.compile(r"(?:open|show|expand|enter|click)[^.；;\r\n]{0,30}(?:modal|dialog|drawer|edit mode|delete confirmation)", re.IGNORECASE),
+]
+
+TRANSIENT_ACTION_PATTERNS = NON_DROPDOWN_TRANSIENT_ACTION_PATTERNS + DROPDOWN_ACTION_PATTERNS
+
+DROPDOWN_SELECTION_PATTERN = re.compile(r"(?:选择|选中|切换为|设置为)[^。；;\r\n]{1,40}")
+DROPDOWN_RESULT_PATTERN = re.compile(
+    r"(?:收起|关闭|消失|更新|刷新|显示|展示|加载|生效|变为|切换|保持|筛选|分页)"
+)
 
 TERMINAL_ACTION_MARKERS = [
     "click OK",
@@ -934,10 +947,136 @@ def assert_transient_flow_closed(steps: str, expected: str, label: str) -> None:
     if not has_transient_action:
         return
     has_terminal_action = any(marker.lower() in normalized_steps for marker in TERMINAL_ACTION_MARKERS)
+    has_non_dropdown_action = any(
+        pattern.search(steps or "") for pattern in NON_DROPDOWN_TRANSIENT_ACTION_PATTERNS
+    )
+    dropdown_selection_closed = (
+        not has_non_dropdown_action
+        and any(pattern.search(steps or "") for pattern in DROPDOWN_ACTION_PATTERNS)
+        and bool(DROPDOWN_SELECTION_PATTERN.search(steps or ""))
+        and bool(DROPDOWN_RESULT_PATTERN.search(expected or ""))
+    )
+    if dropdown_selection_closed:
+        return
     if not has_terminal_action:
         fail(
             f"{label} opens or changes a transient UI state but its operation steps do not execute a confirm/cancel/close/return/recovery action"
         )
+
+
+def has_active_login_step(steps: str) -> bool:
+    for raw_line in (steps or "").splitlines():
+        line = re.sub(r"^\s*\d+\.\s*", "", raw_line).strip()
+        if not line or any(marker in line for marker in ["未登录", "退出登录", "清除登录状态", "登录状态"]):
+            continue
+        if re.search(r"(?:使用|输入|填写|以)[^。；;\r\n]{0,30}(?:账号|账户|用户|身份)[^。；;\r\n]{0,20}登录", line):
+            return True
+        if re.search(r"(?:登录系统|登录平台|执行登录)", line):
+            return True
+    return False
+
+
+def collect_assertion_issue(action: Callable[[], None]) -> str | None:
+    try:
+        action()
+    except AssertionError as exc:
+        return str(exc)
+    return None
+
+
+def validate_function_case_preflight(function_rows: list[dict[str, str]]) -> None:
+    """一次汇总生成阶段最常见的用例结构问题，避免逐次生成、逐错修正。"""
+    findings: dict[str, list[str]] = {}
+
+    def add(category: str, message: str) -> None:
+        findings.setdefault(category, []).append(message)
+
+    seen_case_ids: set[str] = set()
+    for index, row in enumerate(function_rows, start=2):
+        case_id = row.get("用例 ID", "").strip()
+        function_point = row.get("功能点", "").strip()
+        title = row.get("用例标题", "").strip()
+        anchor = f"第 {index} 行 / 用例 ID={case_id or '缺失'} / 标题={title or '缺失'}"
+
+        if not case_id:
+            add("标识与标题", f"{anchor}：缺少用例 ID")
+        elif case_id in seen_case_ids:
+            add("标识与标题", f"{anchor}：用例 ID 重复")
+        seen_case_ids.add(case_id)
+        if not function_point:
+            add("标识与标题", f"{anchor}：缺少功能点")
+        elif not title.startswith(f"{function_point}-"):
+            add("标识与标题", f"{anchor}：用例标题必须以本行功能点-开头")
+
+        checks = [
+            (
+                "步骤与预期编号",
+                lambda row=row, anchor=anchor: assert_numbered(
+                    row.get("操作步骤", ""), f"{anchor} 操作步骤"
+                ),
+            ),
+            (
+                "入口导航",
+                lambda row=row, anchor=anchor: assert_complete_operation_steps(
+                    row.get("操作步骤", ""), f"{anchor} 操作步骤"
+                ),
+            ),
+            (
+                "步骤与预期编号",
+                lambda row=row, anchor=anchor: assert_numbered(
+                    row.get("预期结果", ""), f"{anchor} 预期结果"
+                ),
+            ),
+            (
+                "预期一致性",
+                lambda row=row, anchor=anchor: assert_expected_result_consistency(
+                    row.get("预期结果", ""), f"{anchor} 预期结果"
+                ),
+            ),
+            (
+                "DFX 映射",
+                lambda row=row, anchor=anchor: assert_dfx_mapping(
+                    row.get("DFX维度", ""), row.get("DFX场景", ""), anchor
+                ),
+            ),
+            (
+                "交互闭环",
+                lambda row=row, anchor=anchor: assert_transient_flow_closed(
+                    row.get("操作步骤", ""), row.get("预期结果", ""), anchor
+                ),
+            ),
+        ]
+        if row.get("前置条件"):
+            checks.append(
+                (
+                    "步骤与预期编号",
+                    lambda row=row, anchor=anchor: assert_numbered(
+                        row.get("前置条件", ""), f"{anchor} 前置条件"
+                    ),
+                )
+            )
+        for category, check in checks:
+            issue = collect_assertion_issue(check)
+            if issue:
+                add(category, issue)
+
+        allowed_automation = FORMAL_ALLOWED_VALUES[("功能测试用例", "是否适合自动化")]
+        automation_value = row.get("是否适合自动化", "").strip()
+        if automation_value not in allowed_automation:
+            add("枚举", f"{anchor}：是否适合自动化只能使用 {sorted(allowed_automation)}")
+        for issue in ui_symbol_style_issues(row.get("操作步骤", "")):
+            add("符号格式", f"{anchor}：{issue}")
+
+        unauthenticated_context = "\n".join(
+            [title, row.get("前置条件", ""), row.get("操作步骤", "")]
+        )
+        if re.search(r"(?:未登录|无痕|清除登录状态|退出登录)", unauthenticated_context) and has_active_login_step(
+            row.get("操作步骤", "")
+        ):
+            add("特殊角色与状态", f"{anchor}：未登录场景不得机械追加登录步骤")
+
+    if findings:
+        fail(format_findings("功能测试用例写入前集中预检未通过：", findings))
 
 
 def assert_expected_result_consistency(expected: str, label: str) -> None:
@@ -1359,55 +1498,19 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     function_rows = row_dicts(function_rows_raw, "功能测试用例")
     if not function_rows:
         fail("功能测试用例 must contain at least one case")
-    assert_allowed_values(
-        function_rows,
-        "功能测试用例",
-        "是否适合自动化",
-        FORMAL_ALLOWED_VALUES[("功能测试用例", "是否适合自动化")],
-    )
-
+    validate_function_case_preflight(function_rows)
     case_ids: set[str] = set()
     case_titles: dict[str, str] = {}
     case_function_points: dict[str, str] = {}
     function_dfx: set[tuple[str, str]] = set()
-    ui_symbol_findings: list[str] = []
     for index, row in enumerate(function_rows, start=2):
         case_id = row.get("用例 ID", "")
         function_point = row.get("功能点", "")
         title = row.get("用例标题", "")
-        if not case_id:
-            fail(f"功能测试用例 row {index} is missing 用例 ID")
-        if case_id in case_ids:
-            fail(f"Duplicate 用例 ID: {case_id}")
         case_ids.add(case_id)
         case_titles[case_id] = title
         case_function_points[case_id] = function_point
-        if not function_point:
-            fail(f"功能测试用例 row {index} is missing 功能点")
-        if not title.startswith(f"{function_point}-"):
-            fail(f"功能测试用例 row {index} title must start with 功能点-: {title}")
-        dimensions, scenarios = assert_dfx_mapping(
-            row.get("DFX维度", ""),
-            row.get("DFX场景", ""),
-            f"功能测试用例 row {index}",
-        )
         function_dfx.update(dfx_pairs(row.get("DFX维度", ""), row.get("DFX场景", "")))
-        assert_numbered(row.get("操作步骤", ""), f"功能测试用例 row {index} 操作步骤")
-        assert_complete_operation_steps(row.get("操作步骤", ""), f"功能测试用例 row {index} 操作步骤")
-        ui_symbol_findings.extend(
-            f"row {index}: {issue}" for issue in ui_symbol_style_issues(row.get("操作步骤", ""))
-        )
-        assert_numbered(row.get("预期结果", ""), f"功能测试用例 row {index} 预期结果")
-        assert_expected_result_consistency(row.get("预期结果", ""), f"功能测试用例 row {index} 预期结果")
-        assert_transient_flow_closed(
-            row.get("操作步骤", ""),
-            row.get("预期结果", ""),
-            f"功能测试用例 row {index}",
-        )
-        if row.get("前置条件"):
-            assert_numbered(row["前置条件"], f"功能测试用例 row {index} 前置条件")
-    if ui_symbol_findings:
-        fail(format_findings("功能测试用例操作步骤符号格式错误", {"操作步骤": ui_symbol_findings}))
     warn_case_merge_candidates(function_rows)
 
     performance_rows_raw = sheet_rows(workbook, "性能测试设计")

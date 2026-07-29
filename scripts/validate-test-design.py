@@ -228,6 +228,11 @@ def main() -> int:
             "未完成事实核账不得开始 DFX",
             "DFX 只能标记或补充",
             "是否生成用例=是",
+            "系统/项目入口 → 一级菜单-二级菜单-目标页面",
+            "未登录、退出登录、无痕访问、无权限角色、断网或超时",
+            "不得虚构“关闭弹窗”",
+            "写入前集中核对",
+            "禁止连续创建多个 `fix_*` 脚本",
         ],
     )
     assert_contains(
@@ -253,10 +258,21 @@ def main() -> int:
             "validate_chinese_delivery_language",
             "CHINESE_DELIVERY_FIELDS",
             "TRANSIENT_ACTION_PATTERNS",
+            "DROPDOWN_SELECTION_PATTERN",
+            "validate_function_case_preflight",
+            "未登录场景不得机械追加登录步骤",
             "assert_expected_result_consistency",
             "FORMAL_ALLOWED_VALUES",
             "scenario_count",
             '"--formal-template"',
+        ],
+    )
+    assert_contains(
+        root / "docs" / "test-design" / "rules" / "excel-deliverable.md",
+        [
+            "不得给 `Worksheet.max_row` 等只读属性赋值",
+            "以命令输出的正式测试设计和导入文件实际路径为准",
+            "不重复执行同一份最终交付校验",
         ],
     )
     assert_contains(

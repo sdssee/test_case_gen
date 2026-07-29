@@ -198,6 +198,7 @@ def main() -> int:
             "不得询问用户是否需要深探",
             "待确认理解问题非空时",
             "docs/test-design/rules/pagination.md",
+            "深探事实必须先按测试对象、角色/状态、动作/输入、数据、观察点和恢复路径",
         ],
     )
     assert_contains(
@@ -206,6 +207,8 @@ def main() -> int:
             "待确认` 只能用于需求含义、业务规则、范围边界、角色职责或预期结果",
             "把问题写入风险表不等于用户已经确认",
             "追加读取 `pagination.md`",
+            "供深探准出后的原子场景形成步骤逐项处理",
+            "完成原子化后再为每个场景标记一个主",
         ],
     )
     assert_contains(
@@ -222,6 +225,16 @@ def main() -> int:
         [
             "分页场景按 `pagination.md` 的实际能力和状态转换设计",
             "数据不足只影响实探证据等级",
+            "未完成事实核账不得开始 DFX",
+            "DFX 只能标记或补充",
+            "是否生成用例=是",
+        ],
+    )
+    assert_contains(
+        root / "docs" / "test-design" / "rules" / "dfx-test-strategy.md",
+        [
+            "先按测试对象、角色/状态、动作/输入、数据、观察点和恢复路径形成并核账原子场景",
+            "不得用维度归类、代表性抽样或去重删减",
         ],
     )
     assert_contains(

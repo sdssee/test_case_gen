@@ -159,24 +159,44 @@ def validate_discovery_gate(root: Path) -> None:
     valid_story = {
         "Story ID/需求 ID": "STORY-001",
         "用户故事/需求描述": "管理业务对象",
-        "角色": "租户管理员、系统管理员",
+        "角色": "业务管理员",
         "业务价值": "完成对象管理",
         "验收标准": "可按权限完成管理",
     }
-    module.validate_story_role_rows([valid_story])
+    story_ids = module.validate_story_rows([valid_story])
+    module.validate_story_traceability(
+        story_ids,
+        [{"Story ID/需求 ID": "STORY-001"}],
+        [{"Story ID/需求 ID": "STORY-001"}],
+    )
     invalid_stories = [
-        dict(valid_story, 角色="租户管理员、租户管理员"),
-        dict(valid_story, 角色="未登录用户,系统管理员"),
+        valid_story,
+        dict(valid_story, **{"用户故事/需求描述": "查看业务对象"}),
+        dict(valid_story, **{"Story ID/需求 ID": "STORY-002"}),
+        {"Story ID/需求 ID": "STORY-003", "角色": "业务管理员"},
     ]
     try:
-        module.validate_story_role_rows(invalid_stories)
+        module.validate_story_rows(invalid_stories)
     except AssertionError as exc:
         message = str(exc)
-        for marker in ["Story ID/需求 ID 重复", "多角色只能使用中文顿号", "包含重复角色", "把测试状态写入业务角色", "除角色外内容一致"]:
+        for marker in ["Story ID/需求 ID 重复", "用户故事/需求描述 不能为空", "业务价值 不能为空", "验收标准 不能为空", "内容精确重复"]:
             if marker not in message:
-                fail(f"用户故事角色门禁没有一次汇总必要问题：{marker}")
+                fail(f"需求用户故事拆解门禁没有一次汇总必要问题：{marker}")
     else:
-        fail("用户故事角色门禁错误地放行了不稳定角色结构")
+        fail("需求用户故事拆解门禁错误地放行了不稳定故事结构")
+    try:
+        module.validate_story_traceability(
+            {"STORY-001", "STORY-002"},
+            [{"Story ID/需求 ID": "STORY-UNKNOWN"}],
+            [{"Story ID/需求 ID": ""}],
+        )
+    except AssertionError as exc:
+        message = str(exc)
+        for marker in ["缺少 Story ID/需求 ID", "引用了不存在的 Story", "没有关联测试场景"]:
+            if marker not in message:
+                fail(f"Story 追踪门禁没有一次汇总必要问题：{marker}")
+    else:
+        fail("Story 追踪门禁错误地放行了断链结构")
     valid_state = {
         "version": 1,
         "scope": "一级菜单-二级菜单-目标页面",
@@ -495,9 +515,10 @@ def main() -> int:
             "禁止连续创建多个 `fix_*` 脚本",
             "数据变更流程覆盖",
             "只展开、选择后取消或关闭只能算交互覆盖",
-            "用户故事角色归一化",
-            "具备该功能权限的业务用户",
-            "DFX 和用例设计不得反向追加角色",
+            "需求用户故事拆解",
+            "独立说明业务价值并独立验收",
+            "以最小明确需求项作为默认 Story 边界",
+            "页面元素、测试点或 DFX 再拆分或合并",
         ],
     )
     assert_contains(
@@ -531,8 +552,10 @@ def main() -> int:
             "FORMAL_ALLOWED_VALUES",
             "用例逐项覆盖",
             "只有选择或取消覆盖",
-            "validate_story_role_rows",
-            "需求用户故事角色归一化检查未通过",
+            "validate_story_rows",
+            "需求用户故事拆解检查未通过",
+            "validate_story_traceability",
+            "Story 到场景和用例追踪检查未通过",
             "scenario_count",
             '"--formal-template"',
         ],
@@ -546,7 +569,7 @@ def main() -> int:
             "在操作分页控件前读取一次 `pagination.md`",
             "不记录没有执行约束力的“已加载”标记",
             "阶段切换不新增用户确认、中间文件、生成轮次或自动重试",
-            "先按证据归一化并冻结用户故事业务角色",
+            "先按来源或独立业务价值与验收结果拆解并冻结 Story",
         ],
     )
     assert_contains(
@@ -569,8 +592,8 @@ def main() -> int:
             "已覆盖` 不得与上述未解决前缀并存",
             "一级菜单-二级菜单-目标页面",
             "说明性字段默认使用中文",
-            "业务目标、业务价值、流程、业务规则和验收标准相同",
-            "禁止使用当前账号名",
+            "每行表示一个具备独立业务价值和独立验收结果的业务闭环",
+            "页面、字段、选项、测试数据、正常/异常、边界、权限状态和 DFX 维度只展开测试场景",
             "是否生成用例` 只能填写 `是` 或 `否",
             "是否适合自动化` 只能填写 `是`、`否` 或 `待评估",
         ],

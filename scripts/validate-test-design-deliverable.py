@@ -177,12 +177,9 @@ PAGINATION_CAPABILITY_PATTERNS = [
     re.compile(pattern)
     for pattern in ["首页", "上一页", "页码(?:按钮|选择)?|当前页", "下一页", "末页", "省略号", PAGE_SIZE_PATTERN.pattern, "跳页|跳至"]
 ]
-STORY_ROLE_SEPARATOR_PATTERN = re.compile(r"[,，/\\;；|\r\n]+")
-STORY_TEST_STATE_ROLE_PATTERN = re.compile(
-    r"(?:未登录用户|无权限用户|会话过期|登录失效|断网|弱网|网络超时|异常会话)"
-)
-STORY_SEMANTIC_FIELDS = [
-    "用户故事/需求描述", "业务价值", "验收标准", "业务规则", "前置条件", "后置影响", "依赖系统", "待确认问题",
+STORY_REQUIRED_FIELDS = ["Story ID/需求 ID", "用户故事/需求描述", "业务价值", "验收标准"]
+STORY_DUPLICATE_FIELDS = [
+    "用户故事/需求描述", "角色", "业务价值", "验收标准", "业务规则", "前置条件", "后置影响", "依赖系统", "待确认问题",
 ]
 
 def fail(message: str) -> None:
@@ -1022,43 +1019,59 @@ def validate_function_case_preflight(function_rows: list[dict[str, str]]) -> Non
         fail(format_findings("功能测试用例写入前集中预检未通过：", findings))
 
 
-def validate_story_role_rows(story_rows: list[dict[str, str]]) -> None:
+def validate_story_rows(story_rows: list[dict[str, str]]) -> set[str]:
     findings: dict[str, list[str]] = {
-        "故事标识与角色": [],
-        "角色格式": [],
-        "测试状态污染": [],
-        "相同故事未合并": [],
+        "必要字段缺失": [],
+        "Story ID 重复": [],
+        "故事内容精确重复": [],
     }
     seen_ids: set[str] = set()
-    semantic_groups: dict[tuple[str, ...], list[tuple[int, str, str]]] = {}
+    signatures: dict[tuple[str, ...], tuple[int, str]] = {}
     for index, row in enumerate(story_rows, start=2):
         story_id = row.get("Story ID/需求 ID", "").strip()
-        role_text = row.get("角色", "").strip()
-        if not story_id:
-            findings["故事标识与角色"].append(f"第 {index} 行缺少 Story ID/需求 ID")
-        elif story_id in seen_ids:
-            findings["故事标识与角色"].append(f"第 {index} 行 Story ID/需求 ID 重复：{story_id}")
-        seen_ids.add(story_id)
-        if not role_text:
-            findings["故事标识与角色"].append(f"第 {index} 行角色不能为空")
-        elif STORY_ROLE_SEPARATOR_PATTERN.search(role_text):
-            findings["角色格式"].append(f"第 {index} 行多角色只能使用中文顿号“、”分隔：{role_text}")
-        roles = [role.strip() for role in role_text.split("、") if role.strip()]
-        if len(roles) != len({normalize(role) for role in roles}):
-            findings["角色格式"].append(f"第 {index} 行包含重复角色：{role_text}")
-        if STORY_TEST_STATE_ROLE_PATTERN.search(role_text):
-            findings["测试状态污染"].append(f"第 {index} 行把测试状态写入业务角色：{role_text}")
-        if not row.get("用户故事/需求描述", "").strip():
-            findings["故事标识与角色"].append(f"第 {index} 行用户故事/需求描述不能为空")
-        signature = tuple(normalize_signature_value(row.get(field, "")) for field in STORY_SEMANTIC_FIELDS)
-        semantic_groups.setdefault(signature, []).append((index, story_id, role_text))
-
-    for group in semantic_groups.values():
-        if len(group) > 1:
-            rows = "、".join(f"第 {index} 行/{story_id or '缺失 ID'}" for index, story_id, _ in group)
-            findings["相同故事未合并"].append(f"{rows} 除角色外内容一致，应合并角色并保留一个 Story 行")
+        for field in STORY_REQUIRED_FIELDS:
+            if not row.get(field, "").strip():
+                findings["必要字段缺失"].append(f"第 {index} 行 {field} 不能为空")
+        if story_id and story_id in seen_ids:
+            findings["Story ID 重复"].append(f"第 {index} 行 Story ID/需求 ID 重复：{story_id}")
+        if story_id:
+            seen_ids.add(story_id)
+        signature = tuple(normalize_signature_value(row.get(field, "")) for field in STORY_DUPLICATE_FIELDS)
+        previous = signatures.get(signature)
+        if previous and any(signature):
+            findings["故事内容精确重复"].append(
+                f"第 {previous[0]} 行/{previous[1] or '缺失 ID'} 与第 {index} 行/{story_id or '缺失 ID'} 内容精确重复"
+            )
+        elif any(signature):
+            signatures[signature] = (index, story_id)
     if any(findings.values()):
-        fail(format_findings("需求用户故事角色归一化检查未通过：", findings))
+        fail(format_findings("需求用户故事拆解检查未通过：", findings))
+    return seen_ids
+
+
+def validate_story_traceability(
+    story_ids: set[str],
+    scenario_rows: list[dict[str, str]],
+    function_rows: list[dict[str, str]],
+) -> None:
+    findings: dict[str, list[str]] = {"引用缺失": [], "引用不存在": [], "Story 未形成场景": []}
+    scenario_story_ids: set[str] = set()
+    for sheet_name, rows in [("测试场景矩阵", scenario_rows), ("功能测试用例", function_rows)]:
+        for index, row in enumerate(rows, start=2):
+            references = parse_ids(row.get("Story ID/需求 ID", ""))
+            if not references:
+                findings["引用缺失"].append(f"{sheet_name} 第 {index} 行缺少 Story ID/需求 ID")
+                continue
+            unknown = sorted(references - story_ids)
+            if unknown:
+                findings["引用不存在"].append(f"{sheet_name} 第 {index} 行引用了不存在的 Story：{unknown}")
+            if sheet_name == "测试场景矩阵":
+                scenario_story_ids.update(references & story_ids)
+    uncovered = sorted(story_ids - scenario_story_ids)
+    if uncovered:
+        findings["Story 未形成场景"].append(f"以下 Story 没有关联测试场景：{uncovered}")
+    if any(findings.values()):
+        fail(format_findings("Story 到场景和用例追踪检查未通过：", findings))
 
 
 def assert_expected_result_consistency(expected: str, label: str) -> None:
@@ -1088,7 +1101,7 @@ def assert_allowed_values(
 
 
 def parse_ids(text: str) -> set[str]:
-    return {item.strip() for item in re.split(r"[,，;；\s]+", text) if item.strip()}
+    return {item.strip() for item in re.split(r"[,，;；、\s]+", text) if item.strip()}
 
 
 def split_dfx_values(text: str) -> list[str]:
@@ -1754,7 +1767,7 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     story_rows = row_dicts(story_rows_raw, "需求用户故事拆解")
     if not story_rows:
         fail("需求用户故事拆解 must contain at least one story")
-    validate_story_role_rows(story_rows)
+    story_ids = validate_story_rows(story_rows)
 
     scenario_rows_raw = sheet_rows(workbook, "测试场景矩阵")
     assert_no_deprecated_scenario_headers(scenario_rows_raw, "测试场景矩阵")
@@ -1800,6 +1813,7 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
         function_rows_raw,
         [
             "用例 ID",
+            "Story ID/需求 ID",
             "功能点",
             "用例标题",
             "测试类型",
@@ -1814,6 +1828,7 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     function_rows = row_dicts(function_rows_raw, "功能测试用例")
     if not function_rows:
         fail("功能测试用例 must contain at least one case")
+    validate_story_traceability(story_ids, scenario_rows, function_rows)
     validate_function_case_preflight(function_rows)
     case_ids: set[str] = set()
     case_titles: dict[str, str] = {}

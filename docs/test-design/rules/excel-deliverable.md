@@ -15,7 +15,7 @@
 
 正式测试设计工作簿不得新增 `测试系统导入用例` Sheet。
 
-正式测试设计必须以 `docs/test-design/codebuddy-test-design-template.xlsx` 为唯一结构与样式基线。生成时先复制模板，再填充数据内容；通用 xlsx/表格 Skill 只可用于读取、渲染和视觉检查，不得直接写正式交付件。禁止临时脚本通过 `Workbook()`、`create_sheet()` 或直接修改 Excel XML 创建、重建或修补 `docs/test-design/deliverables/*.xlsx`。
+正式测试设计必须以 `docs/test-design/codebuddy-test-design-template.xlsx` 为唯一结构与样式基线。生成时先复制模板，再填充数据内容；通用 xlsx/表格 Skill 只可用于读取、渲染和视觉检查，不得直接写正式交付件。禁止临时脚本通过 `Workbook()`、`create_sheet()` 或直接修改 Excel XML 创建、重建或修补项目根目录 `deliverables/*.xlsx`。
 
 ## 页面元素覆盖清单
 

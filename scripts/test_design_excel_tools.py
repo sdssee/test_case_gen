@@ -400,8 +400,8 @@ def finalize_deliverables(
     project_root = project_root.resolve()
     _, formal_name, import_name = deliverable_names(module_path, product_name)
 
-    deliverable_formal = project_root / "docs" / "test-design" / "deliverables" / formal_name
-    deliverable_import = project_root / "docs" / "test-design" / "deliverables" / import_name
+    deliverable_formal = project_root / "deliverables" / formal_name
+    deliverable_import = project_root / "deliverables" / import_name
 
     script_dir = Path(__file__).resolve().parent
     validator_args = [
@@ -441,10 +441,10 @@ def complete_deliverables(
     script_dir = Path(__file__).resolve().parent
     _, formal_name, import_name = deliverable_names(module_path, product_name)
     formal_template = project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
-    deliverable_dir = project_root / "docs" / "test-design" / "deliverables"
+    deliverable_dir = project_root / "deliverables"
     deliverable_formal = deliverable_dir / formal_name
     deliverable_import = deliverable_dir / import_name
-    target_import = import_workbook or (project_root / "docs" / "test-design" / "deliverables" / import_name)
+    target_import = import_workbook or (deliverable_dir / import_name)
 
     with tempfile.TemporaryDirectory(prefix="test-design-deliverables-") as temporary_dir:
         temporary_root = Path(temporary_dir)

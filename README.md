@@ -41,7 +41,7 @@
 ```powershell
 python scripts/test_design_excel_tools.py complete-deliverables `
   --project-root . `
-  --formal-workbook docs/test-design/deliverables/<测试设计.xlsx> `
+  --formal-workbook deliverables/<测试设计.xlsx> `
   --import-template docs/test-design/测试用例模板.xlsx `
   --module-path "一级模块>二级菜单>三级菜单"
 ```
@@ -57,7 +57,7 @@ python scripts/test_design_excel_tools.py complete-deliverables `
 - 测试策略以 `DFX维度` 和 `DFX场景` 为主字段，`场景类型`、`正向/反向` 已废弃；详细矩阵见 `docs/test-design/rules/dfx-test-strategy.md`。
 - 每条功能测试用例必须把 DFX 落到测试数据、操作步骤、预期结果和恢复路径。
 - 已有数据只能查看和只读深探；敏感操作只允许作用于本次创建且带测试标识的数据。
-- 所有交付件统一放在 `docs/test-design/deliverables/`。
+- 所有交付件统一放在项目根目录的 `deliverables/`，便于直接获取。
 
 ## 校验
 

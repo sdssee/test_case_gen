@@ -12,6 +12,7 @@ your-project/
     skills/test-design/SKILL.md
     .rules/test-design-rule.mdc
     rules/test-design-rule.md
+  deliverables/
   docs/
     ARCHITECTURE.md
     RULE_OWNERSHIP.md
@@ -20,7 +21,6 @@ your-project/
       测试用例模板.xlsx
       excel-template-spec.md
       rules/
-      deliverables/
   scripts/
 ```
 
@@ -64,7 +64,7 @@ your-project/
 ```powershell
 python scripts/test_design_excel_tools.py complete-deliverables `
   --project-root . `
-  --formal-workbook docs/test-design/deliverables/<测试设计.xlsx> `
+  --formal-workbook deliverables/<测试设计.xlsx> `
   --import-template docs/test-design/测试用例模板.xlsx `
   --module-path "一级模块>二级菜单>三级菜单"
 ```

@@ -10,7 +10,7 @@
 | AI 入口 | `AGENTS.md`、`CODEBUDDY.md` | Codex 与 CodeBuddy 的项目级记忆，放置高优先级约束和交付边界。 |
 | 执行入口 | `.codebuddy/skills/test-design/SKILL.md`、`.codebuddy/.rules/test-design-rule.mdc`、`.codebuddy/rules/test-design-rule.md` | 保持低于 10000 字符，只承载读取路由、硬门禁、流程摘要和校验命令。 |
 | 模板契约 | `docs/test-design/excel-template-spec.md`、`docs/test-design/*.xlsx` | 定义 Excel Sheet、字段、枚举、下拉框、导入模板和样式约束。 |
-| 客户交付件 | `docs/test-design/deliverables/` | 保存交付给客户或测试系统的测试设计和导入文件。 |
+| 客户交付件 | `deliverables/` | 项目根目录下保存交付给客户或测试系统的测试设计和导入文件。 |
 
 规则归属和精简边界见 `docs/RULE_OWNERSHIP.md`。修改规则时，应先判断规则类型和权威源，再更新摘要引用和校验脚本。
 

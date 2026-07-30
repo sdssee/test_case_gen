@@ -56,6 +56,7 @@ REQUIRED_FILES = [
     "CODEBUDDY.md",
     "README.md",
     "README_IMPORT.md",
+    "deliverables/.gitkeep",
     ".codebuddy/skills/test-design/SKILL.md",
     ".codebuddy/.rules/test-design-rule.mdc",
     ".codebuddy/rules/test-design-rule.md",
@@ -412,8 +413,11 @@ def main() -> int:
             "atomic_copy_workbook",
             "complete-deliverables",
             "generate-import",
+            'project_root / "deliverables"',
         ],
     )
+    if 'project_root / "docs" / "test-design" / "deliverables"' in tool.read_text(encoding="utf-8"):
+        fail("统一交付工具仍包含旧的嵌套交付默认路径")
     assert_contains(
         root / "AGENTS.md",
         [
@@ -531,7 +535,7 @@ def main() -> int:
         [
             "自动调整行高",
             "水平左对齐",
-            "docs/test-design/deliverables/",
+            "deliverables/",
             "功能点` 作为父场景",
             "每个场景行只允许一个主 `DFX维度`",
             "待实探：",

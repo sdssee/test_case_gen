@@ -8,7 +8,7 @@
 - 正式交付物必须以 `docs/test-design/codebuddy-test-design-template.xlsx` 为唯一结构与样式基线，只复制模板并填充内容。
 - 正式测试设计只包含 8 个标准 Sheet，不新增 `测试系统导入用例` Sheet。
 - 每次正式交付都必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立测试系统导入文件，不修改原模板，也不询问是否需要生成。
-- 所有交付件统一放在 `docs/test-design/deliverables/`。
+- 所有交付件统一放在项目根目录的 `deliverables/`。
 
 ## 必读文件
 

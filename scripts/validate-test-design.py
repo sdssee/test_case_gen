@@ -156,6 +156,27 @@ def validate_discovery_gate(root: Path) -> None:
         fail("无法加载交付校验器进行深探门禁自检")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    valid_story = {
+        "Story ID/需求 ID": "STORY-001",
+        "用户故事/需求描述": "管理业务对象",
+        "角色": "租户管理员、系统管理员",
+        "业务价值": "完成对象管理",
+        "验收标准": "可按权限完成管理",
+    }
+    module.validate_story_role_rows([valid_story])
+    invalid_stories = [
+        dict(valid_story, 角色="租户管理员、租户管理员"),
+        dict(valid_story, 角色="未登录用户,系统管理员"),
+    ]
+    try:
+        module.validate_story_role_rows(invalid_stories)
+    except AssertionError as exc:
+        message = str(exc)
+        for marker in ["Story ID/需求 ID 重复", "多角色只能使用中文顿号", "包含重复角色", "把测试状态写入业务角色", "除角色外内容一致"]:
+            if marker not in message:
+                fail(f"用户故事角色门禁没有一次汇总必要问题：{marker}")
+    else:
+        fail("用户故事角色门禁错误地放行了不稳定角色结构")
     valid_state = {
         "version": 1,
         "scope": "一级菜单-二级菜单-目标页面",
@@ -474,6 +495,9 @@ def main() -> int:
             "禁止连续创建多个 `fix_*` 脚本",
             "数据变更流程覆盖",
             "只展开、选择后取消或关闭只能算交互覆盖",
+            "用户故事角色归一化",
+            "具备该功能权限的业务用户",
+            "DFX 和用例设计不得反向追加角色",
         ],
     )
     assert_contains(
@@ -507,6 +531,8 @@ def main() -> int:
             "FORMAL_ALLOWED_VALUES",
             "用例逐项覆盖",
             "只有选择或取消覆盖",
+            "validate_story_role_rows",
+            "需求用户故事角色归一化检查未通过",
             "scenario_count",
             '"--formal-template"',
         ],
@@ -520,6 +546,7 @@ def main() -> int:
             "在操作分页控件前读取一次 `pagination.md`",
             "不记录没有执行约束力的“已加载”标记",
             "阶段切换不新增用户确认、中间文件、生成轮次或自动重试",
+            "先按证据归一化并冻结用户故事业务角色",
         ],
     )
     assert_contains(
@@ -542,6 +569,8 @@ def main() -> int:
             "已覆盖` 不得与上述未解决前缀并存",
             "一级菜单-二级菜单-目标页面",
             "说明性字段默认使用中文",
+            "业务目标、业务价值、流程、业务规则和验收标准相同",
+            "禁止使用当前账号名",
             "是否生成用例` 只能填写 `是` 或 `否",
             "是否适合自动化` 只能填写 `是`、`否` 或 `待评估",
         ],

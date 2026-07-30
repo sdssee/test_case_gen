@@ -177,6 +177,13 @@ PAGINATION_CAPABILITY_PATTERNS = [
     re.compile(pattern)
     for pattern in ["首页", "上一页", "页码(?:按钮|选择)?|当前页", "下一页", "末页", "省略号", PAGE_SIZE_PATTERN.pattern, "跳页|跳至"]
 ]
+STORY_ROLE_SEPARATOR_PATTERN = re.compile(r"[,，/\\;；|\r\n]+")
+STORY_TEST_STATE_ROLE_PATTERN = re.compile(
+    r"(?:未登录用户|无权限用户|会话过期|登录失效|断网|弱网|网络超时|异常会话)"
+)
+STORY_SEMANTIC_FIELDS = [
+    "用户故事/需求描述", "业务价值", "验收标准", "业务规则", "前置条件", "后置影响", "依赖系统", "待确认问题",
+]
 
 def fail(message: str) -> None:
     raise AssertionError(message)
@@ -1015,6 +1022,45 @@ def validate_function_case_preflight(function_rows: list[dict[str, str]]) -> Non
         fail(format_findings("功能测试用例写入前集中预检未通过：", findings))
 
 
+def validate_story_role_rows(story_rows: list[dict[str, str]]) -> None:
+    findings: dict[str, list[str]] = {
+        "故事标识与角色": [],
+        "角色格式": [],
+        "测试状态污染": [],
+        "相同故事未合并": [],
+    }
+    seen_ids: set[str] = set()
+    semantic_groups: dict[tuple[str, ...], list[tuple[int, str, str]]] = {}
+    for index, row in enumerate(story_rows, start=2):
+        story_id = row.get("Story ID/需求 ID", "").strip()
+        role_text = row.get("角色", "").strip()
+        if not story_id:
+            findings["故事标识与角色"].append(f"第 {index} 行缺少 Story ID/需求 ID")
+        elif story_id in seen_ids:
+            findings["故事标识与角色"].append(f"第 {index} 行 Story ID/需求 ID 重复：{story_id}")
+        seen_ids.add(story_id)
+        if not role_text:
+            findings["故事标识与角色"].append(f"第 {index} 行角色不能为空")
+        elif STORY_ROLE_SEPARATOR_PATTERN.search(role_text):
+            findings["角色格式"].append(f"第 {index} 行多角色只能使用中文顿号“、”分隔：{role_text}")
+        roles = [role.strip() for role in role_text.split("、") if role.strip()]
+        if len(roles) != len({normalize(role) for role in roles}):
+            findings["角色格式"].append(f"第 {index} 行包含重复角色：{role_text}")
+        if STORY_TEST_STATE_ROLE_PATTERN.search(role_text):
+            findings["测试状态污染"].append(f"第 {index} 行把测试状态写入业务角色：{role_text}")
+        if not row.get("用户故事/需求描述", "").strip():
+            findings["故事标识与角色"].append(f"第 {index} 行用户故事/需求描述不能为空")
+        signature = tuple(normalize_signature_value(row.get(field, "")) for field in STORY_SEMANTIC_FIELDS)
+        semantic_groups.setdefault(signature, []).append((index, story_id, role_text))
+
+    for group in semantic_groups.values():
+        if len(group) > 1:
+            rows = "、".join(f"第 {index} 行/{story_id or '缺失 ID'}" for index, story_id, _ in group)
+            findings["相同故事未合并"].append(f"{rows} 除角色外内容一致，应合并角色并保留一个 Story 行")
+    if any(findings.values()):
+        fail(format_findings("需求用户故事角色归一化检查未通过：", findings))
+
+
 def assert_expected_result_consistency(expected: str, label: str) -> None:
     for pattern in UNRESOLVED_EXPECTATION_PATTERNS:
         if pattern.search(expected or ""):
@@ -1702,6 +1748,13 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     validate_table_ranges(workbook, EXPECTED_SHEETS)
     validate_formal_workbook_styles(workbook)
     validate_chinese_delivery_language(workbook)
+
+    story_rows_raw = sheet_rows(workbook, "需求用户故事拆解")
+    require_headers(story_rows_raw, ["Story ID/需求 ID", "用户故事/需求描述", "角色"], "需求用户故事拆解")
+    story_rows = row_dicts(story_rows_raw, "需求用户故事拆解")
+    if not story_rows:
+        fail("需求用户故事拆解 must contain at least one story")
+    validate_story_role_rows(story_rows)
 
     scenario_rows_raw = sheet_rows(workbook, "测试场景矩阵")
     assert_no_deprecated_scenario_headers(scenario_rows_raw, "测试场景矩阵")

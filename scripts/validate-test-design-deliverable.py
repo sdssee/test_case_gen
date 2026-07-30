@@ -166,6 +166,17 @@ BRANCH_POLICIES = {"逐项验证", "用例逐项覆盖"}
 DATA_CHANGE_COMMIT_PATTERN = re.compile(
     r"(?:点击|执行)?(?:确定|保存|提交|确认|应用|发布|导入)(?:按钮|操作)?|(?:自动保存|立即生效)"
 )
+PAGINATION_EVIDENCE_PATTERN = re.compile(
+    r"(?:分页(?:组件|控件|区域)?|总条数|共\s*\d+\s*条|每页(?:条数)?|页容量|条\s*/\s*页|上一页|下一页|页码|跳页|跳至(?:第|某|指定|[nN\d])?页)"
+)
+PAGINATION_GENERIC_ELEMENT_PATTERN = re.compile(r"^(?:分页|分页组件|分页控件|分页区域|页码导航)$")
+PAGE_SIZE_PATTERN = re.compile(r"(?:每页(?:条数)?|页容量|条\s*/\s*页)")
+PAGINATION_TARGET_FIELDS = ["element", "control_type", "action", "evidence", "observation", "result"]
+PAGINATION_IDENTITY_FIELDS = ["element", "control_type"]
+PAGINATION_CAPABILITY_PATTERNS = [
+    re.compile(pattern)
+    for pattern in ["首页", "上一页", "页码(?:按钮|选择)?|当前页", "下一页", "末页", "省略号", PAGE_SIZE_PATTERN.pattern, "跳页|跳至"]
+]
 
 def fail(message: str) -> None:
     raise AssertionError(message)
@@ -1324,6 +1335,14 @@ def row_contains_branch_value(row: dict[str, str], fields: list[str], value: str
     return any(branch_value_present(value, row.get(field, "")) for field in fields)
 
 
+def target_matches(
+    target: dict[str, object],
+    pattern: re.Pattern[str],
+    fields: list[str] = PAGINATION_TARGET_FIELDS,
+) -> bool:
+    return any(pattern.search(str(target.get(field, ""))) for field in fields)
+
+
 def validate_discovery_state(
     path: Path,
     workbook_data: dict[str, object] | None = None,
@@ -1337,6 +1356,7 @@ def validate_discovery_state(
         "事实去向缺失": [],
         "场景用例映射缺失": [],
         "逐项用例覆盖缺失": [],
+        "分页专项未落地": [],
     }
     if data.get("version") != 1:
         findings["状态结构错误"].append("version 必须为 1")
@@ -1445,6 +1465,43 @@ def validate_discovery_state(
                     f"{str(target.get('id', '')).strip() or f'targets[{index}]'} 要求逐项验证，仍缺少分支目标：{missing_values}"
                 )
 
+    has_pagination_evidence = any(target_matches(target, PAGINATION_EVIDENCE_PATTERN) for target in target_rows)
+    pagination_targets = [
+        target
+        for target in target_rows
+        if target_matches(target, PAGINATION_EVIDENCE_PATTERN, PAGINATION_IDENTITY_FIELDS)
+    ]
+    if has_pagination_evidence and not pagination_targets:
+        findings["分页专项未落地"].append("深探证据中已出现分页语义，但没有建立具体分页目标")
+    for target in pagination_targets:
+        target_id = str(target.get("id", "")).strip() or "未命名分页目标"
+        element = str(target.get("element", "")).strip()
+        if PAGINATION_GENERIC_ELEMENT_PATTERN.fullmatch(element):
+            page = normalize(str(target.get("page", "")))
+            has_specific_target = any(
+                other is not target
+                and normalize(str(other.get("page", ""))) == page
+                and target_matches(other, PAGINATION_EVIDENCE_PATTERN, PAGINATION_IDENTITY_FIELDS)
+                and not PAGINATION_GENERIC_ELEMENT_PATTERN.fullmatch(str(other.get("element", "")).strip())
+                for other in pagination_targets
+            )
+            if not has_specific_target:
+                findings["分页专项未落地"].append(
+                    f"{target_id} 只有笼统的“{element}”，必须按页面实际能力拆分分页目标"
+                )
+        if sum(bool(pattern.search(element)) for pattern in PAGINATION_CAPABILITY_PATTERNS) > 1:
+            findings["分页专项未落地"].append(
+                f"{target_id} 在一个目标中合并了多项分页能力，必须按实际控件分别建目标"
+            )
+        if (
+            str(target.get("status", "")).strip() == "已验证"
+            and target_matches(target, PAGE_SIZE_PATTERN)
+            and str(target.get("branch_policy", "")).strip() != "逐项验证"
+        ):
+            findings["分页专项未落地"].append(
+                f"{target_id} 已发现页容量能力，必须记录 branch_policy=逐项验证 和全部 discovered_values"
+            )
+
     if workbook_data is not None:
         scenario_ids = workbook_data["scenario_ids"]
         generated_scenario_ids = workbook_data["generated_scenario_ids"]
@@ -1509,6 +1566,15 @@ def validate_discovery_state(
             unknown = sorted(set(reference_ids) - valid_references)
             if unknown:
                 findings["事实去向缺失"].append(f"{target_id} 引用了不存在的 {disposition} ID：{unknown}")
+            if (
+                target in pagination_targets
+                and str(target.get("kind", "")).strip() in DISCOVERY_INTERACTIVE_KINDS
+                and not PAGINATION_GENERIC_ELEMENT_PATTERN.fullmatch(str(target.get("element", "")).strip())
+                and disposition != "场景"
+            ):
+                findings["分页专项未落地"].append(
+                    f"{target_id} 是实际分页交互能力，必须进入测试场景和功能用例；数据不足只能标记实探受限"
+                )
 
         mappings = data.get("scenario_case_mapping")
         if not isinstance(mappings, list):

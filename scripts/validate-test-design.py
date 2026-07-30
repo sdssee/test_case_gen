@@ -234,6 +234,76 @@ def validate_discovery_gate(root: Path) -> None:
         else:
             fail("深探门禁错误地放行了未收口状态")
 
+        pagination_state = json.loads(json.dumps(valid_state, ensure_ascii=False))
+        pagination_state["targets"][0].update(element="分页组件", control_type="分页控件")
+        state_path.write_text(json.dumps(pagination_state, ensure_ascii=False), encoding="utf-8")
+        try:
+            module.validate_discovery_state(state_path)
+        except AssertionError as exc:
+            if "必须按页面实际能力拆分分页目标" not in str(exc):
+                fail("分页门禁没有识别只登记笼统分页组件的问题")
+        else:
+            fail("分页门禁错误地放行了笼统分页目标")
+
+        pagination_evidence_state = json.loads(json.dumps(valid_state, ensure_ascii=False))
+        pagination_evidence_state["targets"][0]["result"] = "查询后分页重置"
+        state_path.write_text(json.dumps(pagination_evidence_state, ensure_ascii=False), encoding="utf-8")
+        try:
+            module.validate_discovery_state(state_path)
+        except AssertionError as exc:
+            if "已出现分页语义，但没有建立具体分页目标" not in str(exc):
+                fail("分页门禁没有识别仅出现在结果描述中的分页证据")
+        else:
+            fail("分页门禁错误地放行了未建分页目标的证据")
+
+        merged_pagination_state = json.loads(json.dumps(valid_state, ensure_ascii=False))
+        merged_pagination_state["targets"][0].update(element="上一页/下一页", control_type="分页按钮")
+        state_path.write_text(json.dumps(merged_pagination_state, ensure_ascii=False), encoding="utf-8")
+        try:
+            module.validate_discovery_state(state_path)
+        except AssertionError as exc:
+            if "在一个目标中合并了多项分页能力" not in str(exc):
+                fail("分页门禁没有识别合并登记的上一页和下一页")
+        else:
+            fail("分页门禁错误地放行了合并分页能力")
+
+        page_size_state = json.loads(json.dumps(valid_state, ensure_ascii=False))
+        page_size_state["targets"][0].update(element="每页条数", control_type="下拉框")
+        state_path.write_text(json.dumps(page_size_state, ensure_ascii=False), encoding="utf-8")
+        try:
+            module.validate_discovery_state(state_path)
+        except AssertionError as exc:
+            if "必须记录 branch_policy=逐项验证 和全部 discovered_values" not in str(exc):
+                fail("分页门禁没有识别页容量逐项验证缺失")
+        else:
+            fail("分页门禁错误地放行了未记录分支的页容量目标")
+
+        valid_pagination_state = json.loads(json.dumps(valid_state, ensure_ascii=False))
+        valid_pagination_state["targets"][0].update(element="下一页", control_type="分页按钮")
+        state_path.write_text(json.dumps(valid_pagination_state, ensure_ascii=False), encoding="utf-8")
+        module.validate_discovery_state(state_path)
+
+        pagination_risk_state = json.loads(json.dumps(valid_state, ensure_ascii=False))
+        pagination_risk_state["targets"][0].update(
+            element="下一页",
+            control_type="分页按钮",
+            disposition="风险",
+            reference_ids=["R-001"],
+        )
+        pagination_risk_workbook = dict(workbook_data)
+        pagination_risk_workbook["risk_ids"] = {"R-001"}
+        pagination_risk_workbook["coverage_rows"] = [
+            {"页面/入口": "目标页面", "元素名称/文案": "下一页", "发现方式": "浏览器实探"}
+        ]
+        state_path.write_text(json.dumps(pagination_risk_state, ensure_ascii=False), encoding="utf-8")
+        try:
+            module.validate_discovery_state(state_path, pagination_risk_workbook)
+        except AssertionError as exc:
+            if "数据不足只能标记实探受限" not in str(exc):
+                fail("分页门禁没有阻止以数据不足为由删除分页用例")
+        else:
+            fail("分页门禁错误地允许实际分页交互只进入风险")
+
         branch_state = json.loads(json.dumps(valid_state, ensure_ascii=False))
         branch_state["targets"][0].update(
             element="变量类型",
@@ -438,6 +508,16 @@ def main() -> int:
         ],
     )
     validate_discovery_gate(root)
+    assert_contains(
+        root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
+        [
+            "阶段规则加载",
+            "进入首次深探或定向补探前重新读取 `page-discovery.md`",
+            "在操作分页控件前读取一次 `pagination.md`",
+            "不记录没有执行约束力的“已加载”标记",
+            "阶段切换不新增用户确认、中间文件、生成轮次或自动重试",
+        ],
+    )
     assert_contains(
         root / "docs" / "test-design" / "rules" / "excel-deliverable.md",
         [

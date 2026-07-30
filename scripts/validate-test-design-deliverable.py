@@ -1176,9 +1176,7 @@ def format_findings(title: str, findings: dict[str, list[str]]) -> str:
         if not messages:
             continue
         lines.append(f"- {category}（共 {len(messages)} 项）")
-        lines.extend(f"  - {message}" for message in messages[:FINDING_DISPLAY_LIMIT])
-        if len(messages) > FINDING_DISPLAY_LIMIT:
-            lines.append(f"  - 其余 {len(messages) - FINDING_DISPLAY_LIMIT} 项已省略")
+        lines.extend(f"  - {message}" for message in messages)
     return "\n".join(lines)
 
 

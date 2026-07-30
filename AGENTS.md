@@ -12,22 +12,20 @@
 
 ## 使用现有规范
 
-Codex 应优先读取并遵守：
+任务入口只读取并遵守：
 
-- `CODEBUDDY.md`
 - `.codebuddy/skills/test-design/SKILL.md`
 - `.codebuddy/.rules/test-design-rule.mdc`
-- `.codebuddy/rules/test-design-rule.md`
 - `docs/test-design/rules/README.md`
-- `docs/test-design/excel-template-spec.md`
 
-按任务追加读取：
+按执行阶段追加读取；同一阶段连续执行不重复加载：
 
-- 页面、截图、原型、浏览器或 computer use：`docs/test-design/rules/page-discovery.md`
+- 需求理解、Story 拆解、场景或用例设计：`docs/test-design/rules/case-design.md`
+- 页面、截图、原型、浏览器或 computer use：`docs/test-design/rules/page-discovery.md`、`data-safety.md`
 - 识别到总条数、页码、每页条数、翻页、跳页等分页证据：追加读取 `docs/test-design/rules/pagination.md`
 - 全产品、大模块、多菜单或超过一个最小标题：`docs/test-design/rules/batch-run.md`
-- 所有任务基础规则：`docs/test-design/rules/case-design.md`、`excel-deliverable.md`、`import-template.md`、`data-safety.md`
-- 异常、边界、性能、安全、兼容、可靠、可用性等测试策略：`docs/test-design/rules/dfx-test-strategy.md`
+- 原子场景核账完成并进入 DFX：`docs/test-design/rules/dfx-test-strategy.md`
+- 写入或交付 Excel：`docs/test-design/rules/excel-deliverable.md`、`import-template.md`、`docs/test-design/excel-template-spec.md`
 
 ## 执行摘要
 
@@ -50,7 +48,7 @@ Codex 应优先读取并遵守：
 - 用例从同一原子场景同步生成：先确定功能点与标题，再按角色/状态一次构造入口、导航、操作、终态、结果及恢复，内容完成后统一编号；未登录、无权限或异常环境场景不得机械追加普通登录步骤，导航统一使用 `一级菜单-二级菜单-目标页面`，UI 名称不使用括号或引号包裹。
 - 编号必须从 1 连续递增，关键操作与预期按执行顺序对应；正式枚举只能使用模板允许值，标题、数据、步骤、预期和最终统计必须来自同一证据链与最终工作簿。
 - `用例标题` 和导入文件 `测试用例名称` 使用 `功能点-当前用例标题` 格式。
-- 页面已有数据只能查看和只读深探，不得保存、提交、最终确认或改变状态；敏感操作只允许作用于本次创建且带测试标识的数据。
+- 页面已有数据只能查看和只读深探，不得保存、提交、最终确认或改变状态；本次创建且带测试标识的数据只允许执行任务范围内、可恢复且不影响真实权限、真实通知或外部系统的操作，超出范围必须取得用户明确授权。
 - 弹窗、抽屉、编辑、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环；下拉浮层以选择具体选项、浮层收起及结果更新闭环，不虚构关闭弹窗。
 - 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
 - 不得通过 `pip install`、`pip uninstall` 或同类命令修改全局运行环境；项目脚本优先使用 Codex bundled Python，依赖不可用时停止并报告。

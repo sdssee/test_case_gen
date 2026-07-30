@@ -38,8 +38,8 @@ your-project/
 - 基础用例设计：`case-design.md`
 - 页面实探：`page-discovery.md`
 - 大范围分批：`batch-run.md`
-- Excel 交付件：`excel-deliverable.md`
-- 所有任务都读取测试系统导入规则：`import-template.md`
+- 原子场景核账后的 DFX 阶段：`dfx-test-strategy.md`
+- Excel 写入与交付阶段：`excel-deliverable.md`、`import-template.md` 和 `docs/test-design/excel-template-spec.md`
 - 页面实探数据操作边界：`data-safety.md`
 
 这种结构让 Skill、Rule、AGENTS、CODEBUDDY 保持低于 10000 字符，避免 CodeBuddy 加载入口时出现截断或规则遗漏。

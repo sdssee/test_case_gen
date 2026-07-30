@@ -563,19 +563,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Generate or normalize test design Excel deliverables.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    gen = sub.add_parser("generate-import", help="Generate test-system import workbook from formal test design workbook.")
+    gen = sub.add_parser("generate-import", help="Maintenance only: regenerate an import workbook; not a formal delivery flow.")
     gen.add_argument("--formal-workbook", required=True, type=Path)
     gen.add_argument("--import-template", required=True, type=Path)
     gen.add_argument("--output", required=True, type=Path)
     gen.add_argument("--module-path", required=True)
     gen.add_argument("--product-name")
 
-    style = sub.add_parser("fix-formal-styles", help="Apply required multiline wrapping styles to a formal workbook.")
+    style = sub.add_parser("fix-formal-styles", help="Maintenance only: rebuild workbook styles; not a formal delivery flow.")
     style.add_argument("--workbook", required=True, type=Path)
     style.add_argument("--output", type=Path)
     style.add_argument("--template", type=Path)
 
-    finalize = sub.add_parser("finalize-deliverables", help="Copy validated workbooks to deliverables.")
+    finalize = sub.add_parser("finalize-deliverables", help="Maintenance only: validate and copy existing workbooks; use complete-deliverables for formal delivery.")
     finalize.add_argument("--project-root", required=True, type=Path)
     finalize.add_argument("--formal-workbook", required=True, type=Path)
     finalize.add_argument("--import-workbook", required=True, type=Path)

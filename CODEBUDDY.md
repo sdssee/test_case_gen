@@ -10,25 +10,22 @@
 - 每次正式交付都必须复制 `docs/test-design/测试用例模板.xlsx` 生成独立测试系统导入文件，不修改原模板，也不询问是否需要生成。
 - 所有交付件统一放在项目根目录的 `deliverables/`。
 
-## 必读文件
+## 阶段按需读取
 
-每次测试设计任务先读取：
+每次测试设计任务入口只读取：
 
 - `.codebuddy/skills/test-design/SKILL.md`
 - `.codebuddy/.rules/test-design-rule.mdc`
 - `docs/test-design/rules/README.md`
-- `docs/test-design/rules/case-design.md`
-- `docs/test-design/rules/excel-deliverable.md`
-- `docs/test-design/rules/import-template.md`
-- `docs/test-design/rules/data-safety.md`
-- `docs/test-design/rules/dfx-test-strategy.md`
-- `docs/test-design/excel-template-spec.md`
 
-按任务追加：
+按执行阶段追加，同一阶段连续执行不重复加载：
 
-- 页面、截图、原型、浏览器或 computer use：`docs/test-design/rules/page-discovery.md`
+- 需求理解、Story 拆解、场景或用例设计：`docs/test-design/rules/case-design.md`
+- 页面、截图、原型、浏览器或 computer use：`docs/test-design/rules/page-discovery.md`、`data-safety.md`
 - 识别到总条数、页码、每页条数、翻页、跳页等分页证据：追加读取 `docs/test-design/rules/pagination.md`
 - 全产品、大模块、多菜单或超过一个最小标题：`docs/test-design/rules/batch-run.md`
+- 原子场景核账完成并进入 DFX：`docs/test-design/rules/dfx-test-strategy.md`
+- 写入或交付 Excel：`docs/test-design/rules/excel-deliverable.md`、`import-template.md`、`docs/test-design/excel-template-spec.md`
 
 ## 不可违反的摘要规则
 
@@ -37,7 +34,7 @@
 - `用例标题` 和导入文件 `测试用例名称` 必须使用 `功能点-当前用例标题` 格式。
 - 页面元素覆盖清单只是覆盖追踪矩阵，不写独立测试步骤或完整预期。
 - 页面已有数据只能查看、搜索、筛选、排序、分页、打开详情、进入编辑页观察或打开危险操作确认弹窗，不得保存、提交、最终确认或改变状态。
-- 只能对本次创建且带 `AI_TEST`、`CODEX_TEST`、日期或任务编号的数据执行敏感操作。
+- 本次创建且带 `AI_TEST`、`CODEX_TEST`、日期或任务编号的数据，只允许执行任务范围内、可恢复且不影响真实权限、真实通知或外部系统的操作；超出范围必须取得用户明确授权。
 - 有页面时必须深遍历所有可点击、可输入、可选择、可测试元素；选择类控件记录选项取值和联动/依赖变化，输入类控件记录实际输入、真实提示和结果分支，新增类流程必须实填实走。
 - 弹窗、抽屉、编辑、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环；下拉浮层以选择具体选项、浮层收起及结果更新闭环，不虚构关闭弹窗。
 - 范围超过一个最小标题时，必须按最深标题级别分批执行，逐个最小标题路径完成完整测试设计，不得合并多个最小标题，不得再拆分一个最小标题。

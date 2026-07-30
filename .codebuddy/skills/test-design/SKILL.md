@@ -8,24 +8,21 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 
 本 Skill 是执行入口，不承载完整规则正文。详细规则按任务类型读取 `docs/test-design/rules/`，Excel 字段遵守 `docs/test-design/excel-template-spec.md`。
 
-## 必读路由
+## 阶段按需路由
 
-每次任务先读取：
+每次任务入口只读取：
 
 1. `.codebuddy/.rules/test-design-rule.mdc`
 2. `docs/test-design/rules/README.md`
-3. `docs/test-design/rules/case-design.md`
-4. `docs/test-design/rules/excel-deliverable.md`
-5. `docs/test-design/rules/import-template.md`
-6. `docs/test-design/rules/data-safety.md`
-7. `docs/test-design/rules/dfx-test-strategy.md`
-8. `docs/test-design/excel-template-spec.md`
 
-按任务追加：
+按执行阶段追加，同一阶段连续执行只读取一次：
 
-- 页面、截图、原型、浏览器或 computer use：读取 `docs/test-design/rules/page-discovery.md`。
+- 需求理解、Story 拆解、场景或用例设计：读取 `docs/test-design/rules/case-design.md`。
+- 页面、截图、原型、浏览器或 computer use：读取 `docs/test-design/rules/page-discovery.md` 和 `docs/test-design/rules/data-safety.md`。
 - 识别到总条数、页码、每页条数、翻页、跳页等分页证据：追加读取 `docs/test-design/rules/pagination.md`，未通过分页专项准出不得结束深探。
 - 全产品、大模块、多个菜单或超过一个最小标题：读取 `docs/test-design/rules/batch-run.md`。
+- 原子场景核账完成并进入 DFX：读取 `docs/test-design/rules/dfx-test-strategy.md`。
+- 写入或交付 Excel：读取 `docs/test-design/rules/excel-deliverable.md`、`docs/test-design/rules/import-template.md` 和 `docs/test-design/excel-template-spec.md`。
 
 ## 阶段规则加载
 
@@ -57,7 +54,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 枚举字段只能使用模板允许值；精确重复必须合并，相似用例告警必须在交付前分类为需合并、合理差异或校验误报。最终数量只从通过校验的工作簿读取。
 - `用例标题` 和导入文件 `测试用例名称` 必须使用 `功能点-当前用例标题` 格式。
 - 页面元素覆盖清单只是覆盖追踪矩阵，不写独立测试步骤或完整预期。
-- 页面已有数据只能查看和只读深探，不能保存、提交、删除或改变状态；敏感操作只允许作用于本次创建且带测试标识的数据。
+- 页面已有数据只能查看和只读深探，不能保存、提交、删除或改变状态；本次创建且带测试标识的数据只允许执行任务范围内、可恢复且不影响真实权限、真实通知或外部系统的操作，超出范围必须取得用户明确授权。
 - 选择类控件必须选择代表性选项并记录联动/依赖变化；输入类控件必须实际输入并记录真实提示和结果分支；新增类流程必须实填实走到成功后续页或失败停留态。
 - 弹窗、抽屉、编辑态、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环；下拉浮层选择选项后，以浮层收起及联动、页面或数据结果完成闭环，不写成虚假的关闭弹窗。
 - 正式写测试用例前，必须先完成风险分流和可验证项的定向补探；页面、DOM 或安全测试数据能够验证的事项默认必须深探，不得询问用户是否需要点击、输入、验证或继续深探。外部条件不足记录需联调、待环境或缺权限；待确认只用于需求含义、业务规则、范围边界、角色职责或预期结果等需要用户解释或决策的理解问题。

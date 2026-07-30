@@ -149,6 +149,13 @@ def assert_contains(path: Path, markers: list[str]) -> None:
             fail(f"{path} 缺少必要规则: {marker}")
 
 
+def assert_not_contains(path: Path, markers: list[str]) -> None:
+    text = path.read_text(encoding="utf-8")
+    for marker in markers:
+        if marker in text:
+            fail(f"{path} 仍包含已废弃或冲突规则: {marker}")
+
+
 def validate_discovery_gate(root: Path) -> None:
     validator_path = root / "scripts" / "validate-test-design-deliverable.py"
     spec = importlib.util.spec_from_file_location("test_design_deliverable_validator", validator_path)
@@ -156,6 +163,9 @@ def validate_discovery_gate(root: Path) -> None:
         fail("无法加载交付校验器进行深探门禁自检")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    full_findings = module.format_findings("汇总", {"问题": [f"问题{i}" for i in range(25)]})
+    if "问题24" not in full_findings or "已省略" in full_findings:
+        fail("阻塞问题汇总仍会截断，可能导致分轮修正")
     valid_story = {
         "Story ID/需求 ID": "STORY-001",
         "用户故事/需求描述": "管理业务对象",
@@ -545,6 +555,15 @@ def main() -> int:
     rule_b = (root / ".codebuddy" / "rules" / "test-design-rule.md").read_text(encoding="utf-8")
     if rule_a != rule_b:
         fail("两份 CodeBuddy Rule 镜像内容不一致")
+    assert_contains(
+        root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        ["任务入口只读取本 Rule、Skill", "非敏捷或未声明敏捷时不设固定数量", "不新增字段"],
+    )
+    assert_not_contains(
+        root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
+        ["所有任务：", "`选项取值/输入值` 与 `联动/依赖变化`"],
+    )
+    assert_not_contains(root / "README_IMPORT.md", ["所有任务都读取测试系统导入规则"])
 
     tool = root / "scripts" / "test_design_excel_tools.py"
     assert_contains(
@@ -578,6 +597,8 @@ def main() -> int:
             "待确认理解问题非空时",
             "docs/test-design/rules/pagination.md",
             "深探事实必须先按测试对象、角色/状态、动作/输入、数据、观察点和恢复路径",
+            "任务入口只读取并遵守",
+            "写入或交付 Excel",
         ],
     )
     assert_contains(
@@ -620,6 +641,7 @@ def main() -> int:
             "独立说明业务价值并独立验收",
             "以最小明确需求项作为默认 Story 边界",
             "页面元素、测试点或 DFX 再拆分或合并",
+            "非敏捷或未声明敏捷时不设置固定用例数量",
         ],
     )
     assert_contains(
@@ -673,6 +695,8 @@ def main() -> int:
             "先按来源或独立业务价值与验收结果拆解并冻结 Story",
             "不得通过 `pip install`、`pip uninstall`",
             "正常流程在 `complete-deliverables` 成功后不重复校验",
+            "每次任务入口只读取",
+            "写入或交付 Excel",
         ],
     )
     assert_contains(
@@ -699,7 +723,17 @@ def main() -> int:
             "页面、字段、选项、测试数据、正常/异常、边界、权限状态和 DFX 维度只展开测试场景",
             "是否生成用例` 只能填写 `是` 或 `否",
             "是否适合自动化` 只能填写 `是`、`否` 或 `待评估",
+            "不得虚构模板中不存在的列",
+            "本文件只定义 Excel 字段、枚举、映射和样式契约",
         ],
+    )
+    assert_not_contains(
+        root / "docs" / "test-design" / "excel-template-spec.md",
+        ["`选项取值/输入值` 用于", "可以执行不可逆、高风险"],
+    )
+    assert_contains(
+        root / "docs" / "test-design" / "rules" / "data-safety.md",
+        ["测试标识只证明数据归属，不自动授权不可逆操作"],
     )
     assert_contains(
         root / "scripts" / "validate-generated-python-scripts.py",

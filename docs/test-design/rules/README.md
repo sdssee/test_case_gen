@@ -4,10 +4,13 @@
 
 ## 读取路由
 
-- 所有任务：读取 `case-design.md`、`excel-deliverable.md`、`import-template.md`、`data-safety.md`、`dfx-test-strategy.md`。
-- 涉及页面、截图、原型、浏览器或 computer use：追加读取 `page-discovery.md`。
+- 任务入口：只根据任务范围确定当前阶段，不一次加载全部专题规则。
+- 需求理解、Story 拆解、场景或用例设计：读取 `case-design.md`。
+- 涉及页面、截图、原型、浏览器或 computer use：读取 `page-discovery.md` 和 `data-safety.md`。
 - 页面、DOM、截图、原型或可访问性信息出现分页证据：追加读取 `pagination.md`。
 - 范围超过一个最小标题、全产品、大模块或多个菜单：追加读取 `batch-run.md`。
+- 原子场景核账完成并进入 DFX：读取 `dfx-test-strategy.md`。
+- 写入或交付 Excel：读取 `excel-deliverable.md`、`import-template.md` 和 `../excel-template-spec.md`。
 
 ## 入口瘦身约束
 

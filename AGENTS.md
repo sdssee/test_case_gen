@@ -53,6 +53,7 @@ Codex 应优先读取并遵守：
 - 页面已有数据只能查看和只读深探，不得保存、提交、最终确认或改变状态；敏感操作只允许作用于本次创建且带测试标识的数据。
 - 弹窗、抽屉、编辑、删除确认、新增变量等交互必须写到确认、取消、关闭、返回或数据不变的闭环；下拉浮层以选择具体选项、浮层收起及结果更新闭环，不虚构关闭弹窗。
 - 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
+- 不得通过 `pip install`、`pip uninstall` 或同类命令修改全局运行环境；项目脚本优先使用 Codex bundled Python，依赖不可用时停止并报告。
 - 测试设计执行与交付流程不涉及 Git：不得为了生成用例或交付件自动初始化仓库、创建 Git 配置/工作流或执行提交、推送；仅当项目维护者明确要求维护源码版本时，才可在项目根目录执行对应的 Git 提交与推送。交付成功后清理本批调试/修复/重生成脚本、缓存、临时结构化数据、中间 Excel 和非交付截图，不新增清理器。
 - 精确重复必须合并；相似用例告警必须在交付前分类为需合并、合理差异或校验误报，未复核不得宣布完成。
 - 每次正式交付都由 `scripts/test_design_excel_tools.py complete-deliverables` 同步生成测试系统导入文件，保留模板下拉框、必填样式、标红字段和自动生成字段空值；不得把 `generate-import` 的单独转换结果作为完整交付。
@@ -71,7 +72,7 @@ Codex 应优先读取并遵守：
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 ```
 
-交付件校验：
+已有交付件独立审计（正常流程在 `complete-deliverables` 成功后不重复运行）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx>

@@ -73,7 +73,7 @@ python scripts/test_design_excel_tools.py complete-deliverables `
 
 `generate-import` 仅用于维护或重新转换已有正式测试设计，不作为完整交付流程。
 
-导入文件生成后，用 `-ImportWorkbookPath <导入文件.xlsx>` 追加校验。
+`complete-deliverables` 已同步完成正式测试设计、导入文件和一次完整校验；成功后不追加重复校验。
 
 ## 自检命令
 
@@ -83,7 +83,7 @@ python scripts/test_design_excel_tools.py complete-deliverables `
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 ```
 
-交付件校验：
+已有交付件独立审计（正常流程不重复运行）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx> [-DiscoveryStatePath <discovery-state.json>]

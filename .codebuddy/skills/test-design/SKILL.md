@@ -72,6 +72,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 异常值、边界值和测试策略必须按 DFX 12 维度 × 4 场景矩阵落地，不得只写一句笼统策略；正式 Excel 必须填写 `DFX维度` 和 `DFX场景`，`场景类型`、`正向/反向` 不再作为测试策略字段；无法验证的 DFX 场景写入风险或性能设计，自动化适合度按需写入功能测试用例。
 - 禁止机械展开元素 × 12 × 4；DFX 必须实际改变角色、状态、数据、动作、环境、观察点或恢复路径，最终用例必须形成从入口到验证及恢复/清理的可执行闭环。
 - 当前批次 Python/JSON/CSV/Markdown/TXT 中间文件必须小分片，Python 建议小于 200KB，JSON/CSV/Markdown/TXT 建议小于 256KB；禁止用一个大 Python 或大 JSON 承载大量用例正文。
+- 不得通过 `pip install`、`pip uninstall` 或同类命令修改全局运行环境；项目脚本优先使用 Codex bundled Python，依赖不可用时停止并报告。
 - 生成中间文件执行前必须运行 `scripts/validate-generated-python-scripts.ps1`，一次汇总单文件大小、JSON 语法、Python 语法和文本编码问题；合法中文正文标点不作为错误。
 - 禁止全局替换 Python 源码引号；复杂、多行或包含嵌套引号的逻辑不得放入 `python -c`，应写入当前批次小型脚本并预检后执行。
 - 交付文件名只使用菜单/模块路径，不拼运行文件夹名、批次目录名或产品名；如 `module-path` 包含产品名前缀，传入 `--product-name` 自动去除，避免重复交付文件。
@@ -80,9 +81,9 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Browser, ComputerUse
 - 正式测试设计必须以 `codebuddy-test-design-template.xlsx` 为唯一基线；禁止临时脚本使用 `Workbook()`、`create_sheet()` 或直接修改 Excel XML 写入项目根目录 `deliverables/*.xlsx`。`complete-deliverables` 失败时立即停止，不得手工降级生成。
 - 测试设计执行与交付流程不涉及 Git，不得为生成用例或交付件自动初始化仓库、创建 Git 配置/工作流或执行提交、推送；仅在项目维护者明确要求维护源码版本时执行对应 Git 操作。成功交付后按本批明确路径清理调试/修复/重生成脚本、缓存、临时数据、中间 Excel 和非交付截图，不新增清理器。
 
-## 生成后校验
+## 已有交付件独立审计
 
-正式测试设计和导入文件必须一起校验：
+仅在排查已有交付件时单独运行；正常流程在 `complete-deliverables` 成功后不重复校验：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx>

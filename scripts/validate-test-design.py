@@ -6,6 +6,7 @@ import json
 import sys
 import tempfile
 import zipfile
+from copy import deepcopy
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -231,6 +232,7 @@ def validate_discovery_gate(root: Path) -> None:
         "scenario_rows_by_id": {
             "SCN-001": {
                 "场景 ID": "SCN-001",
+                "功能点": "创建",
                 "测试对象/页面元素": "创建按钮",
                 "输入数据/状态条件": "正常数据",
                 "观察点": "创建状态出现",
@@ -239,6 +241,7 @@ def validate_discovery_gate(root: Path) -> None:
         "case_rows_by_id": {
             "TC-001": {
                 "用例 ID": "TC-001",
+                "功能点": "创建",
                 "用例标题": "创建-正常创建",
                 "测试数据": "正常数据",
                 "操作步骤": "1. 登录系统\n2. 点击创建按钮",
@@ -253,6 +256,15 @@ def validate_discovery_gate(root: Path) -> None:
         state_path = Path(temporary_dir) / "discovery-state.json"
         state_path.write_text(json.dumps(valid_state, ensure_ascii=False), encoding="utf-8")
         module.validate_discovery_state(state_path, workbook_data)
+        mismatched_mapping_data = deepcopy(workbook_data)
+        mismatched_mapping_data["case_rows_by_id"]["TC-001"]["功能点"] = "搜索"
+        try:
+            module.validate_discovery_state(state_path, mismatched_mapping_data)
+        except AssertionError as exc:
+            if "与用例 TC-001 的功能点“搜索”不一致" not in str(exc):
+                fail("场景用例映射门禁没有识别功能点不一致")
+        else:
+            fail("场景用例映射门禁错误地放行了不相关用例")
         invalid_state = dict(valid_state)
         invalid_state["understanding_questions"] = ["是否允许重名"]
         invalid_state["targets"] = [
@@ -319,10 +331,100 @@ def validate_discovery_gate(root: Path) -> None:
         else:
             fail("分页门禁错误地放行了未记录分支的页容量目标")
 
+        merged_page_size_state = deepcopy(valid_state)
+        merged_page_size_state["targets"][0].update(
+            element="每页条数",
+            control_type="下拉框",
+            branch_policy="逐项验证",
+            discovered_values=["10条/页", "20条/页"],
+            state_before="默认页容量已显示",
+            state_after="页容量选项展开",
+            terminal_action="选择页容量",
+            recovery="列表刷新后保持在目标页面",
+        )
+        for index, value in enumerate(["10条/页", "20条/页"], start=1):
+            merged_page_size_state["targets"].append(
+                {
+                    "id": f"PAGE-SIZE-{index}",
+                    "parent_id": "TARGET-001",
+                    "branch_value": value,
+                    "page": "目标页面",
+                    "element": "容量选项",
+                    "kind": "交互",
+                    "control_type": "选项",
+                    "status": "已验证",
+                    "action": f"选择{value}",
+                    "evidence_source": "浏览器实探",
+                    "evidence": f"选择{value}后列表刷新",
+                    "observation": f"{value}已生效",
+                    "result": f"{value}已生效",
+                    "disposition": "场景",
+                    "reference_ids": ["SCN-001"],
+                }
+            )
+        merged_page_size_data = deepcopy(workbook_data)
+        merged_page_size_data["coverage_rows"] = [
+            {"页面/入口": "目标页面", "元素名称/文案": "每页条数", "发现方式": "浏览器实探"},
+            {"页面/入口": "目标页面", "元素名称/文案": "容量选项", "发现方式": "浏览器实探"},
+        ]
+        merged_page_size_data["scenario_rows_by_id"]["SCN-001"].update(
+            **{
+                "功能点": "分页",
+                "测试对象/页面元素": "每页条数",
+                "输入数据/状态条件": "10条/页、20条/页",
+                "观察点": "10条/页、20条/页均可生效",
+            }
+        )
+        merged_page_size_data["case_rows_by_id"]["TC-001"].update(
+            **{
+                "功能点": "分页",
+                "用例标题": "分页-遍历页容量",
+                "测试数据": "10条/页、20条/页",
+                "操作步骤": "1. 进入页面\n2. 依次选择10条/页、20条/页",
+                "预期结果": "1. 10条/页、20条/页均可生效",
+            }
+        )
+        state_path.write_text(json.dumps(merged_page_size_state, ensure_ascii=False), encoding="utf-8")
+        try:
+            module.validate_discovery_state(state_path, merged_page_size_data)
+        except AssertionError as exc:
+            message = str(exc)
+            if "每个页容量必须独立形成场景" not in message or "每个页容量必须独立形成用例" not in message:
+                fail("分页门禁没有同时识别页容量场景和用例合并")
+        else:
+            fail("分页门禁错误地允许多个页容量合并成一个场景和用例")
+
         valid_pagination_state = json.loads(json.dumps(valid_state, ensure_ascii=False))
         valid_pagination_state["targets"][0].update(element="下一页", control_type="分页按钮")
         state_path.write_text(json.dumps(valid_pagination_state, ensure_ascii=False), encoding="utf-8")
         module.validate_discovery_state(state_path)
+
+        shared_pagination_mapping_state = deepcopy(valid_state)
+        shared_pagination_mapping_state["targets"][0].update(element="上一页", control_type="分页按钮")
+        shared_pagination_mapping_state["targets"].append(
+            {
+                **deepcopy(valid_state["targets"][0]),
+                "id": "TARGET-NEXT",
+                "element": "下一页",
+                "control_type": "分页按钮",
+            }
+        )
+        shared_pagination_mapping_data = deepcopy(workbook_data)
+        shared_pagination_mapping_data["scenario_rows_by_id"]["SCN-001"]["功能点"] = "分页"
+        shared_pagination_mapping_data["case_rows_by_id"]["TC-001"]["功能点"] = "分页"
+        shared_pagination_mapping_data["coverage_rows"] = [
+            {"页面/入口": "目标页面", "元素名称/文案": "上一页", "发现方式": "浏览器实探"},
+            {"页面/入口": "目标页面", "元素名称/文案": "下一页", "发现方式": "浏览器实探"},
+        ]
+        state_path.write_text(json.dumps(shared_pagination_mapping_state, ensure_ascii=False), encoding="utf-8")
+        try:
+            module.validate_discovery_state(state_path, shared_pagination_mapping_data)
+        except AssertionError as exc:
+            message = str(exc)
+            if "不同分页动作必须独立形成场景" not in message or "不同分页动作必须独立形成用例" not in message:
+                fail("分页门禁没有同时识别不同分页动作复用场景和用例")
+        else:
+            fail("分页门禁错误地允许上一页和下一页复用同一场景和用例")
 
         pagination_risk_state = json.loads(json.dumps(valid_state, ensure_ascii=False))
         pagination_risk_state["targets"][0].update(
@@ -569,6 +671,8 @@ def main() -> int:
             "不记录没有执行约束力的“已加载”标记",
             "阶段切换不新增用户确认、中间文件、生成轮次或自动重试",
             "先按来源或独立业务价值与验收结果拆解并冻结 Story",
+            "不得通过 `pip install`、`pip uninstall`",
+            "正常流程在 `complete-deliverables` 成功后不重复校验",
         ],
     )
     assert_contains(
@@ -600,6 +704,10 @@ def main() -> int:
     assert_contains(
         root / "scripts" / "validate-generated-python-scripts.py",
         ["SMART_QUOTE_HINT_CHARS", "Generated intermediate validation found", "validate_compile", "validate_utf8"],
+    )
+    assert_contains(
+        root / "scripts" / "validate-generated-python-scripts.ps1",
+        ["codex-primary-runtime", "do not install or uninstall global dependencies"],
     )
 
     print("OK: test design templates and lightweight project structure are aligned.")

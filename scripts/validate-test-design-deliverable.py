@@ -170,10 +170,17 @@ PAGINATION_GENERIC_ELEMENT_PATTERN = re.compile(r"^(?:分页|分页组件|分页
 PAGE_SIZE_PATTERN = re.compile(r"(?:每页(?:条数)?|页容量|条\s*/\s*页)")
 PAGINATION_TARGET_FIELDS = ["element", "control_type", "action", "evidence", "observation", "result"]
 PAGINATION_IDENTITY_FIELDS = ["element", "control_type"]
-PAGINATION_CAPABILITY_PATTERNS = [
-    re.compile(pattern)
-    for pattern in ["首页", "上一页", "页码(?:按钮|选择)?|当前页", "下一页", "末页", "省略号", PAGE_SIZE_PATTERN.pattern, "跳页|跳至"]
+PAGINATION_CAPABILITY_RULES = [
+    ("首页", re.compile("首页")),
+    ("上一页", re.compile("上一页")),
+    ("页码", re.compile("页码(?:按钮|选择)?|当前页")),
+    ("下一页", re.compile("下一页")),
+    ("末页", re.compile("末页")),
+    ("省略号", re.compile("省略号")),
+    ("每页条数", PAGE_SIZE_PATTERN),
+    ("跳页", re.compile(r"跳页|跳至(?:$|第?\s*[Nn\d]+页|指定页)")),
 ]
+PAGINATION_CAPABILITY_PATTERNS = [pattern for _, pattern in PAGINATION_CAPABILITY_RULES]
 STORY_REQUIRED_FIELDS = ["Story ID/需求 ID", "用户故事/需求描述", "业务价值", "验收标准"]
 STORY_DUPLICATE_FIELDS = [
     "用户故事/需求描述", "角色", "业务价值", "验收标准", "业务规则", "前置条件", "后置影响", "依赖系统", "待确认问题",
@@ -1652,12 +1659,65 @@ def validate_discovery_state(
             unknown_cases = sorted(set(mapped_cases) - case_ids)
             if unknown_cases:
                 findings["场景用例映射缺失"].append(f"场景 {scene_id} 引用了不存在的用例：{unknown_cases}")
+            scenario_row = scenario_rows_by_id.get(scene_id, {})
+            scenario_function_point = normalize(str(scenario_row.get("功能点", "")))
+            for case_id in mapped_cases:
+                case_row = case_rows_by_id.get(case_id, {})
+                case_function_point = normalize(str(case_row.get("功能点", "")))
+                if (
+                    scenario_function_point
+                    and case_function_point
+                    and scenario_function_point != case_function_point
+                ):
+                    findings["场景用例映射缺失"].append(
+                        f"场景 {scene_id} 的功能点“{scenario_row.get('功能点', '')}”"
+                        f"与用例 {case_id} 的功能点“{case_row.get('功能点', '')}”不一致"
+                    )
         missing_mappings = sorted(generated_scenario_ids - mapped_scenarios)
         if missing_mappings:
             findings["场景用例映射缺失"].append(f"以下生成场景没有对应功能用例映射：{missing_mappings}")
         missing_target_scenarios = sorted(referenced_scenarios - generated_scenario_ids)
         if missing_target_scenarios:
             findings["事实去向缺失"].append(f"深探事实关联的场景未标记生成用例：{missing_target_scenarios}")
+
+        pagination_capability_scenarios: dict[str, set[str]] = {}
+        for target in pagination_targets:
+            if (
+                str(target.get("kind", "")).strip() not in DISCOVERY_INTERACTIVE_KINDS
+                or str(target.get("disposition", "")).strip() != "场景"
+            ):
+                continue
+            element = str(target.get("element", "")).strip()
+            if PAGINATION_GENERIC_ELEMENT_PATTERN.fullmatch(element):
+                continue
+            references = set(target_scenario_references.get(str(target.get("id", "")).strip(), []))
+            for capability, pattern in PAGINATION_CAPABILITY_RULES:
+                if pattern.search(element):
+                    pagination_capability_scenarios.setdefault(capability, set()).update(references)
+        capability_names = sorted(pagination_capability_scenarios)
+        for left_index, left_name in enumerate(capability_names):
+            for right_name in capability_names[left_index + 1:]:
+                shared_scenarios = sorted(
+                    pagination_capability_scenarios[left_name]
+                    & pagination_capability_scenarios[right_name]
+                )
+                if shared_scenarios:
+                    findings["分页专项未落地"].append(
+                        f"分页能力“{left_name}”与“{right_name}”复用了场景 {shared_scenarios}，"
+                        "不同分页动作必须独立形成场景"
+                    )
+                left_cases = set().union(
+                    *(scenario_to_cases.get(scene_id, set()) for scene_id in pagination_capability_scenarios[left_name])
+                )
+                right_cases = set().union(
+                    *(scenario_to_cases.get(scene_id, set()) for scene_id in pagination_capability_scenarios[right_name])
+                )
+                shared_cases = sorted(left_cases & right_cases)
+                if shared_cases:
+                    findings["分页专项未落地"].append(
+                        f"分页能力“{left_name}”与“{right_name}”复用了功能用例 {shared_cases}，"
+                        "不同分页动作必须独立形成用例"
+                    )
 
         scenario_branch_fields = ["测试对象/页面元素", "输入数据/状态条件", "观察点"]
         case_branch_fields = ["用例标题", "测试数据", "操作步骤", "预期结果"]
@@ -1667,6 +1727,8 @@ def validate_discovery_state(
             if branch_policy not in BRANCH_POLICIES:
                 continue
             reference_ids = target_scenario_references.get(target_id, [])
+            page_size_value_scenarios: dict[str, set[str]] = {}
+            page_size_value_cases: dict[str, set[str]] = {}
             for value in branch_values_by_target.get(target_id, []):
                 matching_scenarios = {
                     scene_id
@@ -1695,6 +1757,9 @@ def validate_discovery_state(
                         f"{target_id} 的分支值“{value}”未写入关联场景映射的功能用例"
                     )
                     continue
+                if target_matches(target, PAGE_SIZE_PATTERN):
+                    page_size_value_scenarios[value] = matching_scenarios
+                    page_size_value_cases[value] = matching_cases
                 if branch_policy == "用例逐项覆盖" and not any(
                     DATA_CHANGE_COMMIT_PATTERN.search(case_rows_by_id[case_id].get("操作步骤", ""))
                     and branch_value_present(value, case_rows_by_id[case_id].get("预期结果", ""))
@@ -1703,6 +1768,28 @@ def validate_discovery_state(
                     findings["逐项用例覆盖缺失"].append(
                         f"{target_id} 的有效分支值“{value}”只有选择或取消覆盖，缺少提交及最终结果中的逐值验证"
                     )
+            if target_matches(target, PAGE_SIZE_PATTERN):
+                page_size_values = sorted(page_size_value_scenarios)
+                for left_index, left_value in enumerate(page_size_values):
+                    for right_value in page_size_values[left_index + 1:]:
+                        shared_scenarios = sorted(
+                            page_size_value_scenarios[left_value]
+                            & page_size_value_scenarios[right_value]
+                        )
+                        if shared_scenarios:
+                            findings["分页专项未落地"].append(
+                                f"{target_id} 的页容量“{left_value}”与“{right_value}”"
+                                f"复用了场景 {shared_scenarios}，每个页容量必须独立形成场景"
+                            )
+                        shared_cases = sorted(
+                            page_size_value_cases.get(left_value, set())
+                            & page_size_value_cases.get(right_value, set())
+                        )
+                        if shared_cases:
+                            findings["分页专项未落地"].append(
+                                f"{target_id} 的页容量“{left_value}”与“{right_value}”"
+                                f"复用了功能用例 {shared_cases}，每个页容量必须独立形成用例"
+                            )
 
     if any(findings.values()):
         fail(format_findings("动态深探队列与状态证据门禁未通过：", findings))

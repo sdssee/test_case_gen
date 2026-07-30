@@ -18,8 +18,8 @@ try:
     from openpyxl.utils import get_column_letter, range_boundaries
 except ImportError as exc:  # pragma: no cover - depends on local runtime packaging.
     raise SystemExit(
-        "ERROR: openpyxl is required. Run this script in the CodeBuddy/Codex spreadsheet runtime "
-        "or install openpyxl in the active Python environment."
+        "ERROR: openpyxl is required. Run this script with the Codex bundled Python runtime; "
+        "do not install or uninstall global dependencies."
     ) from exc
 
 

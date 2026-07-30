@@ -66,7 +66,7 @@ python scripts/test_design_excel_tools.py complete-deliverables `
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 ```
 
-交付件校验：
+已有交付件独立审计（正常流程在 `complete-deliverables` 成功后不重复运行）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx> [-DiscoveryStatePath <discovery-state.json>]

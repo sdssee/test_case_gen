@@ -158,7 +158,29 @@ RESIDUAL_MARKERS = ["{NAV}", "{NL}", "{Q}", "{E}", "${", "{{", "TODO", "TBD"]
 DISCOVERY_FINAL_STATUSES = {"已验证", "客观受限", "不适用"}
 DISCOVERY_INTERACTIVE_KINDS = {"交互", "状态变化"}
 DISCOVERY_STATEFUL_CONTROL_MARKERS = ["弹窗", "抽屉", "下拉", "编辑态", "删除确认", "确认框", "浮层"]
-PAGE_EVIDENCE_MARKERS = ["页面实探", "浏览器实探", "computer use", "页面或dom", "dom实探"]
+DISCOVERY_SOURCE_ALLOWED_VALUES = {
+    "需求文档",
+    "截图",
+    "原型",
+    "浏览器实探",
+    "computer use",
+    "代码/DOM",
+    "用户说明",
+}
+PAGE_DISCOVERY_SOURCES = {"浏览器实探", "computer use", "代码/DOM"}
+PAGE_DISCOVERY_SOURCES_NORMALIZED = {item.casefold() for item in PAGE_DISCOVERY_SOURCES}
+RISK_ALLOWED_STATUSES = {
+    "待实探",
+    "已实探",
+    "待确认",
+    "已确认",
+    "需联调",
+    "待环境",
+    "缺权限",
+    "不适用",
+    "已关闭",
+}
+NO_PENDING_QUESTION_VALUES = {"无", "暂无", "不适用", "无待确认问题", "已确认", "已关闭"}
 BRANCH_POLICIES = {"逐项验证", "用例逐项覆盖"}
 DATA_CHANGE_COMMIT_PATTERN = re.compile(
     r"(?:点击|执行)?(?:确定|保存|提交|确认|应用|发布|导入)(?:按钮|操作)?|(?:自动保存|立即生效)"
@@ -204,6 +226,15 @@ def collect_validation_issue(
     except AssertionError as exc:
         add_finding(findings, category, str(exc))
         return None
+
+
+def is_page_discovery_source(value: str) -> bool:
+    return value.strip().casefold() in PAGE_DISCOVERY_SOURCES_NORMALIZED
+
+
+def has_open_understanding_question(value: str) -> bool:
+    normalized = re.sub(r"[\s。；;，,]+", "", value or "")
+    return bool(normalized) and normalized not in NO_PENDING_QUESTION_VALUES
 
 
 DROPDOWN_ACTION_PATTERNS = [
@@ -1365,22 +1396,49 @@ def warn_case_merge_candidates(function_rows: list[dict[str, str]]) -> None:
 def validate_evidence_status_consistency(
     risk_rows: list[dict[str, str]],
     coverage_rows: list[dict[str, str]],
+    overview_rows: list[dict[str, str]] | None = None,
+    story_rows: list[dict[str, str]] | None = None,
 ) -> None:
     findings = {
+        "待确认字段未关闭": [],
+        "风险状态缺失或非法": [],
         "待实探风险未关闭": [],
         "待确认理解问题未关闭": [],
         "已覆盖与未解决备注并存": [],
     }
+    for sheet_name, rows in [
+        ("测试设计总览", overview_rows or []),
+        ("需求用户故事拆解", story_rows or []),
+    ]:
+        for index, row in enumerate(rows, start=2):
+            question = row.get("待确认问题", "").strip()
+            if has_open_understanding_question(question):
+                findings["待确认字段未关闭"].append(
+                    f"{sheet_name} 第 {index} 行仍有待确认问题：{question}；必须先等待用户回复并清空或更新为已确认"
+                )
     for index, row in enumerate(risk_rows, start=2):
-        status = normalize_signature_value(row.get("状态", ""))
+        risk_id = row.get("编号", "") or f"第 {index} 行"
+        risk_type = row.get("类型", "").strip()
+        raw_status = row.get("状态", "").strip()
+        status = normalize_signature_value(raw_status)
+        if not raw_status:
+            findings["风险状态缺失或非法"].append(f"风险与待确认问题 {risk_id} 的状态不能为空")
+            continue
+        if raw_status not in RISK_ALLOWED_STATUSES:
+            findings["风险状态缺失或非法"].append(
+                f"风险与待确认问题 {risk_id} 的状态只能使用 {sorted(RISK_ALLOWED_STATUSES)}，当前为：{raw_status}"
+            )
+            continue
+        if risk_type == "待确认" and raw_status not in {"待确认", "已确认", "已关闭"}:
+            findings["风险状态缺失或非法"].append(
+                f"风险与待确认问题 {risk_id} 的类型为待确认，状态只能为待确认、已确认或已关闭"
+            )
         if status == "待实探":
-            risk_id = row.get("编号", "") or f"第 {index} 行"
             findings["待实探风险未关闭"].append(
                 f"风险与待确认问题 {risk_id} 仍为待实探；请先完成定向补探，"
                 "客观受限时改为需联调、待环境或缺权限并写明原因"
             )
         elif status == "待确认":
-            risk_id = row.get("编号", "") or f"第 {index} 行"
             findings["待确认理解问题未关闭"].append(
                 f"风险与待确认问题 {risk_id} 仍为待确认；请先结束当前轮次等待用户明确回复，"
                 "收到回复后更新状态再继续交付"
@@ -1638,7 +1696,7 @@ def validate_discovery_state(
             for row in coverage_rows
             if row.get("页面/入口")
             and row.get("元素名称/文案")
-            and any(marker in row.get("发现方式", "").lower() for marker in PAGE_EVIDENCE_MARKERS)
+            and is_page_discovery_source(row.get("发现方式", ""))
         }
         missing_targets = sorted(page_evidence_elements - target_elements)
         if missing_targets:
@@ -1919,8 +1977,16 @@ def validate_workbook(
         lambda: validate_chinese_delivery_language(workbook),
     )
 
+    overview_rows_raw = sheet_rows(workbook, "测试设计总览")
+    require_headers(overview_rows_raw, ["待确认问题"], "测试设计总览")
+    overview_rows = row_dicts(overview_rows_raw, "测试设计总览")
+
     story_rows_raw = sheet_rows(workbook, "需求用户故事拆解")
-    require_headers(story_rows_raw, ["Story ID/需求 ID", "用户故事/需求描述", "角色"], "需求用户故事拆解")
+    require_headers(
+        story_rows_raw,
+        ["Story ID/需求 ID", "用户故事/需求描述", "角色", "待确认问题"],
+        "需求用户故事拆解",
+    )
     story_rows = row_dicts(story_rows_raw, "需求用户故事拆解")
     if not story_rows:
         add_finding(findings, "需求用户故事拆解", "需求用户故事拆解 must contain at least one story")
@@ -2066,7 +2132,11 @@ def validate_workbook(
                 )
 
     risk_rows_raw = sheet_rows(workbook, "风险与待确认问题")
-    require_headers(risk_rows_raw, ["编号", "类型", "关联DFX维度", "关联DFX场景", "描述", "影响范围", "建议处理方式"], "风险与待确认问题")
+    require_headers(
+        risk_rows_raw,
+        ["编号", "类型", "关联DFX维度", "关联DFX场景", "描述", "影响范围", "建议处理方式", "状态"],
+        "风险与待确认问题",
+    )
     risk_dfx: set[tuple[str, str]] = set()
     risk_rows = row_dicts(risk_rows_raw, "风险与待确认问题")
     risk_ids = {row.get("编号", "") for row in risk_rows if row.get("编号", "")}
@@ -2085,10 +2155,26 @@ def validate_workbook(
     coverage_rows_raw = sheet_rows(workbook, "页面元素覆盖清单")
     require_headers(
         coverage_rows_raw,
-        ["元素 ID", "元素名称/文案", "元素类型", "适用DFX维度", "适用DFX场景", "覆盖用例 ID", "覆盖状态", "待确认问题/备注"],
+        [
+            "元素 ID",
+            "元素名称/文案",
+            "元素类型",
+            "适用DFX维度",
+            "适用DFX场景",
+            "覆盖用例 ID",
+            "覆盖状态",
+            "发现方式",
+            "待确认问题/备注",
+        ],
         "页面元素覆盖清单",
     )
     coverage_rows = row_dicts(coverage_rows_raw, "页面元素覆盖清单")
+    if not coverage_rows:
+        add_finding(
+            findings,
+            "页面元素覆盖清单",
+            "页面元素覆盖清单必须至少包含一个实际元素或明确的不适用/不测范围记录",
+        )
     valid_status = {"已覆盖", "不适用", "不测范围", "待确认"}
     for index, row in enumerate(coverage_rows, start=2):
         element = row.get("元素名称/文案", "")
@@ -2106,6 +2192,15 @@ def validate_workbook(
         status = row.get("覆盖状态", "")
         if status not in valid_status:
             add_finding(findings, "页面元素覆盖清单", f"页面元素覆盖清单 row {index} has invalid 覆盖状态: {status}")
+        discovery_source = row.get("发现方式", "").strip()
+        if not discovery_source:
+            add_finding(findings, "页面元素覆盖清单", f"页面元素覆盖清单 row {index} 的发现方式不能为空")
+        elif discovery_source not in DISCOVERY_SOURCE_ALLOWED_VALUES:
+            add_finding(
+                findings,
+                "页面元素覆盖清单",
+                f"页面元素覆盖清单 row {index} 的发现方式只能使用 {sorted(DISCOVERY_SOURCE_ALLOWED_VALUES)}，当前为：{discovery_source}",
+            )
         linked_ids = parse_ids(row.get("覆盖用例 ID", ""))
         if status == "已覆盖":
             if not linked_ids:
@@ -2119,7 +2214,7 @@ def validate_workbook(
     collect_validation_issue(
         findings,
         "风险与页面元素状态",
-        lambda: validate_evidence_status_consistency(risk_rows, coverage_rows),
+        lambda: validate_evidence_status_consistency(risk_rows, coverage_rows, overview_rows, story_rows),
     )
 
     landed_dfx = function_dfx | performance_dfx | risk_dfx
@@ -2152,10 +2247,7 @@ def validate_workbook(
         "performance_count": len(performance_rows),
         "risk_count": len(risk_rows),
         "coverage_count": len(coverage_rows),
-        "requires_discovery_state": any(
-            any(marker in row.get("发现方式", "").lower() for marker in PAGE_EVIDENCE_MARKERS)
-            for row in coverage_rows
-        ),
+        "requires_discovery_state": any(is_page_discovery_source(row.get("发现方式", "")) for row in coverage_rows),
     }
     if own_findings and findings:
         fail(format_findings("正式测试设计质检未通过：", findings))

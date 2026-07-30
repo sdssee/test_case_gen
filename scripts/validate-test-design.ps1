@@ -7,7 +7,7 @@ if (-not (Test-Path $python)) {
   $python = "python"
 }
 
-& $python (Join-Path $scriptDir "validate-test-design.py")
+& $python -B (Join-Path $scriptDir "validate-test-design.py")
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }

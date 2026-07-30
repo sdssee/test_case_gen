@@ -64,12 +64,14 @@ your-project/
 ```powershell
 python scripts/test_design_excel_tools.py complete-deliverables `
   --project-root . `
-  --formal-workbook deliverables/<测试设计.xlsx> `
+  --formal-workbook artifacts/<批次>/测试设计草稿.xlsx `
   --import-template docs/test-design/测试用例模板.xlsx `
   --module-path "一级模块>二级菜单>三级菜单"
 ```
 
 页面任务追加 `--discovery-state <discovery-state.json>`；非页面任务不需要该参数。
+
+临时草稿不得预先放入 `deliverables/`；只有正式测试设计、深探映射和导入文件在同一次校验中全部通过后，统一工具才写入正式交付目录。
 
 `generate-import` 仅用于维护或重新转换已有正式测试设计，不作为完整交付流程。
 

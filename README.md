@@ -40,12 +40,14 @@
 ```powershell
 python scripts/test_design_excel_tools.py complete-deliverables `
   --project-root . `
-  --formal-workbook deliverables/<测试设计.xlsx> `
+  --formal-workbook artifacts/<批次>/测试设计草稿.xlsx `
   --import-template docs/test-design/测试用例模板.xlsx `
   --module-path "一级模块>二级菜单>三级菜单"
 ```
 
 页面任务在进入 DFX 前先运行 `validate-discovery`，并在上述命令追加 `--discovery-state <discovery-state.json>`；非页面任务不需要该参数。
+
+`--formal-workbook` 是基于正式模板填充的临时草稿，不能预先放入 `deliverables/`；统一工具校验通过后才原子写入正式交付目录，任务结束清理该批临时文件。
 
 `generate-import` 仅用于维护或重新转换已有正式测试设计，不能替代包含正式测试设计和导入文件的一站式完整交付。
 

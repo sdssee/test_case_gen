@@ -180,17 +180,50 @@ def validate_discovery_gate(root: Path) -> None:
     cross_stage_report = module.format_findings("联合质检", cross_stage_findings)
     if not all(marker in cross_stage_report for marker in ["样式问题", "映射问题", "导入问题"]):
         fail("跨阶段联合质检没有一次汇总全部阶段问题")
-    formal_template = root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
-    import_template = root / "docs" / "test-design" / "测试用例模板.xlsx"
+    original_validate_workbook = module.validate_workbook
+    original_validate_discovery_state = module.validate_discovery_state
+    original_validate_import_workbook = module.validate_import_workbook
     try:
-        module.validate_delivery_bundle(formal_template, import_template, formal_template)
+        def fake_validate_workbook(_workbook, _formal_template, findings):
+            module.add_finding(findings, "正式工作簿", "样式问题")
+            return {"requires_discovery_state": True}
+
+        def fake_validate_discovery_state(_path, _workbook_data):
+            module.fail("映射问题")
+
+        def fake_validate_import_workbook(_path, _workbook_data, findings):
+            module.add_finding(findings, "导入文件", "导入问题")
+            return 0
+
+        module.validate_workbook = fake_validate_workbook
+        module.validate_discovery_state = fake_validate_discovery_state
+        module.validate_import_workbook = fake_validate_import_workbook
+        module.validate_delivery_bundle(Path("formal.xlsx"), Path("import.xlsx"), Path("template.xlsx"), Path("state.json"))
     except AssertionError as exc:
         message = str(exc)
-        required_sections = ["功能测试用例", "深探状态与交付映射", "测试系统导入文件映射"]
+        required_sections = ["样式问题", "映射问题", "导入问题"]
         if not all(section in message for section in required_sections):
             fail("联合质检没有在一次执行中返回正式工作簿、深探和导入文件问题")
     else:
         fail("联合质检回归样本错误地通过")
+    finally:
+        module.validate_workbook = original_validate_workbook
+        module.validate_discovery_state = original_validate_discovery_state
+        module.validate_import_workbook = original_validate_import_workbook
+    for risk_rows, overview_rows, label in [
+        ([{"编号": "R1", "类型": "待确认", "状态": ""}], [], "空风险状态"),
+        ([{"编号": "R1", "类型": "风险", "状态": "已关闭"}], [{"待确认问题": "是否允许重名"}], "总览待确认问题"),
+    ]:
+        try:
+            module.validate_evidence_status_consistency(risk_rows, [], overview_rows, [])
+        except AssertionError:
+            pass
+        else:
+            fail(f"{label}错误地通过风险门禁")
+    if not all(module.is_page_discovery_source(value) for value in ["浏览器实探", "computer use", "代码/DOM"]):
+        fail("页面实探发现方式没有稳定触发深探状态文件")
+    if any(module.is_page_discovery_source(value) for value in ["需求文档", "截图", "原型", "用户说明", ""]):
+        fail("非实探发现方式错误地触发深探状态文件")
     valid_story = {
         "Story ID/需求 ID": "STORY-001",
         "用户故事/需求描述": "管理业务对象",
@@ -580,6 +613,16 @@ def main() -> int:
     rule_b = (root / ".codebuddy" / "rules" / "test-design-rule.md").read_text(encoding="utf-8")
     if rule_a != rule_b:
         fail("两份 CodeBuddy Rule 镜像内容不一致")
+    for relative in [
+        "AGENTS.md",
+        "CODEBUDDY.md",
+        ".codebuddy/skills/test-design/SKILL.md",
+        ".codebuddy/.rules/test-design-rule.mdc",
+        ".codebuddy/rules/test-design-rule.md",
+    ]:
+        size = (root / relative).stat().st_size
+        if size >= 10_000:
+            fail(f"轻入口必须小于 10000 字节：{relative} 当前为 {size} 字节")
     assert_contains(
         root / ".codebuddy" / ".rules" / "test-design-rule.mdc",
         ["任务入口只读取本 Rule、Skill", "非敏捷或未声明敏捷时不设固定数量", "不新增字段"],
@@ -589,6 +632,8 @@ def main() -> int:
         ["所有任务：", "`选项取值/输入值` 与 `联动/依赖变化`"],
     )
     assert_not_contains(root / "README_IMPORT.md", ["所有任务都读取测试系统导入规则"])
+    assert_not_contains(root / "README.md", ["--formal-workbook deliverables/"])
+    assert_not_contains(root / "README_IMPORT.md", ["--formal-workbook deliverables/"])
 
     tool = root / "scripts" / "test_design_excel_tools.py"
     assert_contains(
@@ -685,6 +730,9 @@ def main() -> int:
             "warn_case_merge_candidates",
             "validate_evidence_status_consistency",
             "待实探风险未关闭",
+            "风险状态缺失或非法",
+            "DISCOVERY_SOURCE_ALLOWED_VALUES",
+            "is_page_discovery_source",
             "ui_symbol_style_issues",
             "NAVIGATION_ACTION_PATTERN",
             "UNRESOLVED_COVERAGE_NOTE_PATTERN",

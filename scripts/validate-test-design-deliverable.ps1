@@ -22,7 +22,7 @@ if ($DiscoveryStatePath) {
   $argsList += @("--discovery-state", $DiscoveryStatePath)
 }
 
-& $python @argsList
+& $python -B @argsList
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }

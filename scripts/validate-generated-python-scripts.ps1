@@ -25,5 +25,5 @@ if (Test-Path -LiteralPath $bundledPython) {
   $pythonPath = $python.Source
 }
 
-& $pythonPath (Join-Path $scriptDir "validate-generated-python-scripts.py") --path $targetPath
+& $pythonPath -B (Join-Path $scriptDir "validate-generated-python-scripts.py") --path $targetPath
 exit $LASTEXITCODE

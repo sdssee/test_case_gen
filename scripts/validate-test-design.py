@@ -166,6 +166,31 @@ def validate_discovery_gate(root: Path) -> None:
     full_findings = module.format_findings("汇总", {"问题": [f"问题{i}" for i in range(25)]})
     if "问题24" not in full_findings or "已省略" in full_findings:
         fail("阻塞问题汇总仍会截断，可能导致分轮修正")
+    cross_stage_findings: dict[str, list[str]] = {}
+    for category, message in [
+        ("正式工作簿", "样式问题"),
+        ("深探映射", "映射问题"),
+        ("导入文件", "导入问题"),
+    ]:
+        module.collect_validation_issue(
+            cross_stage_findings,
+            category,
+            lambda message=message: module.fail(message),
+        )
+    cross_stage_report = module.format_findings("联合质检", cross_stage_findings)
+    if not all(marker in cross_stage_report for marker in ["样式问题", "映射问题", "导入问题"]):
+        fail("跨阶段联合质检没有一次汇总全部阶段问题")
+    formal_template = root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
+    import_template = root / "docs" / "test-design" / "测试用例模板.xlsx"
+    try:
+        module.validate_delivery_bundle(formal_template, import_template, formal_template)
+    except AssertionError as exc:
+        message = str(exc)
+        required_sections = ["功能测试用例", "深探状态与交付映射", "测试系统导入文件映射"]
+        if not all(section in message for section in required_sections):
+            fail("联合质检没有在一次执行中返回正式工作簿、深探和导入文件问题")
+    else:
+        fail("联合质检回归样本错误地通过")
     valid_story = {
         "Story ID/需求 ID": "STORY-001",
         "用户故事/需求描述": "管理业务对象",
@@ -664,6 +689,9 @@ def main() -> int:
             "NAVIGATION_ACTION_PATTERN",
             "UNRESOLVED_COVERAGE_NOTE_PATTERN",
             "FINDING_DISPLAY_LIMIT",
+            "collect_validation_issue",
+            "validate_delivery_bundle",
+            "测试设计、深探映射和导入文件联合质检未通过",
             "assert_formal_template_invariants",
             "validate_chinese_delivery_language",
             "CHINESE_DELIVERY_FIELDS",

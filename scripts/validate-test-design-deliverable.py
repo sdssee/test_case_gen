@@ -190,6 +190,22 @@ def fail(message: str) -> None:
     raise AssertionError(message)
 
 
+def add_finding(findings: dict[str, list[str]], category: str, message: str) -> None:
+    findings.setdefault(category, []).append(message)
+
+
+def collect_validation_issue(
+    findings: dict[str, list[str]],
+    category: str,
+    action: Callable[[], object],
+) -> object | None:
+    try:
+        return action()
+    except AssertionError as exc:
+        add_finding(findings, category, str(exc))
+        return None
+
+
 DROPDOWN_ACTION_PATTERNS = [
     re.compile(r"(?:点击|打开|展开|切换)[^。；;\r\n]{0,30}(?:下拉(?:框|浮层)?)"),
     re.compile(r"(?:open|show|expand|click)[^.；;\r\n]{0,30}(?:dropdown)", re.IGNORECASE),
@@ -594,6 +610,7 @@ def assert_formal_template_invariants(workbook: Path, template: Path) -> None:
     if workbook_sheets != template_sheets:
         fail(f"Formal workbook sheets must match template exactly. Expected {template_sheets}, got {workbook_sheets}")
 
+    issues: list[str] = []
     workbook_styles = workbook_style_signatures(workbook)
     template_styles = workbook_style_signatures(template)
     for sheet_name in template_sheets:
@@ -605,7 +622,7 @@ def assert_formal_template_invariants(workbook: Path, template: Path) -> None:
         expected_headers = trimmed_headers(template, sheet_name)
         actual_headers = trimmed_headers(workbook, sheet_name)
         if actual_headers != expected_headers:
-            fail(
+            issues.append(
                 f"{sheet_name} headers must match formal template exactly. "
                 f"Expected {expected_headers}, got {actual_headers}"
             )
@@ -618,45 +635,46 @@ def assert_formal_template_invariants(workbook: Path, template: Path) -> None:
             ("pane", "freeze panes"),
         ]:
             if actual_structure[field] != expected_structure[field]:
-                fail(f"{sheet_name} {label} must match the formal template")
+                issues.append(f"{sheet_name} {label} must match the formal template")
 
         expected_filter = expected_structure["auto_filter"]
         actual_filter = actual_structure["auto_filter"]
         if bool(expected_filter) != bool(actual_filter):
-            fail(f"{sheet_name} auto filter presence must match the formal template")
+            issues.append(f"{sheet_name} auto filter presence must match the formal template")
         if expected_filter and actual_filter:
             expected_bounds = parse_a1_range(str(expected_filter))
             actual_bounds = parse_a1_range(str(actual_filter))
             if actual_bounds[:3] != expected_bounds[:3]:
-                fail(f"{sheet_name} auto filter columns must match the formal template")
+                issues.append(f"{sheet_name} auto filter columns must match the formal template")
             if actual_bounds[3] < last_data_row:
-                fail(f"{sheet_name} auto filter must cover the last data row {last_data_row}")
+                issues.append(f"{sheet_name} auto filter must cover the last data row {last_data_row}")
 
         expected_validations = expected_structure["validations"]
         actual_validations = actual_structure["validations"]
         if len(actual_validations) != len(expected_validations):
-            fail(f"{sheet_name} data validation count must match the formal template")
+            issues.append(f"{sheet_name} data validation count must match the formal template")
         for index, (expected, actual) in enumerate(zip(expected_validations, actual_validations), start=1):
             if actual[:2] != expected[:2]:
-                fail(f"{sheet_name} data validation {index} rule must match the formal template")
+                issues.append(f"{sheet_name} data validation {index} rule must match the formal template")
             expected_bases = [(item[0], item[1], item[2]) for item in expected[2]]
             actual_bases = [(item[0], item[1], item[2]) for item in actual[2]]
             if actual_bases != expected_bases:
-                fail(f"{sheet_name} data validation {index} columns must match the formal template")
+                issues.append(f"{sheet_name} data validation {index} columns must match the formal template")
             for expected_range, actual_range in zip(expected[2], actual[2]):
                 if expected_range[1] <= 2 <= expected_range[3] and actual_range[3] < last_data_row:
-                    fail(f"{sheet_name} data validation {index} must cover the last data row {last_data_row}")
+                    issues.append(f"{sheet_name} data validation {index} must cover the last data row {last_data_row}")
 
         template_rows = sheet_cell_rows(template, sheet_name)
         workbook_rows = sheet_cell_rows(workbook, sheet_name)
         if not template_rows or not workbook_rows:
-            fail(f"{sheet_name} must contain the template header and sample style row")
+            issues.append(f"{sheet_name} must contain the template header and sample style row")
+            continue
         header_columns = len(expected_headers)
         for column in range(header_columns):
             expected_style = template_rows[0][column][2] if column < len(template_rows[0]) else 0
             actual_style = workbook_rows[0][column][2] if column < len(workbook_rows[0]) else 0
             if workbook_styles.get(actual_style) != template_styles.get(expected_style):
-                fail(f"{sheet_name} header column {column + 1} style must match the formal template")
+                issues.append(f"{sheet_name} header column {column + 1} style must match the formal template")
 
         template_sample = template_rows[1] if len(template_rows) > 1 else []
         for row_number, row in enumerate(workbook_rows[1:], start=2):
@@ -666,9 +684,11 @@ def assert_formal_template_invariants(workbook: Path, template: Path) -> None:
                 expected_style = template_sample[column][2] if column < len(template_sample) else 0
                 actual_style = row[column][2] if column < len(row) else 0
                 if workbook_styles.get(actual_style) != template_styles.get(expected_style):
-                    fail(
+                    issues.append(
                         f"{sheet_name} row {row_number} column {column + 1} style must match the formal template sample row 2"
                     )
+    if issues:
+        fail("正式测试设计模板一致性检查未通过：\n- " + "\n- ".join(issues))
 
 
 def wrapped_style_ids(path: Path) -> set[int]:
@@ -708,11 +728,14 @@ def horizontal_alignment_style_ids(path: Path, expected_alignment: str) -> set[i
 def assert_cells_horizontal_alignment(path: Path, sheet_name: str, expected_alignment: str) -> None:
     allowed_styles = horizontal_alignment_style_ids(path, expected_alignment)
     rows = sheet_cell_rows(path, sheet_name)
+    issues: list[str] = []
     for row_number, row in enumerate(rows, start=1):
         for column_number, (ref, _, style_id) in enumerate(row, start=1):
             if style_id not in allowed_styles:
                 cell_ref = ref or f"row {row_number} column {column_number}"
-                fail(f"{sheet_name} {cell_ref} must use horizontal alignment: {expected_alignment}")
+                issues.append(f"{sheet_name} {cell_ref} must use horizontal alignment: {expected_alignment}")
+    if issues:
+        fail("导入文件水平对齐检查未通过：\n- " + "\n- ".join(issues))
 
 
 def assert_multiline_cells_wrapped(path: Path, sheet_name: str, field_names: list[str]) -> None:
@@ -725,6 +748,7 @@ def assert_multiline_cells_wrapped(path: Path, sheet_name: str, field_names: lis
     if not target_indexes:
         return
     wrapped = wrapped_style_ids(path)
+    issues: list[str] = []
     for row_number, row in enumerate(rows[1:], start=2):
         for index in target_indexes:
             if index >= len(row):
@@ -733,13 +757,16 @@ def assert_multiline_cells_wrapped(path: Path, sheet_name: str, field_names: lis
             if "\n" in value and style_id not in wrapped:
                 field = headers[index]
                 cell_ref = ref or f"{field} row {row_number}"
-                fail(f"{sheet_name} {cell_ref} contains multiline text but wrapText is not enabled for field {field}")
+                issues.append(f"{sheet_name} {cell_ref} contains multiline text but wrapText is not enabled for field {field}")
+    if issues:
+        fail("多行文本自动换行检查未通过：\n- " + "\n- ".join(issues))
 
 
 def assert_data_rows_follow_sample_styles(path: Path, sheet_names: list[str] | None = None) -> None:
     with zipfile.ZipFile(path) as zf:
         available_sheets = workbook_sheet_paths(zf)
     target_sheets = sheet_names or list(available_sheets)
+    issues: list[str] = []
     for sheet_name in target_sheets:
         rows = sheet_cell_rows(path, sheet_name)
         if len(rows) <= 2:
@@ -753,10 +780,12 @@ def assert_data_rows_follow_sample_styles(path: Path, sheet_names: list[str] | N
                 if expected is None:
                     continue
                 if style_id != expected:
-                    fail(
+                    issues.append(
                         f"{sheet_name} row {row_number} column {index + 1} style must match template sample row 2. "
                         "Only cell content should change; borders, fills, fonts, number formats, and alignment must be preserved."
                     )
+    if issues:
+        fail("数据行模板样式检查未通过：\n- " + "\n- ".join(issues))
 
 
 def range_covers_column_row(range_text: str, column: int, row: int) -> bool:
@@ -782,19 +811,23 @@ def assert_dropdown_validations_cover_rows(path: Path, sheet_name: str, field_na
         sheet_paths = workbook_sheet_paths(zf)
         root = ET.fromstring(zf.read(sheet_paths[sheet_name]))
     validations = root.findall(".//x:dataValidations/x:dataValidation", NS)
+    issues: list[str] = []
     for field, column in target_columns.items():
         if not any(
             validation.attrib.get("type") == "list"
             and range_covers_column_row(validation.attrib.get("sqref", ""), column, last_row)
             for validation in validations
         ):
-            fail(f"{sheet_name} field {field} dropdown validation must cover row {last_row}")
+            issues.append(f"{sheet_name} field {field} dropdown validation must cover row {last_row}")
+    if issues:
+        fail("下拉验证范围检查未通过：\n- " + "\n- ".join(issues))
 
 
 def assert_no_residual_markers(path: Path, sheet_names: list[str] | None = None) -> None:
     with zipfile.ZipFile(path) as zf:
         available_sheets = workbook_sheet_paths(zf)
     target_sheets = sheet_names or list(available_sheets)
+    issues: list[str] = []
     for sheet_name in target_sheets:
         rows = sheet_rows(path, sheet_name)
         for row_number, row in enumerate(rows, start=1):
@@ -803,13 +836,28 @@ def assert_no_residual_markers(path: Path, sheet_names: list[str] | None = None)
                     continue
                 for marker in RESIDUAL_MARKERS:
                     if marker in value:
-                        fail(f"{sheet_name} row {row_number} column {column_number} contains unresolved template marker: {marker}")
+                        issues.append(f"{sheet_name} row {row_number} column {column_number} contains unresolved template marker: {marker}")
+    if issues:
+        fail("模板占位符检查未通过：\n- " + "\n- ".join(issues))
 
 
 def validate_formal_workbook_styles(workbook: Path) -> None:
-    assert_data_rows_follow_sample_styles(workbook, EXPECTED_SHEETS)
+    findings: dict[str, list[str]] = {}
+    collect_validation_issue(
+        findings,
+        "数据行样式",
+        lambda: assert_data_rows_follow_sample_styles(workbook, EXPECTED_SHEETS),
+    )
     for sheet_name, fields in FORMAL_MULTILINE_FIELDS.items():
-        assert_multiline_cells_wrapped(workbook, sheet_name, fields)
+        collect_validation_issue(
+            findings,
+            "多行文本自动换行",
+            lambda sheet_name=sheet_name, fields=fields: assert_multiline_cells_wrapped(
+                workbook, sheet_name, fields
+            ),
+        )
+    if findings:
+        fail(format_findings("正式工作簿样式检查未通过：", findings))
 
 
 def row_dicts(rows: list[list[str]], sheet_name: str) -> list[dict[str, str]]:
@@ -1101,7 +1149,7 @@ def assert_allowed_values(
         if row.get(field, "") not in allowed
     ]
     if invalid:
-        fail(f"{sheet_name}.{field} 只能使用 {sorted(allowed)}：{'; '.join(invalid[:FINDING_DISPLAY_LIMIT])}")
+        fail(f"{sheet_name}.{field} 只能使用 {sorted(allowed)}：{'; '.join(invalid)}")
 
 
 def parse_ids(text: str) -> set[str]:
@@ -1830,7 +1878,14 @@ def first_worksheet_xml(path: Path) -> str:
         return zf.read(paths[first_sheet]).decode("utf-8", errors="ignore")
 
 
-def validate_workbook(workbook: Path, formal_template: Path | None = None) -> dict[str, object]:
+def validate_workbook(
+    workbook: Path,
+    formal_template: Path | None = None,
+    findings: dict[str, list[str]] | None = None,
+) -> dict[str, object]:
+    own_findings = findings is None
+    if findings is None:
+        findings = {}
     if not workbook.exists():
         fail(f"Workbook not found: {workbook}")
     with zipfile.ZipFile(workbook) as zf:
@@ -1838,21 +1893,50 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     if sheet_names != EXPECTED_SHEETS:
         fail(f"Workbook sheets mismatch. Expected {EXPECTED_SHEETS}, got {sheet_names}")
     if formal_template:
-        assert_formal_template_invariants(workbook, formal_template)
-    assert_no_residual_markers(workbook, EXPECTED_SHEETS)
-    validate_table_ranges(workbook, EXPECTED_SHEETS)
-    validate_formal_workbook_styles(workbook)
-    validate_chinese_delivery_language(workbook)
+        collect_validation_issue(
+            findings,
+            "正式工作簿模板与样式",
+            lambda: assert_formal_template_invariants(workbook, formal_template),
+        )
+    collect_validation_issue(
+        findings,
+        "正式工作簿模板与样式",
+        lambda: assert_no_residual_markers(workbook, EXPECTED_SHEETS),
+    )
+    collect_validation_issue(
+        findings,
+        "正式工作簿模板与样式",
+        lambda: validate_table_ranges(workbook, EXPECTED_SHEETS),
+    )
+    collect_validation_issue(
+        findings,
+        "正式工作簿模板与样式",
+        lambda: validate_formal_workbook_styles(workbook),
+    )
+    collect_validation_issue(
+        findings,
+        "正式工作簿语言",
+        lambda: validate_chinese_delivery_language(workbook),
+    )
 
     story_rows_raw = sheet_rows(workbook, "需求用户故事拆解")
     require_headers(story_rows_raw, ["Story ID/需求 ID", "用户故事/需求描述", "角色"], "需求用户故事拆解")
     story_rows = row_dicts(story_rows_raw, "需求用户故事拆解")
     if not story_rows:
-        fail("需求用户故事拆解 must contain at least one story")
-    story_ids = validate_story_rows(story_rows)
+        add_finding(findings, "需求用户故事拆解", "需求用户故事拆解 must contain at least one story")
+    collect_validation_issue(
+        findings,
+        "需求用户故事拆解",
+        lambda: validate_story_rows(story_rows),
+    )
+    story_ids = {row.get("Story ID/需求 ID", "") for row in story_rows if row.get("Story ID/需求 ID", "")}
 
     scenario_rows_raw = sheet_rows(workbook, "测试场景矩阵")
-    assert_no_deprecated_scenario_headers(scenario_rows_raw, "测试场景矩阵")
+    collect_validation_issue(
+        findings,
+        "测试场景矩阵",
+        lambda: assert_no_deprecated_scenario_headers(scenario_rows_raw, "测试场景矩阵"),
+    )
     require_headers(
         scenario_rows_raw,
         [
@@ -1871,14 +1955,22 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     )
     scenario_rows = row_dicts(scenario_rows_raw, "测试场景矩阵")
     if not scenario_rows:
-        fail("测试场景矩阵 must contain at least one DFX-driven scenario")
-    assert_allowed_values(
-        scenario_rows,
+        add_finding(findings, "测试场景矩阵", "测试场景矩阵 must contain at least one DFX-driven scenario")
+    collect_validation_issue(
+        findings,
         "测试场景矩阵",
-        "是否生成用例",
-        FORMAL_ALLOWED_VALUES[("测试场景矩阵", "是否生成用例")],
+        lambda: assert_allowed_values(
+            scenario_rows,
+            "测试场景矩阵",
+            "是否生成用例",
+            FORMAL_ALLOWED_VALUES[("测试场景矩阵", "是否生成用例")],
+        ),
     )
-    validate_atomic_scenario_rows(scenario_rows)
+    collect_validation_issue(
+        findings,
+        "测试场景矩阵",
+        lambda: validate_atomic_scenario_rows(scenario_rows),
+    )
     scenario_ids = {row.get("场景 ID", "") for row in scenario_rows if row.get("场景 ID", "")}
     generated_scenario_ids = {
         row.get("场景 ID", "")
@@ -1909,9 +2001,17 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     )
     function_rows = row_dicts(function_rows_raw, "功能测试用例")
     if not function_rows:
-        fail("功能测试用例 must contain at least one case")
-    validate_story_traceability(story_ids, scenario_rows, function_rows)
-    validate_function_case_preflight(function_rows)
+        add_finding(findings, "功能测试用例", "功能测试用例 must contain at least one case")
+    collect_validation_issue(
+        findings,
+        "Story 到场景和用例追踪",
+        lambda: validate_story_traceability(story_ids, scenario_rows, function_rows),
+    )
+    collect_validation_issue(
+        findings,
+        "功能测试用例",
+        lambda: validate_function_case_preflight(function_rows),
+    )
     case_ids: set[str] = set()
     case_titles: dict[str, str] = {}
     case_function_points: dict[str, str] = {}
@@ -1930,12 +2030,16 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     require_headers(performance_rows_raw, ["性能场景 ID", "业务链路", "性能测试类型", "DFX维度", "DFX场景", "是否纳入本轮测试"], "性能测试设计")
     performance_rows = row_dicts(performance_rows_raw, "性能测试设计")
     if not performance_rows:
-        fail("性能测试设计 must contain at least one scenario or explicit not-applicable row")
-    assert_allowed_values(
-        performance_rows,
+        add_finding(findings, "性能测试设计", "性能测试设计 must contain at least one scenario or explicit not-applicable row")
+    collect_validation_issue(
+        findings,
         "性能测试设计",
-        "是否纳入本轮测试",
-        FORMAL_ALLOWED_VALUES[("性能测试设计", "是否纳入本轮测试")],
+        lambda: assert_allowed_values(
+            performance_rows,
+            "性能测试设计",
+            "是否纳入本轮测试",
+            FORMAL_ALLOWED_VALUES[("性能测试设计", "是否纳入本轮测试")],
+        ),
     )
     performance_dfx: set[tuple[str, str]] = set()
     performance_ids = {
@@ -1943,14 +2047,23 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     }
     for index, row in enumerate(performance_rows, start=2):
         if row.get("是否纳入本轮测试", "") != "否":
-            dimensions, scenarios = assert_dfx_mapping(
-                row.get("DFX维度", ""),
-                row.get("DFX场景", ""),
-                f"性能测试设计 row {index}",
+            collect_validation_issue(
+                findings,
+                "性能测试设计",
+                lambda row=row, index=index: assert_dfx_mapping(
+                    row.get("DFX维度", ""),
+                    row.get("DFX场景", ""),
+                    f"性能测试设计 row {index}",
+                ),
             )
             performance_dfx.update(dfx_pairs(row.get("DFX维度", ""), row.get("DFX场景", "")))
-            if not dimensions & {"DFP性能", "DFX极端", "DFO运维", "DFR可靠"}:
-                fail(f"性能测试设计 row {index} should map to DFP性能/DFX极端/DFO运维/DFR可靠, got {sorted(dimensions)}")
+            dimensions = set(split_dfx_values(row.get("DFX维度", "")))
+            if dimensions and not dimensions & {"DFP性能", "DFX极端", "DFO运维", "DFR可靠"}:
+                add_finding(
+                    findings,
+                    "性能测试设计",
+                    f"性能测试设计 row {index} should map to DFP性能/DFX极端/DFO运维/DFR可靠, got {sorted(dimensions)}",
+                )
 
     risk_rows_raw = sheet_rows(workbook, "风险与待确认问题")
     require_headers(risk_rows_raw, ["编号", "类型", "关联DFX维度", "关联DFX场景", "描述", "影响范围", "建议处理方式"], "风险与待确认问题")
@@ -1958,7 +2071,15 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     risk_rows = row_dicts(risk_rows_raw, "风险与待确认问题")
     risk_ids = {row.get("编号", "") for row in risk_rows if row.get("编号", "")}
     for index, row in enumerate(risk_rows, start=2):
-        assert_dfx_mapping(row.get("关联DFX维度", ""), row.get("关联DFX场景", ""), f"风险与待确认问题 row {index}")
+        collect_validation_issue(
+            findings,
+            "风险与待确认问题",
+            lambda row=row, index=index: assert_dfx_mapping(
+                row.get("关联DFX维度", ""),
+                row.get("关联DFX场景", ""),
+                f"风险与待确认问题 row {index}",
+            ),
+        )
         risk_dfx.update(dfx_pairs(row.get("关联DFX维度", ""), row.get("关联DFX场景", "")))
 
     coverage_rows_raw = sheet_rows(workbook, "页面元素覆盖清单")
@@ -1972,29 +2093,46 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     for index, row in enumerate(coverage_rows, start=2):
         element = row.get("元素名称/文案", "")
         if not element:
-            fail(f"页面元素覆盖清单 row {index} is missing 元素名称/文案")
-        assert_dfx_mapping(row.get("适用DFX维度", ""), row.get("适用DFX场景", ""), f"页面元素覆盖清单 row {index}")
+            add_finding(findings, "页面元素覆盖清单", f"页面元素覆盖清单 row {index} is missing 元素名称/文案")
+        collect_validation_issue(
+            findings,
+            "页面元素覆盖清单",
+            lambda row=row, index=index: assert_dfx_mapping(
+                row.get("适用DFX维度", ""),
+                row.get("适用DFX场景", ""),
+                f"页面元素覆盖清单 row {index}",
+            ),
+        )
         status = row.get("覆盖状态", "")
         if status not in valid_status:
-            fail(f"页面元素覆盖清单 row {index} has invalid 覆盖状态: {status}")
+            add_finding(findings, "页面元素覆盖清单", f"页面元素覆盖清单 row {index} has invalid 覆盖状态: {status}")
         linked_ids = parse_ids(row.get("覆盖用例 ID", ""))
         if status == "已覆盖":
             if not linked_ids:
-                fail(f"页面元素覆盖清单 row {index} is 已覆盖 but missing 覆盖用例 ID")
+                add_finding(findings, "页面元素覆盖清单", f"页面元素覆盖清单 row {index} is 已覆盖 but missing 覆盖用例 ID")
             unknown = sorted(linked_ids - case_ids)
             if unknown:
-                fail(f"页面元素覆盖清单 row {index} references unknown case IDs: {unknown}")
+                add_finding(findings, "页面元素覆盖清单", f"页面元素覆盖清单 row {index} references unknown case IDs: {unknown}")
         elif not row.get("待确认问题/备注", ""):
-            fail(f"页面元素覆盖清单 row {index} status {status} must explain reason in 待确认问题/备注")
+            add_finding(findings, "页面元素覆盖清单", f"页面元素覆盖清单 row {index} status {status} must explain reason in 待确认问题/备注")
 
-    validate_evidence_status_consistency(risk_rows, coverage_rows)
+    collect_validation_issue(
+        findings,
+        "风险与页面元素状态",
+        lambda: validate_evidence_status_consistency(risk_rows, coverage_rows),
+    )
 
     landed_dfx = function_dfx | performance_dfx | risk_dfx
     missing_landed_dfx = sorted(generated_scenario_dfx - landed_dfx)
     if missing_landed_dfx:
-        fail(f"测试场景矩阵 generated DFX scenarios are not reflected in 功能测试用例/性能测试设计/风险与待确认问题: {missing_landed_dfx[:10]}")
+        add_finding(
+            findings,
+            "DFX 落地追踪",
+            "测试场景矩阵 generated DFX scenarios are not reflected in 功能测试用例/性能测试设计/风险与待确认问题: "
+            f"{missing_landed_dfx}",
+        )
 
-    return {
+    workbook_data = {
         "scenario_ids": scenario_ids,
         "generated_scenario_ids": generated_scenario_ids,
         "case_ids": case_ids,
@@ -2019,40 +2157,90 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
             for row in coverage_rows
         ),
     }
+    if own_findings and findings:
+        fail(format_findings("正式测试设计质检未通过：", findings))
+    return workbook_data
 
 
-def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, object]) -> int:
+def validate_import_workbook(
+    import_workbook: Path,
+    workbook_data: dict[str, object],
+    findings: dict[str, list[str]] | None = None,
+) -> int:
+    own_findings = findings is None
+    if findings is None:
+        findings = {}
     if not import_workbook.exists():
-        fail(f"Import workbook not found: {import_workbook}")
+        message = f"Import workbook not found: {import_workbook}"
+        if own_findings:
+            fail(message)
+        add_finding(findings, "测试系统导入文件结构", message)
+        return 0
     with zipfile.ZipFile(import_workbook) as zf:
         sheet_names = list(workbook_sheet_paths(zf))
     if sheet_names == EXPECTED_SHEETS or "测试系统导入用例" in sheet_names:
-        fail("Import workbook must be a copy of 测试用例模板.xlsx, not the formal test design workbook")
+        message = "Import workbook must be a copy of 测试用例模板.xlsx, not the formal test design workbook"
+        if own_findings:
+            fail(message)
+        add_finding(findings, "测试系统导入文件结构", message)
+        return 0
 
     rows_raw = first_sheet_rows(import_workbook)
     if not rows_raw:
-        fail("Import workbook has no header row")
+        message = "Import workbook has no header row"
+        if own_findings:
+            fail(message)
+        add_finding(findings, "测试系统导入文件结构", message)
+        return 0
     headers = rows_raw[0]
     if headers[: len(IMPORT_HEADERS)] != IMPORT_HEADERS:
-        fail(f"Import workbook headers mismatch. Expected {IMPORT_HEADERS}, got {headers}")
-    assert_no_residual_markers(import_workbook)
-    validate_table_ranges(import_workbook)
-    assert_data_rows_follow_sample_styles(import_workbook)
+        message = f"Import workbook headers mismatch. Expected {IMPORT_HEADERS}, got {headers}"
+        if own_findings:
+            fail(message)
+        add_finding(findings, "测试系统导入文件结构", message)
+        return 0
+    collect_validation_issue(
+        findings,
+        "测试系统导入文件样式",
+        lambda: assert_no_residual_markers(import_workbook),
+    )
+    collect_validation_issue(
+        findings,
+        "测试系统导入文件样式",
+        lambda: validate_table_ranges(import_workbook),
+    )
+    collect_validation_issue(
+        findings,
+        "测试系统导入文件样式",
+        lambda: assert_data_rows_follow_sample_styles(import_workbook),
+    )
     first_sheet_name = ""
     with zipfile.ZipFile(import_workbook) as zf:
         sheet_paths = workbook_sheet_paths(zf)
         first_sheet_name = next(iter(sheet_paths))
-    assert_cells_horizontal_alignment(import_workbook, first_sheet_name, "left")
-    assert_multiline_cells_wrapped(import_workbook, first_sheet_name, IMPORT_MULTILINE_FIELDS)
+    collect_validation_issue(
+        findings,
+        "测试系统导入文件样式",
+        lambda: assert_cells_horizontal_alignment(import_workbook, first_sheet_name, "left"),
+    )
+    collect_validation_issue(
+        findings,
+        "测试系统导入文件样式",
+        lambda: assert_multiline_cells_wrapped(import_workbook, first_sheet_name, IMPORT_MULTILINE_FIELDS),
+    )
 
     rows = row_dicts(rows_raw, "测试系统导入文件")
     if not rows:
-        fail("Import workbook must contain mapped test cases")
-    assert_dropdown_validations_cover_rows(
-        import_workbook,
-        first_sheet_name,
-        list(IMPORT_ALLOWED_VALUES),
-        len(rows) + 1,
+        add_finding(findings, "测试系统导入文件内容", "Import workbook must contain mapped test cases")
+    collect_validation_issue(
+        findings,
+        "测试系统导入文件样式",
+        lambda: assert_dropdown_validations_cover_rows(
+            import_workbook,
+            first_sheet_name,
+            list(IMPORT_ALLOWED_VALUES),
+            len(rows) + 1,
+        ),
     )
 
     case_titles = workbook_data["case_titles"]
@@ -2062,40 +2250,61 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
     for index, row in enumerate(rows, start=2):
         for field in IMPORT_REQUIRED_FIELDS:
             if not row.get(field):
-                fail(f"Import workbook row {index} is missing required field: {field}")
+                add_finding(findings, "测试系统导入文件内容", f"Import workbook row {index} is missing required field: {field}")
         for field in IMPORT_AUTO_FIELDS:
             if row.get(field):
-                fail(f"Import workbook row {index} must leave auto-generated field blank: {field}")
+                add_finding(findings, "测试系统导入文件内容", f"Import workbook row {index} must leave auto-generated field blank: {field}")
         for field, allowed in IMPORT_ALLOWED_VALUES.items():
             value = row.get(field, "")
             if value not in allowed:
-                fail(f"Import workbook row {index} has invalid {field}: {value}")
+                add_finding(findings, "测试系统导入文件内容", f"Import workbook row {index} has invalid {field}: {value}")
         if row.get("执行方式") == "自动化":
             note = row.get("备注", "") + row.get("标签", "") + row.get("测试用例说明", "")
             if not any(marker in note for marker in ["自动化资产", "脚本", "流水线", "API自动化", "UI自动化"]):
-                fail(f"Import workbook row {index} uses 自动化 but does not reference an implemented automation asset")
+                add_finding(
+                    findings,
+                    "测试系统导入文件内容",
+                    f"Import workbook row {index} uses 自动化 but does not reference an implemented automation asset",
+                )
         title = row.get("测试用例名称", "")
         if "-" not in title or " -" in title or "- " in title:
-            fail(f"Import workbook row {index} 测试用例名称 must use 功能点-当前用例标题 without spaces: {title}")
-        assert_numbered(row.get("测试步骤描述", ""), f"Import workbook row {index} 测试步骤描述")
-        assert_complete_operation_steps(row.get("测试步骤描述", ""), f"Import workbook row {index} 测试步骤描述")
-        assert_numbered(row.get("测试步骤预期结果", ""), f"Import workbook row {index} 测试步骤预期结果")
-        assert_expected_result_consistency(
-            row.get("测试步骤预期结果", ""),
-            f"Import workbook row {index} 测试步骤预期结果",
-        )
-        assert_transient_flow_closed(
-            row.get("测试步骤描述", ""),
-            row.get("测试步骤预期结果", ""),
-            f"Import workbook row {index}",
-        )
+            add_finding(
+                findings,
+                "测试系统导入文件内容",
+                f"Import workbook row {index} 测试用例名称 must use 功能点-当前用例标题 without spaces: {title}",
+            )
+        row_checks = [
+            lambda row=row, index=index: assert_numbered(
+                row.get("测试步骤描述", ""), f"Import workbook row {index} 测试步骤描述"
+            ),
+            lambda row=row, index=index: assert_complete_operation_steps(
+                row.get("测试步骤描述", ""), f"Import workbook row {index} 测试步骤描述"
+            ),
+            lambda row=row, index=index: assert_numbered(
+                row.get("测试步骤预期结果", ""), f"Import workbook row {index} 测试步骤预期结果"
+            ),
+            lambda row=row, index=index: assert_expected_result_consistency(
+                row.get("测试步骤预期结果", ""), f"Import workbook row {index} 测试步骤预期结果"
+            ),
+            lambda row=row, index=index: assert_transient_flow_closed(
+                row.get("测试步骤描述", ""),
+                row.get("测试步骤预期结果", ""),
+                f"Import workbook row {index}",
+            ),
+        ]
         if row.get("前置条件"):
-            assert_numbered(row["前置条件"], f"Import workbook row {index} 前置条件")
+            row_checks.append(
+                lambda row=row, index=index: assert_numbered(
+                    row["前置条件"], f"Import workbook row {index} 前置条件"
+                )
+            )
+        for check in row_checks:
+            collect_validation_issue(findings, "测试系统导入文件内容", check)
         imported_titles.add(title)
 
     missing_titles = sorted(formal_titles - imported_titles)
     if missing_titles:
-        fail(f"Import workbook is missing formal function cases: {missing_titles[:10]}")
+        add_finding(findings, "测试系统导入文件映射", f"Import workbook is missing formal function cases: {missing_titles}")
 
     xml = first_worksheet_xml(import_workbook)
     for marker, label in {
@@ -2104,8 +2313,41 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
         'sqref="T2:T2001"': "执行方式",
     }.items():
         if marker not in xml:
-            fail(f"Import workbook is missing preserved {label} dropdown validation: {marker}")
+            add_finding(
+                findings,
+                "测试系统导入文件样式",
+                f"Import workbook is missing preserved {label} dropdown validation: {marker}",
+            )
+    if own_findings and findings:
+        fail(format_findings("测试系统导入文件质检未通过：", findings))
     return len(rows)
+
+
+def validate_delivery_bundle(
+    workbook: Path,
+    import_workbook: Path,
+    formal_template: Path,
+    discovery_state: Path | None = None,
+) -> tuple[dict[str, object], int]:
+    findings: dict[str, list[str]] = {}
+    workbook_data = validate_workbook(workbook, formal_template, findings)
+    requires_discovery_state = bool(workbook_data.get("requires_discovery_state"))
+    if requires_discovery_state and not discovery_state:
+        add_finding(
+            findings,
+            "深探状态与交付映射",
+            "页面元素覆盖清单声明了页面/浏览器/DOM 实探证据，必须提供 --discovery-state 通过深探准出门禁",
+        )
+    if discovery_state:
+        collect_validation_issue(
+            findings,
+            "深探状态与交付映射",
+            lambda: validate_discovery_state(discovery_state, workbook_data),
+        )
+    import_count = validate_import_workbook(import_workbook, workbook_data, findings)
+    if findings:
+        fail(format_findings("测试设计、深探映射和导入文件联合质检未通过：", findings))
+    return workbook_data, import_count
 
 
 def main() -> int:
@@ -2129,13 +2371,12 @@ def main() -> int:
         return 0
     if not args.workbook or not args.import_workbook:
         parser.error("正式交付校验必须同时提供 --workbook 和 --import-workbook")
-    workbook_data = validate_workbook(args.workbook, args.formal_template)
-    requires_discovery_state = bool(workbook_data.get("requires_discovery_state"))
-    if requires_discovery_state and not args.discovery_state:
-        fail("页面元素覆盖清单声明了页面/浏览器/DOM 实探证据，必须提供 --discovery-state 通过深探准出门禁")
-    if args.discovery_state:
-        validate_discovery_state(args.discovery_state, workbook_data)
-    import_count = validate_import_workbook(args.import_workbook, workbook_data)
+    workbook_data, import_count = validate_delivery_bundle(
+        args.workbook,
+        args.import_workbook,
+        args.formal_template,
+        args.discovery_state,
+    )
     print(
         "OK: test design deliverable quality checks passed. "
         f"场景={workbook_data['scenario_count']}，功能用例={workbook_data['case_count']}，"

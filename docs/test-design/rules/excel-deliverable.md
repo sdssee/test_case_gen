@@ -51,6 +51,8 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverabl
 
 完整交付必须使用 `scripts/test_design_excel_tools.py complete-deliverables`。页面任务必须同时传入已通过前置准出的 `--discovery-state <discovery-state.json>`；该命令在临时文件中完成模板重建、内容填充、行高调整、导入文件生成，并一次汇总核对深探事实去向、场景到用例映射和正式交付质量，全部通过后才写入正式路径。任一步失败都必须停止并保留原交付件，不得自动重试、手工降级生成或继续叠加样式修补。
 
+联合质检在工作簿结构可解析后必须继续执行正式工作簿、深探映射和导入文件的全部独立检查，最后一次返回完整阻塞问题，不截断问题项；只有文件不存在、文件损坏、Sheet 或核心表头缺失等使后续检查无法可靠执行的结构错误可以立即停止。质检只报告问题，不自动修改、重生成或循环调用自身。
+
 `complete-deliverables` 成功后以命令输出的正式测试设计和导入文件实际路径为准，不猜测净化后的文件名，也不重复执行同一份最终交付校验。
 
 成功交付后只保留正式交付件、模板、规则和可复用项目工具；本批 `debug_*`、`fix_*`、`regen_*`、分片脚本、`__pycache__`、临时 JSON/CSV/Markdown/TXT、中间 Excel 和非交付截图用完即删除。失败诊断时可暂存，问题定位后按本批明确路径清理，不增加自动清理脚本或长期维护目录。

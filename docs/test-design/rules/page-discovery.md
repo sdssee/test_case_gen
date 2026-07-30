@@ -65,7 +65,7 @@
 
 - 状态文件固定包含 `version=1`、`scope`、`baseline_complete`、`closure_rescan_complete`、`closure_rescan_new_targets`、`understanding_questions`、`targets` 和交付前补充的 `scenario_case_mapping`。
 - 每个目标至少记录 `id`、`page`、`element`、`kind`、`control_type` 和 `status`。已验证目标同时记录 `action`、`evidence_source`、`evidence`、`observation` 和 `result`；弹窗、抽屉、下拉、编辑态、确认框或浮层等状态变化再记录 `state_before`、`state_after`、`terminal_action` 和 `recovery`。
-- 控件专项规则要求所有离散值逐项验证时，在父目标记录 `branch_policy=逐项验证` 和实际 `discovered_values`，每个值建立带 `parent_id` 与 `branch_value` 的子目标；普通等价选项仍按对应控件规则抽取代表值，不机械展开。
+- 固定且有限的离散选项必须在父目标完整记录实际 `discovered_values`。选项会改变页面结构、字段、校验、流程或专项规则要求逐项实探时，记录 `branch_policy=逐项验证`，每个值建立带 `parent_id` 与 `branch_value` 的子目标；选项无需逐项实探但每个持久化值都必须进入正式用例时，记录 `branch_policy=用例逐项覆盖`，深探只执行代表值。普通等价参考数据仍抽取代表值，不机械展开。
 - 客观受限必须填写 `blocking_reason`，不适用必须填写 `reason`。深探准出后为每个目标填写 `disposition` 和 `reference_ids`，去向只允许场景、风险、性能或不适用；交付前用 `scenario_case_mapping` 记录每个标记生成用例的场景 ID 及对应功能用例 ID。
 - 状态文件仅承载短事实和 ID，不承载用例正文、不保存常规截图；页面实探发现的覆盖清单元素必须全部进入队列，队列元素也必须回填覆盖清单。交付成功后状态文件随本批中间文件清理。
 
@@ -85,6 +85,7 @@
 
 - 只有深探通过准出门禁后，才允许形成正式测试场景；DFX 不得用于补偿尚未完成的页面实探。
 - 先按测试对象、角色/状态、动作/输入、数据、观察点和恢复路径将交接事实形成候选原子场景，并逐项核账为独立场景、合理合并或其他明确去向；禁止事实静默消失。
+- `branch_policy=用例逐项覆盖` 或 `逐项验证` 的目标，全部 `discovered_values` 都必须进入其关联原子场景和功能用例；前者不因深探只执行代表值而减少用例，后者同时要求深探分支完整。
 - 完成原子化后再为每个场景标记一个主 `DFX维度` 与 `DFX场景`；DFX 可以补充新的质量场景，但不得抽样、删除或合并已形成的不同功能事实。
 - 页面元素覆盖清单中的每个可交互元素必须填写适用 `DFX维度` 与 `DFX场景`；已生成用例的元素不得缺失 DFX 映射。将元素、接口或数据对象写入 `测试场景矩阵` 的 `测试对象/页面元素`，每个场景行只保留一个主 DFX 维度与场景。
 

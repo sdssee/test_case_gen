@@ -187,6 +187,23 @@ def validate_discovery_gate(root: Path) -> None:
         "case_ids": {"TC-001"},
         "risk_ids": set(),
         "performance_ids": set(),
+        "scenario_rows_by_id": {
+            "SCN-001": {
+                "场景 ID": "SCN-001",
+                "测试对象/页面元素": "创建按钮",
+                "输入数据/状态条件": "正常数据",
+                "观察点": "创建状态出现",
+            }
+        },
+        "case_rows_by_id": {
+            "TC-001": {
+                "用例 ID": "TC-001",
+                "用例标题": "创建-正常创建",
+                "测试数据": "正常数据",
+                "操作步骤": "1. 登录系统\n2. 点击创建按钮",
+                "预期结果": "1. 创建状态出现",
+            }
+        },
         "coverage_rows": [
             {"页面/入口": "目标页面", "元素名称/文案": "创建按钮", "发现方式": "浏览器实探"}
         ],
@@ -216,6 +233,79 @@ def validate_discovery_gate(root: Path) -> None:
                     fail(f"深探门禁没有一次汇总必要问题：{marker}")
         else:
             fail("深探门禁错误地放行了未收口状态")
+
+        branch_state = json.loads(json.dumps(valid_state, ensure_ascii=False))
+        branch_state["targets"][0].update(
+            element="变量类型",
+            control_type="下拉框",
+            branch_policy="用例逐项覆盖",
+            discovered_values=["String", "Number"],
+            state_before="下拉框收起",
+            state_after="下拉框展开并显示选项",
+            terminal_action="选择选项后提交",
+            recovery="提交后返回列表",
+        )
+        branch_workbook_data = dict(workbook_data)
+        branch_workbook_data["coverage_rows"] = [
+            {"页面/入口": "目标页面", "元素名称/文案": "变量类型", "发现方式": "浏览器实探"}
+        ]
+        branch_workbook_data["scenario_rows_by_id"] = {
+            "SCN-001": {
+                "场景 ID": "SCN-001",
+                "测试对象/页面元素": "变量类型",
+                "输入数据/状态条件": "分别选择 String、Number",
+                "观察点": "各类型均可保存",
+            }
+        }
+        branch_workbook_data["case_rows_by_id"] = {
+            "TC-001": {
+                "用例 ID": "TC-001",
+                "用例标题": "创建-遍历变量类型",
+                "测试数据": "String\nNumber",
+                "操作步骤": "1. 登录系统\n2. 分别选择类型并点击确定按钮",
+                "预期结果": "1. String 保存成功\n2. Number 保存成功",
+            }
+        }
+        state_path.write_text(json.dumps(branch_state, ensure_ascii=False), encoding="utf-8")
+        module.validate_discovery_state(state_path, branch_workbook_data)
+
+        branch_workbook_data["scenario_rows_by_id"]["SCN-001"]["输入数据/状态条件"] = "选择 String"
+        branch_workbook_data["scenario_rows_by_id"]["SCN-001"]["观察点"] = "String 可保存"
+        try:
+            module.validate_discovery_state(state_path, branch_workbook_data)
+        except AssertionError as exc:
+            if "分支值“Number”未写入该目标关联的测试场景" not in str(exc):
+                fail("逐项用例覆盖门禁没有识别未进入场景的分支值")
+        else:
+            fail("逐项用例覆盖门禁错误地放行了场景分支遗漏")
+        branch_workbook_data["scenario_rows_by_id"]["SCN-001"]["输入数据/状态条件"] = "分别选择 String、Number"
+        branch_workbook_data["scenario_rows_by_id"]["SCN-001"]["观察点"] = "各类型均可保存"
+
+        branch_workbook_data["case_rows_by_id"]["TC-001"].update(
+            测试数据="String",
+            操作步骤="1. 登录系统\n2. 选择 String 并点击确定按钮",
+            预期结果="1. String 保存成功",
+        )
+        try:
+            module.validate_discovery_state(state_path, branch_workbook_data)
+        except AssertionError as exc:
+            if "分支值“Number”未写入关联场景映射的功能用例" not in str(exc):
+                fail("逐项用例覆盖门禁没有识别未进入用例的分支值")
+        else:
+            fail("逐项用例覆盖门禁错误地放行了用例分支遗漏")
+
+        branch_workbook_data["case_rows_by_id"]["TC-001"].update(
+            测试数据="String、Number",
+            操作步骤="1. 登录系统\n2. 分别选择类型后点击取消按钮",
+            预期结果="1. String、Number 均可选择",
+        )
+        try:
+            module.validate_discovery_state(state_path, branch_workbook_data)
+        except AssertionError as exc:
+            if "只有选择或取消覆盖，缺少提交及最终结果中的逐值验证" not in str(exc):
+                fail("逐项用例覆盖门禁没有识别只选择后取消的伪覆盖")
+        else:
+            fail("逐项用例覆盖门禁错误地放行了未提交分支")
 
 
 def main() -> int:
@@ -282,6 +372,7 @@ def main() -> int:
             "追加读取 `pagination.md`",
             "供深探准出后的原子场景形成步骤逐项处理",
             "完成原子化后再为每个场景标记一个主",
+            "branch_policy=用例逐项覆盖",
         ],
     )
     assert_contains(
@@ -307,6 +398,8 @@ def main() -> int:
             "不得虚构“关闭弹窗”",
             "写入前集中核对",
             "禁止连续创建多个 `fix_*` 脚本",
+            "数据变更流程覆盖",
+            "只展开、选择后取消或关闭只能算交互覆盖",
         ],
     )
     assert_contains(
@@ -338,6 +431,8 @@ def main() -> int:
             "未登录场景不得机械追加登录步骤",
             "assert_expected_result_consistency",
             "FORMAL_ALLOWED_VALUES",
+            "用例逐项覆盖",
+            "只有选择或取消覆盖",
             "scenario_count",
             '"--formal-template"',
         ],

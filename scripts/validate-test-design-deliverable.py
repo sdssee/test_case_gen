@@ -162,6 +162,10 @@ DISCOVERY_FINAL_STATUSES = {"已验证", "客观受限", "不适用"}
 DISCOVERY_INTERACTIVE_KINDS = {"交互", "状态变化"}
 DISCOVERY_STATEFUL_CONTROL_MARKERS = ["弹窗", "抽屉", "下拉", "编辑态", "删除确认", "确认框", "浮层"]
 PAGE_EVIDENCE_MARKERS = ["页面实探", "浏览器实探", "computer use", "页面或dom", "dom实探"]
+BRANCH_POLICIES = {"逐项验证", "用例逐项覆盖"}
+DATA_CHANGE_COMMIT_PATTERN = re.compile(
+    r"(?:点击|执行)?(?:确定|保存|提交|确认|应用|发布|导入)(?:按钮|操作)?|(?:自动保存|立即生效)"
+)
 
 def fail(message: str) -> None:
     raise AssertionError(message)
@@ -1301,6 +1305,25 @@ def string_list(value: object, label: str, findings: dict[str, list[str]], requi
     return [item.strip() for item in value]
 
 
+def branch_value_present(value: str, text: str) -> bool:
+    normalized_value = re.sub(r"\s+", " ", value or "").strip().lower()
+    normalized_text = re.sub(r"\s+", " ", text or "").strip().lower()
+    if not normalized_value:
+        return False
+    if re.fullmatch(r"[a-z0-9_.+-]+", normalized_value):
+        return bool(
+            re.search(
+                rf"(?<![a-z0-9]){re.escape(normalized_value)}(?![a-z0-9])",
+                normalized_text,
+            )
+        )
+    return normalized_value in normalized_text
+
+
+def row_contains_branch_value(row: dict[str, str], fields: list[str], value: str) -> bool:
+    return any(branch_value_present(value, row.get(field, "")) for field in fields)
+
+
 def validate_discovery_state(
     path: Path,
     workbook_data: dict[str, object] | None = None,
@@ -1313,6 +1336,7 @@ def validate_discovery_state(
         "页面覆盖不同步": [],
         "事实去向缺失": [],
         "场景用例映射缺失": [],
+        "逐项用例覆盖缺失": [],
     }
     if data.get("version") != 1:
         findings["状态结构错误"].append("version 必须为 1")
@@ -1391,16 +1415,24 @@ def validate_discovery_state(
         else:
             target_signatures[target_signature] = target_id or label
 
+    branch_values_by_target: dict[str, list[str]] = {}
     for index, target in enumerate(target_rows, start=1):
         parent_id = str(target.get("parent_id", "")).strip()
         if parent_id and parent_id not in target_ids:
             findings["状态结构错误"].append(f"targets[{index}] parent_id 不存在：{parent_id}")
-        if str(target.get("branch_policy", "")).strip() == "逐项验证":
+        branch_policy = str(target.get("branch_policy", "")).strip()
+        if branch_policy and branch_policy not in BRANCH_POLICIES:
+            findings["状态结构错误"].append(
+                f"{str(target.get('id', '')).strip() or f'targets[{index}]'} branch_policy 只能为逐项验证或用例逐项覆盖"
+            )
+        if branch_policy in BRANCH_POLICIES:
             discovered_values = string_list(
                 target.get("discovered_values"),
                 f"{str(target.get('id', '')).strip() or f'targets[{index}]'}.discovered_values",
                 findings,
             )
+            branch_values_by_target[str(target.get("id", "")).strip() or f"targets[{index}]"] = discovered_values
+        if branch_policy == "逐项验证":
             child_values = {
                 str(child.get("branch_value", "")).strip()
                 for child in target_rows
@@ -1420,12 +1452,16 @@ def validate_discovery_state(
         risk_ids = workbook_data["risk_ids"]
         performance_ids = workbook_data["performance_ids"]
         coverage_rows = workbook_data["coverage_rows"]
+        scenario_rows_by_id = workbook_data["scenario_rows_by_id"]
+        case_rows_by_id = workbook_data["case_rows_by_id"]
         assert isinstance(scenario_ids, set)
         assert isinstance(generated_scenario_ids, set)
         assert isinstance(case_ids, set)
         assert isinstance(risk_ids, set)
         assert isinstance(performance_ids, set)
         assert isinstance(coverage_rows, list)
+        assert isinstance(scenario_rows_by_id, dict)
+        assert isinstance(case_rows_by_id, dict)
         target_elements = {
             (normalize(str(target.get("page", ""))), normalize(str(target.get("element", ""))))
             for target in target_rows
@@ -1449,6 +1485,7 @@ def validate_discovery_state(
         if unknown_targets:
             findings["页面覆盖不同步"].append(f"动态队列中的元素没有写入页面元素覆盖清单：{unknown_targets[:10]}")
         referenced_scenarios: set[str] = set()
+        target_scenario_references: dict[str, list[str]] = {}
         for index, target in enumerate(target_rows, start=1):
             target_id = str(target.get("id", "")).strip() or f"targets[{index}]"
             disposition = str(target.get("disposition", "")).strip()
@@ -1457,6 +1494,7 @@ def validate_discovery_state(
             if disposition == "场景":
                 valid_references = scenario_ids
                 referenced_scenarios.update(reference_ids)
+                target_scenario_references[target_id] = reference_ids
             elif disposition == "风险":
                 valid_references = risk_ids
             elif disposition == "性能":
@@ -1477,6 +1515,7 @@ def validate_discovery_state(
             findings["状态结构错误"].append("scenario_case_mapping 必须是数组")
             mappings = []
         mapped_scenarios: set[str] = set()
+        scenario_to_cases: dict[str, set[str]] = {}
         for index, raw_mapping in enumerate(mappings, start=1):
             if not isinstance(raw_mapping, dict):
                 findings["状态结构错误"].append(f"scenario_case_mapping[{index}] 必须是对象")
@@ -1487,6 +1526,7 @@ def validate_discovery_state(
                 findings["场景用例映射缺失"].append(f"映射引用了不存在或未标记生成用例的场景：{scene_id or '空'}")
             else:
                 mapped_scenarios.add(scene_id)
+            scenario_to_cases.setdefault(scene_id, set()).update(mapped_cases)
             unknown_cases = sorted(set(mapped_cases) - case_ids)
             if unknown_cases:
                 findings["场景用例映射缺失"].append(f"场景 {scene_id} 引用了不存在的用例：{unknown_cases}")
@@ -1496,6 +1536,51 @@ def validate_discovery_state(
         missing_target_scenarios = sorted(referenced_scenarios - generated_scenario_ids)
         if missing_target_scenarios:
             findings["事实去向缺失"].append(f"深探事实关联的场景未标记生成用例：{missing_target_scenarios}")
+
+        scenario_branch_fields = ["测试对象/页面元素", "输入数据/状态条件", "观察点"]
+        case_branch_fields = ["用例标题", "测试数据", "操作步骤", "预期结果"]
+        for target in target_rows:
+            target_id = str(target.get("id", "")).strip()
+            branch_policy = str(target.get("branch_policy", "")).strip()
+            if branch_policy not in BRANCH_POLICIES:
+                continue
+            reference_ids = target_scenario_references.get(target_id, [])
+            for value in branch_values_by_target.get(target_id, []):
+                matching_scenarios = {
+                    scene_id
+                    for scene_id in reference_ids
+                    if scene_id in scenario_rows_by_id
+                    and row_contains_branch_value(
+                        scenario_rows_by_id[scene_id], scenario_branch_fields, value
+                    )
+                }
+                if not matching_scenarios:
+                    findings["逐项用例覆盖缺失"].append(
+                        f"{target_id} 的分支值“{value}”未写入该目标关联的测试场景"
+                    )
+                    continue
+                mapped_case_ids = set().union(
+                    *(scenario_to_cases.get(scene_id, set()) for scene_id in matching_scenarios)
+                )
+                matching_cases = {
+                    case_id
+                    for case_id in mapped_case_ids
+                    if case_id in case_rows_by_id
+                    and row_contains_branch_value(case_rows_by_id[case_id], case_branch_fields, value)
+                }
+                if not matching_cases:
+                    findings["逐项用例覆盖缺失"].append(
+                        f"{target_id} 的分支值“{value}”未写入关联场景映射的功能用例"
+                    )
+                    continue
+                if branch_policy == "用例逐项覆盖" and not any(
+                    DATA_CHANGE_COMMIT_PATTERN.search(case_rows_by_id[case_id].get("操作步骤", ""))
+                    and branch_value_present(value, case_rows_by_id[case_id].get("预期结果", ""))
+                    for case_id in matching_cases
+                ):
+                    findings["逐项用例覆盖缺失"].append(
+                        f"{target_id} 的有效分支值“{value}”只有选择或取消覆盖，缺少提交及最终结果中的逐值验证"
+                    )
 
     if any(findings.values()):
         fail(format_findings("动态深探队列与状态证据门禁未通过：", findings))
@@ -1701,6 +1786,12 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
         "performance_ids": performance_ids,
         "case_titles": case_titles,
         "case_function_points": case_function_points,
+        "scenario_rows_by_id": {
+            row.get("场景 ID", ""): row for row in scenario_rows if row.get("场景 ID", "")
+        },
+        "case_rows_by_id": {
+            row.get("用例 ID", ""): row for row in function_rows if row.get("用例 ID", "")
+        },
         "coverage_rows": coverage_rows,
         "scenario_count": len(scenario_rows),
         "case_count": len(function_rows),

@@ -40,17 +40,17 @@
 
 ## 交付件校验
 
-生成正式测试设计 Excel 后，必须运行：
+仅审计已有交付件时运行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx>
 ```
 
-正式测试设计与导入文件必须同时存在并一起通过校验。
+正式测试设计与导入文件必须同时存在并一起通过校验；正常生成流程不在 `complete-deliverables` 成功后重复运行该命令。
 
 校验通过后，以最终工作簿实际读取结果一次性核对场景、功能用例、性能设计、风险、元素覆盖和导入用例数量，以及正式用例标题与导入标题映射；最终说明不得引用草稿或生成前统计。非阻塞相似用例告警必须完成人工分类复核后才能宣布交付完成。
 
-完整交付必须使用 `scripts/test_design_excel_tools.py complete-deliverables`。该命令只能在临时文件中完成模板重建、内容填充、行高调整、导入文件生成和校验；全部通过后才写入正式路径。任一步失败都必须停止并保留原交付件，不得手工降级生成或继续叠加样式修补。
+完整交付必须使用 `scripts/test_design_excel_tools.py complete-deliverables`。页面任务必须同时传入已通过前置准出的 `--discovery-state <discovery-state.json>`；该命令在临时文件中完成模板重建、内容填充、行高调整、导入文件生成，并一次汇总核对深探事实去向、场景到用例映射和正式交付质量，全部通过后才写入正式路径。任一步失败都必须停止并保留原交付件，不得自动重试、手工降级生成或继续叠加样式修补。
 
 `complete-deliverables` 成功后以命令输出的正式测试设计和导入文件实际路径为准，不猜测净化后的文件名，也不重复执行同一份最终交付校验。
 

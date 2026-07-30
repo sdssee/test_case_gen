@@ -3,7 +3,9 @@ param(
   [string]$WorkbookPath,
 
   [Parameter(Mandatory = $true)]
-  [string]$ImportWorkbookPath
+  [string]$ImportWorkbookPath,
+
+  [string]$DiscoveryStatePath
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,6 +18,9 @@ if (-not (Test-Path $python)) {
 
 $argsList = @((Join-Path $scriptDir "validate-test-design-deliverable.py"), "--workbook", $WorkbookPath)
 $argsList += @("--import-workbook", $ImportWorkbookPath)
+if ($DiscoveryStatePath) {
+  $argsList += @("--discovery-state", $DiscoveryStatePath)
+}
 
 & $python @argsList
 if ($LASTEXITCODE -ne 0) {

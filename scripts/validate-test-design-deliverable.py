@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-import csv
+import json
 import posixpath
 import re
 import sys
@@ -26,86 +26,6 @@ EXPECTED_SHEETS = [
     "风险与待确认问题",
     "自动化建议",
     "页面元素覆盖清单",
-]
-
-BATCH_REQUIRED_HEADERS = [
-    "批次ID",
-    "状态",
-    "页面数",
-    "元素总数",
-    "已覆盖元素数",
-    "待确认元素数",
-    "功能用例数",
-    "性能场景数",
-    "异常用例数",
-    "边界用例数",
-    "权限/状态用例数",
-    "数据一致性用例数",
-    "页面遍历完成",
-    "功能用例完成",
-    "性能设计完成",
-    "异常边界权限覆盖完成",
-    "页面元素覆盖完成",
-    "覆盖质量自检",
-    "导入文件路径",
-    "导入文件已生成",
-    "最小标题路径",
-]
-
-BATCH_EXPECTED_HEADERS = [
-    "批次ID",
-    "一级模块",
-    "二级菜单",
-    "三级菜单/页面域",
-    "批次范围",
-    "状态",
-    "页面数",
-    "元素总数",
-    "已覆盖元素数",
-    "待确认元素数",
-    "功能用例数",
-    "性能场景数",
-    "异常用例数",
-    "边界用例数",
-    "权限/状态用例数",
-    "数据一致性用例数",
-    "页面遍历完成",
-    "功能用例完成",
-    "性能设计完成",
-    "异常边界权限覆盖完成",
-    "页面元素覆盖完成",
-    "覆盖质量自检",
-    "未覆盖元素清单路径",
-    "归档路径",
-    "导入文件路径",
-    "导入文件已生成",
-    "最小标题路径",
-    "待确认问题",
-    "下一步动作",
-]
-
-MULTI_LEAF_SEPARATORS = ["、", "，", ",", "；", ";", "／", "/"]
-
-BATCH_NUMBER_FIELDS = [
-    "页面数",
-    "元素总数",
-    "已覆盖元素数",
-    "待确认元素数",
-    "功能用例数",
-    "性能场景数",
-    "异常用例数",
-    "边界用例数",
-    "权限/状态用例数",
-    "数据一致性用例数",
-]
-
-BATCH_PASS_BOOLEAN_FIELDS = [
-    "页面遍历完成",
-    "功能用例完成",
-    "性能设计完成",
-    "异常边界权限覆盖完成",
-    "页面元素覆盖完成",
-    "导入文件已生成",
 ]
 
 IMPORT_HEADERS = [
@@ -238,55 +158,10 @@ FORMAL_MULTILINE_FIELDS = {
 
 RESIDUAL_MARKERS = ["{NAV}", "{NL}", "{Q}", "{E}", "${", "{{", "TODO", "TBD"]
 
-PAGE_DISCOVERY_REQUIRED_HEADERS = [
-    "批次ID",
-    "最小标题路径",
-    "页面/入口",
-    "菜单路径/URL",
-    "元素名称/文案",
-    "元素类型",
-    "交互方式",
-    "适用DFX维度",
-    "适用DFX场景",
-    "选项取值/输入值",
-    "联动/依赖变化",
-    "结果分支/后续状态",
-    "完整点击路径",
-    "是否已生成用例",
-    "关联用例ID",
-    "覆盖状态",
-]
-
-PAGE_DISCOVERY_EXPECTED_HEADERS = [
-    "批次ID",
-    "一级模块",
-    "二级菜单",
-    "三级菜单/页面域",
-    "最小标题路径",
-    "页面/入口",
-    "菜单路径/URL",
-    "发现方式",
-    "角色/权限",
-    "数据状态",
-    "元素名称/文案",
-    "元素类型",
-    "交互方式",
-    "适用DFX维度",
-    "适用DFX场景",
-    "选项取值/输入值",
-    "联动/依赖变化",
-    "结果分支/后续状态",
-    "完整点击路径",
-    "预期/观察行为",
-    "业务依据/规则来源",
-    "测试数据来源",
-    "是否已生成用例",
-    "关联用例ID",
-    "覆盖状态",
-    "未覆盖/待确认原因",
-    "证据路径",
-    "备注",
-]
+DISCOVERY_FINAL_STATUSES = {"已验证", "客观受限", "不适用"}
+DISCOVERY_INTERACTIVE_KINDS = {"交互", "状态变化"}
+DISCOVERY_STATEFUL_CONTROL_MARKERS = ["弹窗", "抽屉", "下拉", "编辑态", "删除确认", "确认框", "浮层"]
+PAGE_EVIDENCE_MARKERS = ["页面实探", "浏览器实探", "computer use", "页面或dom", "dom实探"]
 
 def fail(message: str) -> None:
     raise AssertionError(message)
@@ -1162,10 +1037,6 @@ def normalize(value: str) -> str:
     return re.sub(r"\s+", "", value or "").strip().lower()
 
 
-def normalized_key(*values: str) -> tuple[str, ...]:
-    return tuple(normalize(value) for value in values)
-
-
 def normalize_signature_value(value: str) -> str:
     normalized = re.sub(r"[,，;；、/\\|]+", "|", value or "")
     return re.sub(r"\s+", " ", normalized).strip().lower()
@@ -1327,14 +1198,22 @@ def validate_evidence_status_consistency(
 ) -> None:
     findings = {
         "待实探风险未关闭": [],
+        "待确认理解问题未关闭": [],
         "已覆盖与未解决备注并存": [],
     }
     for index, row in enumerate(risk_rows, start=2):
-        if normalize_signature_value(row.get("状态", "")) == "待实探":
+        status = normalize_signature_value(row.get("状态", ""))
+        if status == "待实探":
             risk_id = row.get("编号", "") or f"第 {index} 行"
             findings["待实探风险未关闭"].append(
                 f"风险与待确认问题 {risk_id} 仍为待实探；请先完成定向补探，"
                 "客观受限时改为需联调、待环境或缺权限并写明原因"
+            )
+        elif status == "待确认":
+            risk_id = row.get("编号", "") or f"第 {index} 行"
+            findings["待确认理解问题未关闭"].append(
+                f"风险与待确认问题 {risk_id} 仍为待确认；请先结束当前轮次等待用户明确回复，"
+                "收到回复后更新状态再继续交付"
             )
 
     for index, row in enumerate(coverage_rows, start=2):
@@ -1353,47 +1232,228 @@ def validate_evidence_status_consistency(
         )
 
 
-def csv_row_dicts(path: Path, required: list[str], label: str) -> list[dict[str, str]]:
+def load_discovery_state(path: Path) -> dict[str, object]:
     if not path.exists():
-        fail(f"{label} not found: {path}")
-    with path.open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.DictReader(fp)
-        headers = reader.fieldnames or []
-        missing = [header for header in required if header not in headers]
-        if missing:
-            fail(f"{label} is missing headers: {missing}")
-        rows: list[dict[str, str]] = []
-        for index, row in enumerate(reader, start=2):
-            if None in row:
-                fail(f"{label} row {index} has more columns than the header; do not append summary rows or shifted CSV data")
-            missing_columns = [key for key, value in row.items() if value is None]
-            if missing_columns:
-                fail(f"{label} row {index} has fewer columns than the header; missing values for: {missing_columns}")
-            cleaned = {key: (value or "").strip() for key, value in row.items()}
-            if any(value for value in cleaned.values()):
-                rows.append(cleaned)
-        return rows
+        fail(f"深探状态文件不存在：{path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"深探状态文件无法读取或不是合法 JSON：{path}；{exc}")
+    if not isinstance(data, dict):
+        fail("深探状态文件根节点必须是 JSON 对象")
+    return data
 
 
-def csv_rows_with_exact_header(path: Path, expected: list[str], label: str) -> list[dict[str, str]]:
-    if not path.exists():
-        fail(f"{label} not found: {path}")
-    with path.open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.reader(fp)
-        try:
-            headers = next(reader)
-        except StopIteration:
-            fail(f"{label} has no header row")
-        if headers != expected:
-            fail(f"{label} header must match the standard template exactly. Expected {expected}, got {headers}")
-        rows: list[dict[str, str]] = []
-        for index, row in enumerate(reader, start=2):
-            if not any(cell.strip() for cell in row):
+def string_list(value: object, label: str, findings: dict[str, list[str]], required: bool = True) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or (required and not value)
+        or any(not isinstance(item, str) or not item.strip() for item in value)
+    ):
+        findings.setdefault("状态结构错误", []).append(f"{label} 必须是非空字符串数组")
+        return []
+    return [item.strip() for item in value]
+
+
+def validate_discovery_state(
+    path: Path,
+    workbook_data: dict[str, object] | None = None,
+) -> dict[str, object]:
+    data = load_discovery_state(path)
+    findings: dict[str, list[str]] = {
+        "状态结构错误": [],
+        "深探未收口": [],
+        "状态证据不足": [],
+        "页面覆盖不同步": [],
+        "事实去向缺失": [],
+        "场景用例映射缺失": [],
+    }
+    if data.get("version") != 1:
+        findings["状态结构错误"].append("version 必须为 1")
+    if not isinstance(data.get("scope"), str) or not str(data.get("scope", "")).strip():
+        findings["状态结构错误"].append("scope 必须填写当前最小模块或页面范围")
+    if data.get("baseline_complete") is not True:
+        findings["深探未收口"].append("baseline_complete 必须为 true")
+    if data.get("closure_rescan_complete") is not True:
+        findings["深探未收口"].append("closure_rescan_complete 必须为 true")
+    if data.get("closure_rescan_new_targets") != 0:
+        findings["深探未收口"].append("closure_rescan_new_targets 必须为 0；发现新目标后应继续深探并再次复扫")
+    questions = data.get("understanding_questions")
+    if not isinstance(questions, list):
+        findings["状态结构错误"].append("understanding_questions 必须是数组")
+    elif questions:
+        findings["深探未收口"].append("仍存在待用户理解确认问题，必须结束当前轮次等待回复")
+
+    targets = data.get("targets")
+    if not isinstance(targets, list) or not targets:
+        findings["状态结构错误"].append("targets 必须包含至少一个深探目标")
+        targets = []
+    target_ids: set[str] = set()
+    target_signatures: dict[tuple[str, ...], str] = {}
+    target_rows: list[dict[str, object]] = []
+    for index, raw_target in enumerate(targets, start=1):
+        label = f"targets[{index}]"
+        if not isinstance(raw_target, dict):
+            findings["状态结构错误"].append(f"{label} 必须是对象")
+            continue
+        target = raw_target
+        target_rows.append(target)
+        target_id = str(target.get("id", "")).strip()
+        if not target_id:
+            findings["状态结构错误"].append(f"{label} 缺少 id")
+        elif target_id in target_ids:
+            findings["状态结构错误"].append(f"目标 ID 重复：{target_id}")
+        else:
+            target_ids.add(target_id)
+        for field in ["page", "element", "kind", "control_type"]:
+            if not isinstance(target.get(field), str) or not str(target.get(field, "")).strip():
+                findings["状态结构错误"].append(f"{label} 缺少 {field}")
+        status = str(target.get("status", "")).strip()
+        if status not in DISCOVERY_FINAL_STATUSES:
+            findings["深探未收口"].append(
+                f"{target_id or label} 状态必须为已验证、客观受限或不适用，当前为：{status or '空'}"
+            )
+            continue
+        if status == "客观受限" and not str(target.get("blocking_reason", "")).strip():
+            findings["状态证据不足"].append(f"{target_id or label} 客观受限但未填写 blocking_reason")
+        if status == "不适用" and not str(target.get("reason", "")).strip():
+            findings["状态证据不足"].append(f"{target_id or label} 不适用但未填写 reason")
+        if status == "已验证":
+            for field in ["evidence_source", "evidence", "observation", "result"]:
+                if not isinstance(target.get(field), str) or not str(target.get(field, "")).strip():
+                    findings["状态证据不足"].append(f"{target_id or label} 已验证但缺少 {field}")
+            if str(target.get("kind", "")).strip() in DISCOVERY_INTERACTIVE_KINDS:
+                if not str(target.get("action", "")).strip():
+                    findings["状态证据不足"].append(f"{target_id or label} 交互目标缺少 action")
+                control_type = str(target.get("control_type", "")).lower()
+                if str(target.get("kind", "")).strip() == "状态变化" or any(
+                    marker.lower() in control_type for marker in DISCOVERY_STATEFUL_CONTROL_MARKERS
+                ):
+                    for field in ["state_before", "state_after", "terminal_action", "recovery"]:
+                        if not str(target.get(field, "")).strip():
+                            findings["状态证据不足"].append(f"{target_id or label} 状态变化目标缺少 {field}")
+
+        target_signature = tuple(
+            normalize(str(target.get(field, "")))
+            for field in ["page", "state_before", "element", "action", "branch_value"]
+        )
+        previous_target = target_signatures.get(target_signature)
+        if previous_target and any(target_signature):
+            findings["状态结构错误"].append(
+                f"语义目标重复：{previous_target} 与 {target_id or label}；请按页面、状态、元素、动作和数据分支去重"
+            )
+        else:
+            target_signatures[target_signature] = target_id or label
+
+    for index, target in enumerate(target_rows, start=1):
+        parent_id = str(target.get("parent_id", "")).strip()
+        if parent_id and parent_id not in target_ids:
+            findings["状态结构错误"].append(f"targets[{index}] parent_id 不存在：{parent_id}")
+        if str(target.get("branch_policy", "")).strip() == "逐项验证":
+            discovered_values = string_list(
+                target.get("discovered_values"),
+                f"{str(target.get('id', '')).strip() or f'targets[{index}]'}.discovered_values",
+                findings,
+            )
+            child_values = {
+                str(child.get("branch_value", "")).strip()
+                for child in target_rows
+                if str(child.get("parent_id", "")).strip() == str(target.get("id", "")).strip()
+                and str(child.get("branch_value", "")).strip()
+            }
+            missing_values = sorted(set(discovered_values) - child_values)
+            if missing_values:
+                findings["深探未收口"].append(
+                    f"{str(target.get('id', '')).strip() or f'targets[{index}]'} 要求逐项验证，仍缺少分支目标：{missing_values}"
+                )
+
+    if workbook_data is not None:
+        scenario_ids = workbook_data["scenario_ids"]
+        generated_scenario_ids = workbook_data["generated_scenario_ids"]
+        case_ids = workbook_data["case_ids"]
+        risk_ids = workbook_data["risk_ids"]
+        performance_ids = workbook_data["performance_ids"]
+        coverage_rows = workbook_data["coverage_rows"]
+        assert isinstance(scenario_ids, set)
+        assert isinstance(generated_scenario_ids, set)
+        assert isinstance(case_ids, set)
+        assert isinstance(risk_ids, set)
+        assert isinstance(performance_ids, set)
+        assert isinstance(coverage_rows, list)
+        target_elements = {
+            (normalize(str(target.get("page", ""))), normalize(str(target.get("element", ""))))
+            for target in target_rows
+            if str(target.get("page", "")).strip() and str(target.get("element", "")).strip()
+        }
+        page_evidence_elements = {
+            (normalize(row.get("页面/入口", "")), normalize(row.get("元素名称/文案", "")))
+            for row in coverage_rows
+            if row.get("页面/入口")
+            and row.get("元素名称/文案")
+            and any(marker in row.get("发现方式", "").lower() for marker in PAGE_EVIDENCE_MARKERS)
+        }
+        missing_targets = sorted(page_evidence_elements - target_elements)
+        if missing_targets:
+            findings["页面覆盖不同步"].append(f"页面实探覆盖清单中的元素没有进入动态队列：{missing_targets[:10]}")
+        unknown_targets = sorted(target_elements - {
+            (normalize(row.get("页面/入口", "")), normalize(row.get("元素名称/文案", "")))
+            for row in coverage_rows
+            if row.get("页面/入口") and row.get("元素名称/文案")
+        })
+        if unknown_targets:
+            findings["页面覆盖不同步"].append(f"动态队列中的元素没有写入页面元素覆盖清单：{unknown_targets[:10]}")
+        referenced_scenarios: set[str] = set()
+        for index, target in enumerate(target_rows, start=1):
+            target_id = str(target.get("id", "")).strip() or f"targets[{index}]"
+            disposition = str(target.get("disposition", "")).strip()
+            reference_ids = string_list(target.get("reference_ids"), f"{target_id}.reference_ids", findings)
+            valid_references: set[str] = set()
+            if disposition == "场景":
+                valid_references = scenario_ids
+                referenced_scenarios.update(reference_ids)
+            elif disposition == "风险":
+                valid_references = risk_ids
+            elif disposition == "性能":
+                valid_references = performance_ids
+            elif disposition == "不适用":
+                if not str(target.get("reason", "")).strip():
+                    findings["事实去向缺失"].append(f"{target_id} 标记不适用但未填写 reason")
                 continue
-            if len(row) != len(headers):
-                fail(f"{label} row {index} column count mismatch: expected {len(headers)}, got {len(row)}")
-            rows.append({header: row[col].strip() for col, header in enumerate(headers)})
-        return rows
+            else:
+                findings["事实去向缺失"].append(f"{target_id} 必须填写 disposition：场景、风险、性能或不适用")
+                continue
+            unknown = sorted(set(reference_ids) - valid_references)
+            if unknown:
+                findings["事实去向缺失"].append(f"{target_id} 引用了不存在的 {disposition} ID：{unknown}")
+
+        mappings = data.get("scenario_case_mapping")
+        if not isinstance(mappings, list):
+            findings["状态结构错误"].append("scenario_case_mapping 必须是数组")
+            mappings = []
+        mapped_scenarios: set[str] = set()
+        for index, raw_mapping in enumerate(mappings, start=1):
+            if not isinstance(raw_mapping, dict):
+                findings["状态结构错误"].append(f"scenario_case_mapping[{index}] 必须是对象")
+                continue
+            scene_id = str(raw_mapping.get("scenario_id", "")).strip()
+            mapped_cases = string_list(raw_mapping.get("case_ids"), f"场景 {scene_id or index} 的 case_ids", findings)
+            if scene_id not in generated_scenario_ids:
+                findings["场景用例映射缺失"].append(f"映射引用了不存在或未标记生成用例的场景：{scene_id or '空'}")
+            else:
+                mapped_scenarios.add(scene_id)
+            unknown_cases = sorted(set(mapped_cases) - case_ids)
+            if unknown_cases:
+                findings["场景用例映射缺失"].append(f"场景 {scene_id} 引用了不存在的用例：{unknown_cases}")
+        missing_mappings = sorted(generated_scenario_ids - mapped_scenarios)
+        if missing_mappings:
+            findings["场景用例映射缺失"].append(f"以下生成场景没有对应功能用例映射：{missing_mappings}")
+        missing_target_scenarios = sorted(referenced_scenarios - generated_scenario_ids)
+        if missing_target_scenarios:
+            findings["事实去向缺失"].append(f"深探事实关联的场景未标记生成用例：{missing_target_scenarios}")
+
+    if any(findings.values()):
+        fail(format_findings("动态深探队列与状态证据门禁未通过：", findings))
+    return data
 
 
 def require_headers(rows: list[list[str]], required: list[str], sheet_name: str) -> None:
@@ -1474,6 +1534,12 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
         FORMAL_ALLOWED_VALUES[("测试场景矩阵", "是否生成用例")],
     )
     validate_atomic_scenario_rows(scenario_rows)
+    scenario_ids = {row.get("场景 ID", "") for row in scenario_rows if row.get("场景 ID", "")}
+    generated_scenario_ids = {
+        row.get("场景 ID", "")
+        for row in scenario_rows
+        if row.get("是否生成用例", "") == "是" and row.get("场景 ID", "")
+    }
     generated_scenario_dfx: set[tuple[str, str]] = set()
     for row in scenario_rows:
         if row.get("是否生成用例", "") == "是":
@@ -1525,6 +1591,9 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
         FORMAL_ALLOWED_VALUES[("性能测试设计", "是否纳入本轮测试")],
     )
     performance_dfx: set[tuple[str, str]] = set()
+    performance_ids = {
+        row.get("性能场景 ID", "") for row in performance_rows if row.get("性能场景 ID", "")
+    }
     for index, row in enumerate(performance_rows, start=2):
         if row.get("是否纳入本轮测试", "") != "否":
             dimensions, scenarios = assert_dfx_mapping(
@@ -1540,6 +1609,7 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
     require_headers(risk_rows_raw, ["编号", "类型", "关联DFX维度", "关联DFX场景", "描述", "影响范围", "建议处理方式"], "风险与待确认问题")
     risk_dfx: set[tuple[str, str]] = set()
     risk_rows = row_dicts(risk_rows_raw, "风险与待确认问题")
+    risk_ids = {row.get("编号", "") for row in risk_rows if row.get("编号", "")}
     for index, row in enumerate(risk_rows, start=2):
         assert_dfx_mapping(row.get("关联DFX维度", ""), row.get("关联DFX场景", ""), f"风险与待确认问题 row {index}")
         risk_dfx.update(dfx_pairs(row.get("关联DFX维度", ""), row.get("关联DFX场景", "")))
@@ -1578,7 +1648,11 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
         fail(f"测试场景矩阵 generated DFX scenarios are not reflected in 功能测试用例/性能测试设计/风险与待确认问题: {missing_landed_dfx[:10]}")
 
     return {
+        "scenario_ids": scenario_ids,
+        "generated_scenario_ids": generated_scenario_ids,
         "case_ids": case_ids,
+        "risk_ids": risk_ids,
+        "performance_ids": performance_ids,
         "case_titles": case_titles,
         "case_function_points": case_function_points,
         "coverage_rows": coverage_rows,
@@ -1587,6 +1661,10 @@ def validate_workbook(workbook: Path, formal_template: Path | None = None) -> di
         "performance_count": len(performance_rows),
         "risk_count": len(risk_rows),
         "coverage_count": len(coverage_rows),
+        "requires_discovery_state": any(
+            any(marker in row.get("发现方式", "").lower() for marker in PAGE_EVIDENCE_MARKERS)
+            for row in coverage_rows
+        ),
     }
 
 
@@ -1677,431 +1755,12 @@ def validate_import_workbook(import_workbook: Path, workbook_data: dict[str, obj
     return len(rows)
 
 
-def positive_int(value: str, field: str, batch_id: str) -> int:
-    if not re.fullmatch(r"\d+", value or ""):
-        fail(f"batch {batch_id} field {field} must be a non-negative integer: {value}")
-    return int(value)
-
-
-def has_multiple_leaf_values(value: str) -> bool:
-    normalized = (value or "").strip()
-    if not normalized or normalized in {"—", "-", "无", "N/A", "NA"}:
-        return False
-    return any(separator in normalized for separator in MULTI_LEAF_SEPARATORS)
-
-
-def is_passed_batch(row: dict[str, str]) -> bool:
-    return row.get("覆盖质量自检", "").strip() == "通过"
-
-
-def is_selection_element(row: dict[str, str]) -> bool:
-    selection_markers = ["下拉", "级联", "选择", "单选", "复选", "枚举", "树选择"]
-    text = " ".join(
-        [
-            row.get("元素类型", ""),
-            row.get("交互方式", ""),
-        ]
-    )
-    return any(marker in text for marker in selection_markers)
-
-
-def is_input_element(row: dict[str, str]) -> bool:
-    non_input_types = ["按钮", "图标", "表格列", "分页", "链接", "开关"]
-    element_type = row.get("元素类型", "")
-    interaction = row.get("交互方式", "")
-    element_name = row.get("元素名称/文案", "")
-    if any(marker in element_type for marker in non_input_types):
-        return False
-    input_markers = ["输入", "文本框", "文本域", "搜索框", "查询框", "数字框", "日期框"]
-    name_markers = ["输入框", "搜索框", "查询框", "文本域", "名称字段", "编码字段", "地址字段", "URL字段", "端口字段", "邮箱字段", "手机号字段"]
-    return any(marker in f"{element_type} {interaction}" for marker in input_markers) or any(
-        marker in element_name for marker in name_markers
-    )
-
-
-def is_create_flow_element(row: dict[str, str]) -> bool:
-    create_markers = ["新增", "创建", "添加", "新建", "保存", "提交", "下一步", "完成", "测试连接"]
-    non_create_types = ["表格列", "分页", "图标"]
-    element_type = row.get("元素类型", "")
-    interaction = row.get("交互方式", "")
-    if any(marker in element_type for marker in non_create_types) or interaction == "查看":
-        return False
-    text = " ".join(
-        [
-            row.get("元素名称/文案", ""),
-            row.get("元素类型", ""),
-            row.get("交互方式", ""),
-        ]
-    )
-    return any(marker in text for marker in create_markers)
-
-
-def has_create_result_branch(value: str) -> bool:
-    result_markers = ["成功", "失败", "校验", "错误", "重复", "为空", "无权限", "停留", "进入", "跳转", "详情", "下一级", "下一步"]
-    return any(marker in (value or "") for marker in result_markers)
-
-
-def validate_batch_granularity(row: dict[str, str], numbers: dict[str, int]) -> None:
-    batch_id = row.get("批次ID", "")
-    leaf_path = row.get("最小标题路径", "").strip()
-    tertiary_value = row.get("三级菜单/页面域", "").strip()
-    if not leaf_path:
-        fail(f"batch {batch_id} must declare 最小标题路径 for leaf-level batching")
-    if has_multiple_leaf_values(leaf_path):
-        fail(f"batch {batch_id} 最小标题路径 must point to exactly one leaf title, not multiple leaves: {leaf_path}")
-    if has_multiple_leaf_values(tertiary_value):
-        fail(f"batch {batch_id} 三级菜单/页面域 must not contain merged leaves: {tertiary_value}")
-    if row.get("拆分/合并原因", "").strip():
-        fail(f"batch {batch_id} must not use 拆分/合并原因 because merge/split is forbidden")
-
-
-def project_root_from_batch_status(batch_status: Path) -> Path:
-    resolved = batch_status.resolve()
-    for parent in [resolved.parent, *resolved.parents]:
-        if (parent / "docs" / "test-design").exists():
-            return parent
-    return resolved.parent
-
-
-def resolve_project_path(raw_path: str, batch_status: Path) -> Path:
-    candidate = Path(raw_path)
-    if candidate.is_absolute():
-        return candidate
-    project_root = project_root_from_batch_status(batch_status)
-    root_candidate = project_root / candidate
-    if root_candidate.exists():
-        return root_candidate
-    return batch_status.resolve().parent / candidate
-
-
-def validate_batch_status(path: Path) -> list[dict[str, str]]:
-    if not path.exists():
-        fail(f"Batch status file not found: {path}")
-    rows = [
-        row
-        for row in csv_rows_with_exact_header(path, BATCH_EXPECTED_HEADERS, "batch-status.csv")
-        if (row.get("批次ID") or "").strip()
-    ]
-    if not rows:
-        fail("batch-status.csv must contain at least one batch row")
-
-    completed_statuses = {"已完成", "完成"}
-    passed_leaf_paths: dict[str, str] = {}
-    for row in rows:
-        batch_id = row["批次ID"]
-        numbers = {field: positive_int(row.get(field, ""), field, batch_id) for field in BATCH_NUMBER_FIELDS}
-        if numbers["已覆盖元素数"] > numbers["元素总数"]:
-            fail(f"batch {batch_id} 已覆盖元素数 cannot exceed 元素总数")
-        if numbers["待确认元素数"] > numbers["元素总数"]:
-            fail(f"batch {batch_id} 待确认元素数 cannot exceed 元素总数")
-        status = row.get("状态", "")
-        self_check = row.get("覆盖质量自检", "")
-        if status in completed_statuses and self_check != "通过":
-            fail(f"batch {batch_id} cannot be marked {status} unless 覆盖质量自检 is 通过")
-        if self_check == "通过" and status not in completed_statuses:
-            fail(f"batch {batch_id} cannot pass 覆盖质量自检 unless 状态 is 已完成")
-        if is_passed_batch(row):
-            validate_batch_granularity(row, numbers)
-            leaf_path = row.get("最小标题路径", "").strip()
-            if leaf_path in passed_leaf_paths:
-                fail(
-                    f"batch {batch_id} duplicates 最小标题路径 already covered by {passed_leaf_paths[leaf_path]}: {leaf_path}"
-                )
-            passed_leaf_paths[leaf_path] = batch_id
-            for field in ["页面数", "元素总数", "已覆盖元素数", "功能用例数", "性能场景数"]:
-                if numbers[field] <= 0:
-                    fail(f"batch {batch_id} cannot pass 覆盖质量自检 with {field}=0")
-            for field in BATCH_PASS_BOOLEAN_FIELDS:
-                if row.get(field) != "是":
-                    fail(f"batch {batch_id} cannot pass 覆盖质量自检 when {field} is not 是")
-            if not row.get("导入文件路径"):
-                fail(f"batch {batch_id} cannot pass 覆盖质量自检 without 导入文件路径")
-    return rows
-
-
-def validate_batch_file_consistency(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
-    project_root = project_root_from_batch_status(batch_status)
-    current_dirs = [project_root / "docs" / "test-design" / "deliverables"]
-    completed_statuses = {"已完成", "完成"}
-    for row in batch_rows:
-        batch_id = row.get("批次ID", "")
-        if not batch_id:
-            continue
-        status = row.get("状态", "")
-        if status in completed_statuses:
-            continue
-        for directory in current_dirs:
-            if not directory.exists():
-                continue
-            matches = list(directory.glob(f"*{batch_id}*.xlsx"))
-            if matches:
-                fail(
-                    f"batch {batch_id} has generated a deliverable workbook but batch-status.csv status is {status}: {matches[0]}"
-                )
-
-
-def validate_batch_artifacts_location(batch_status: Path) -> None:
-    batch_runs_dir = batch_status.resolve().parent.parent
-    root_artifacts = batch_runs_dir / "artifacts"
-    if root_artifacts.exists() and any(root_artifacts.iterdir()):
-        fail(
-            f"Batch artifacts must not be stored in a shared artifacts directory: {root_artifacts}"
-        )
-    scripts_dir = batch_status.resolve().parent / "artifacts" / "scripts"
-    pycache_dir = scripts_dir / "__pycache__"
-    if pycache_dir.exists():
-        fail(f"Batch artifacts must not keep Python __pycache__ directories. Remove before delivery: {pycache_dir}")
-
-
-def validate_batch_run_directory_from_page_discovery(page_discovery: Path) -> Path:
-    run_dir = page_discovery.resolve().parent
-    required_entries = ["batch-plan.md", "batch-status.csv", "batch-review.md", "page-discovery.csv", "artifacts"]
-    missing = [name for name in required_entries if not (run_dir / name).exists()]
-    if missing:
-        fail(
-            "A batch run with page-discovery.csv must keep the full standard ledger "
-            f"beside it. Missing {missing} in {run_dir}. "
-            "Create a complete batch ledger before page discovery."
-        )
-    batch_runs_dir = run_dir.parent
-    root_artifacts = batch_runs_dir / "artifacts"
-    if root_artifacts.exists() and any(root_artifacts.iterdir()):
-        fail(
-            f"Batch artifacts must not be stored in a shared artifacts directory: {root_artifacts}"
-        )
-    scripts_dir = run_dir / "artifacts" / "scripts"
-    pycache_dir = scripts_dir / "__pycache__"
-    if pycache_dir.exists():
-        fail(f"Batch artifacts must not keep Python __pycache__ directories. Remove before delivery: {pycache_dir}")
-    stale_workbooks = sorted((run_dir / "artifacts").rglob("*.xlsx"))
-    if stale_workbooks:
-        fail(
-            "Batch artifacts must not keep generated workbook copies after finalize-deliverables. "
-            f"Use the deliverables directory as the workbook destination: {stale_workbooks[0]}"
-        )
-    return run_dir / "batch-status.csv"
-
-
-def is_relative_to_path(path: Path, parent: Path) -> bool:
-    try:
-        path.resolve().relative_to(parent.resolve())
-        return True
-    except ValueError:
-        return False
-
-
-def validate_batch_import_workbooks(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
-    for row in batch_rows:
-        if not is_passed_batch(row):
-            continue
-        batch_id = row.get("批次ID", "")
-        archive_raw = row.get("归档路径", "")
-        import_raw = row.get("导入文件路径", "")
-        if not archive_raw:
-            fail(f"batch {batch_id} cannot pass 覆盖质量自检 without 归档路径")
-        if not import_raw:
-            fail(f"batch {batch_id} cannot pass 覆盖质量自检 without 导入文件路径")
-        archive_path = resolve_project_path(archive_raw, batch_status)
-        import_path = resolve_project_path(import_raw, batch_status)
-        if not archive_path.exists():
-            fail(f"batch {batch_id} 归档路径 does not exist: {archive_raw}")
-        if not import_path.exists():
-            fail(f"batch {batch_id} 导入文件路径 does not exist: {import_raw}")
-        project_root = project_root_from_batch_status(batch_status)
-        modules_dir = project_root / "docs" / "test-design" / "deliverables"
-        imports_dir = project_root / "docs" / "test-design" / "deliverables"
-        if not is_relative_to_path(archive_path, modules_dir):
-            fail(
-                f"batch {batch_id} 归档路径 must point to the deliverables directory: {archive_raw}"
-            )
-        if not is_relative_to_path(import_path, imports_dir):
-            fail(
-                f"batch {batch_id} 导入文件路径 must point to the deliverables directory: {import_raw}"
-            )
-        archive_data = validate_workbook(archive_path)
-        validate_import_workbook(import_path, archive_data)
-
-
-def validate_batch_review(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
-    review_path = batch_status.resolve().parent / "batch-review.md"
-    if not review_path.exists():
-        fail(f"batch-review.md not found beside batch-status.csv: {review_path}")
-    text = review_path.read_text(encoding="utf-8-sig")
-    completed_rows = [row for row in batch_rows if is_passed_batch(row)]
-    for row in completed_rows:
-        batch_id = row.get("批次ID", "")
-        if batch_id and batch_id not in text:
-            fail(f"batch-review.md must include completed batch: {batch_id}")
-        stale_pattern = rf"\|\s*{re.escape(batch_id)}\s*\|\s*待开始\s*\|\s*0\s*\|\s*0\s*\|"
-        if re.search(stale_pattern, text):
-            fail(f"batch-review.md still contains stale template row for completed batch: {batch_id}")
-        for field in ["归档路径", "导入文件路径"]:
-            value = row.get(field, "")
-            if value and value not in text:
-                fail(f"batch-review.md must reference {field} for completed batch {batch_id}: {value}")
-
-
-def validate_batch_plan(batch_status: Path, batch_rows: list[dict[str, str]]) -> None:
-    plan_path = batch_status.resolve().parent / "batch-plan.md"
-    if not plan_path.exists():
-        fail(f"batch-plan.md not found beside batch-status.csv: {plan_path}")
-    text = plan_path.read_text(encoding="utf-8-sig")
-    completed_rows = [row for row in batch_rows if is_passed_batch(row)]
-    for row in completed_rows:
-        batch_id = row.get("批次ID", "")
-        leaf_path = row.get("最小标题路径", "")
-        if batch_id and batch_id not in text:
-            fail(f"batch-plan.md must include completed batch ID: {batch_id}")
-        if leaf_path and leaf_path not in text:
-            fail(f"batch-plan.md must include completed batch 最小标题路径: {leaf_path}")
-        stale_status_pattern = rf"\|\s*{re.escape(batch_id)}\s*\|[^\n|]*\|[^\n|]*\|\s*(执行中|待开始)\s*\|"
-        if batch_id and re.search(stale_status_pattern, text):
-            fail(f"batch-plan.md still marks completed batch {batch_id} as 执行中/待开始")
-
-    page_section = re.search(r"##\s*页面清单(?P<body>.*?)(?:\n##\s|\Z)", text, re.S)
-    if page_section and len(completed_rows) == 1:
-        page_lines = [
-            line
-            for line in page_section.group("body").splitlines()
-            if re.match(r"^\s*\d+\.\s+\S+", line)
-        ]
-        declared_pages = positive_int(completed_rows[0].get("页面数", ""), "页面数", completed_rows[0].get("批次ID", ""))
-        if page_lines and len(page_lines) != declared_pages:
-            fail(
-                f"batch-plan.md 页面清单 count must match batch-status.csv 页面数 for completed single batch: "
-                f"{len(page_lines)} != {declared_pages}"
-            )
-
-
-def validate_page_discovery_sync(
-    workbook_data: dict[str, object],
-    page_discovery: Path,
-    batch_rows: list[dict[str, str]] | None = None,
-) -> None:
-    discovery_rows = csv_rows_with_exact_header(page_discovery, PAGE_DISCOVERY_EXPECTED_HEADERS, "page-discovery.csv")
-    missing_discovery_required = [header for header in PAGE_DISCOVERY_REQUIRED_HEADERS if header not in PAGE_DISCOVERY_EXPECTED_HEADERS]
-    if missing_discovery_required:
-        fail(f"Internal validator configuration error, missing page discovery required headers: {missing_discovery_required}")
-    if not discovery_rows:
-        fail("page-discovery.csv must contain at least one discovery row")
-
-    coverage_rows = workbook_data["coverage_rows"]
-    case_ids = workbook_data["case_ids"]
-    assert isinstance(coverage_rows, list)
-    assert isinstance(case_ids, set)
-
-    workbook_elements = {
-        normalized_key(row.get("页面/入口", ""), row.get("元素名称/文案", ""))
-        for row in coverage_rows
-        if row.get("页面/入口") and row.get("元素名称/文案")
-    }
-    passed_batches = {
-        row.get("批次ID", ""): row.get("最小标题路径", "").strip()
-        for row in (batch_rows or [])
-        if is_passed_batch(row)
-    }
-    passed_batch_numbers = {
-        row.get("批次ID", ""): {
-            field: positive_int(row.get(field, ""), field, row.get("批次ID", ""))
-            for field in ["元素总数", "已覆盖元素数"]
-        }
-        for row in (batch_rows or [])
-        if is_passed_batch(row)
-    }
-    discovery_count_by_batch: dict[str, int] = {}
-    generated_count_by_batch: dict[str, int] = {}
-
-    for index, row in enumerate(discovery_rows, start=2):
-        batch_id = row.get("批次ID", "")
-        leaf_path = row.get("最小标题路径", "").strip()
-        if not leaf_path:
-            fail(f"page-discovery.csv row {index} must include 最小标题路径")
-        if passed_batches:
-            expected_leaf = passed_batches.get(batch_id)
-            if not expected_leaf:
-                fail(f"page-discovery.csv row {index} references unknown or unfinished batch: {batch_id}")
-            if leaf_path != expected_leaf:
-                fail(
-                    f"page-discovery.csv row {index} 最小标题路径 must match batch-status.csv for {batch_id}: {leaf_path} != {expected_leaf}"
-                )
-        page = row.get("页面/入口", "")
-        element = row.get("元素名称/文案", "")
-        if not page or not element:
-            fail(f"page-discovery.csv row {index} must include 页面/入口 and 元素名称/文案")
-        discovery_count_by_batch[batch_id] = discovery_count_by_batch.get(batch_id, 0) + 1
-        if row.get("是否已生成用例", "") == "是":
-            generated_count_by_batch[batch_id] = generated_count_by_batch.get(batch_id, 0) + 1
-            assert_dfx_mapping(
-                row.get("适用DFX维度", ""),
-                row.get("适用DFX场景", ""),
-                f"page-discovery.csv row {index}",
-            )
-        if is_selection_element(row):
-            if not row.get("选项取值/输入值"):
-                fail(f"page-discovery.csv row {index} selection element must record selected option values: {page} / {element}")
-            if row.get("是否已生成用例", "") == "是" and not row.get("联动/依赖变化"):
-                fail(f"page-discovery.csv row {index} generated selection case must record 联动/依赖变化: {page} / {element}")
-            if row.get("是否已生成用例", "") == "是" and not row.get("结果分支/后续状态"):
-                fail(f"page-discovery.csv row {index} generated selection case must record 结果分支/后续状态: {page} / {element}")
-        if is_input_element(row):
-            if not row.get("选项取值/输入值"):
-                fail(f"page-discovery.csv row {index} input element must record actual input values: {page} / {element}")
-            if row.get("是否已生成用例", "") == "是":
-                if not row.get("预期/观察行为"):
-                    fail(f"page-discovery.csv row {index} generated input case must record 预期/观察行为: {page} / {element}")
-                if not row.get("结果分支/后续状态"):
-                    fail(f"page-discovery.csv row {index} generated input case must record 结果分支/后续状态: {page} / {element}")
-        if is_create_flow_element(row) and row.get("是否已生成用例", "") == "是":
-            if not row.get("选项取值/输入值"):
-                fail(f"page-discovery.csv row {index} generated create flow must record actual submitted data: {page} / {element}")
-            if not row.get("预期/观察行为"):
-                fail(f"page-discovery.csv row {index} generated create flow must record success/failure observation: {page} / {element}")
-            result_branch = row.get("结果分支/后续状态", "")
-            if not result_branch:
-                fail(f"page-discovery.csv row {index} generated create flow must record next page or failure state: {page} / {element}")
-            if not has_create_result_branch(result_branch):
-                fail(f"page-discovery.csv row {index} generated create flow result must mention success/failure/next state: {page} / {element}")
-        if normalized_key(page, element) not in workbook_elements:
-            fail(f"page-discovery.csv row {index} element is missing from workbook 页面元素覆盖清单: {page} / {element}")
-        generated = row.get("是否已生成用例", "")
-        linked_ids = parse_ids(row.get("关联用例ID", ""))
-        if generated == "是":
-            if not linked_ids:
-                fail(f"page-discovery.csv row {index} is generated but missing 关联用例ID")
-            unknown_workbook = sorted(linked_ids - case_ids)
-            if unknown_workbook:
-                fail(f"page-discovery.csv row {index} references case IDs missing from workbook: {unknown_workbook}")
-    discovery_elements = {
-        normalized_key(row.get("页面/入口", ""), row.get("元素名称/文案", ""))
-        for row in discovery_rows
-        if row.get("页面/入口") and row.get("元素名称/文案")
-    }
-    missing_discovery_elements = sorted(workbook_elements - discovery_elements)
-    if missing_discovery_elements:
-        fail(f"Workbook 页面元素覆盖清单 elements missing from page-discovery.csv: {missing_discovery_elements[:10]}")
-    for batch_id, numbers in passed_batch_numbers.items():
-        discovered = discovery_count_by_batch.get(batch_id, 0)
-        generated = generated_count_by_batch.get(batch_id, 0)
-        if discovered < numbers["元素总数"]:
-            fail(
-                f"page-discovery.csv has fewer element-level rows for {batch_id} than batch-status.csv 元素总数: {discovered} < {numbers['元素总数']}"
-            )
-        if generated < numbers["已覆盖元素数"]:
-            fail(
-                f"page-discovery.csv has fewer generated coverage rows for {batch_id} than batch-status.csv 已覆盖元素数: {generated} < {numbers['已覆盖元素数']}"
-            )
-
-
-def default_page_discovery_path(batch_status: Path | None) -> Path | None:
-    if not batch_status:
-        return None
-    return batch_status.resolve().parent / "page-discovery.csv"
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate generated test design deliverable workbook.")
-    parser.add_argument("--workbook", required=True, type=Path)
-    parser.add_argument("--import-workbook", required=True, type=Path)
+    parser.add_argument("--workbook", type=Path)
+    parser.add_argument("--import-workbook", type=Path)
+    parser.add_argument("--discovery-state", type=Path)
+    parser.add_argument("--discovery-only", action="store_true")
     parser.add_argument(
         "--formal-template",
         type=Path,
@@ -2109,7 +1768,20 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.discovery_only:
+        if not args.discovery_state:
+            parser.error("--discovery-only requires --discovery-state")
+        validate_discovery_state(args.discovery_state)
+        print("OK: 动态深探队列已收口，状态证据准出检查通过。")
+        return 0
+    if not args.workbook or not args.import_workbook:
+        parser.error("正式交付校验必须同时提供 --workbook 和 --import-workbook")
     workbook_data = validate_workbook(args.workbook, args.formal_template)
+    requires_discovery_state = bool(workbook_data.get("requires_discovery_state"))
+    if requires_discovery_state and not args.discovery_state:
+        fail("页面元素覆盖清单声明了页面/浏览器/DOM 实探证据，必须提供 --discovery-state 通过深探准出门禁")
+    if args.discovery_state:
+        validate_discovery_state(args.discovery_state, workbook_data)
     import_count = validate_import_workbook(args.import_workbook, workbook_data)
     print(
         "OK: test design deliverable quality checks passed. "

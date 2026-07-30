@@ -46,6 +46,8 @@ python scripts/test_design_excel_tools.py complete-deliverables `
   --module-path "一级模块>二级菜单>三级菜单"
 ```
 
+页面任务在进入 DFX 前先运行 `validate-discovery`，并在上述命令追加 `--discovery-state <discovery-state.json>`；非页面任务不需要该参数。
+
 `generate-import` 仅用于维护或重新转换已有正式测试设计，不能替代包含正式测试设计和导入文件的一站式完整交付。
 
 交付文件名只使用菜单/模块路径，例如 `一级模块_二级菜单_三级菜单_测试设计.xlsx` 和 `一级模块_二级菜单_三级菜单_导入用例.xlsx`，不拼运行文件夹名、批次目录名或产品名。
@@ -68,7 +70,7 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 交付件校验：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx>
+powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx> [-DiscoveryStatePath <discovery-state.json>]
 ```
 
 

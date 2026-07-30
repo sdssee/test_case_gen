@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import importlib.util
+import json
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -145,6 +148,76 @@ def assert_contains(path: Path, markers: list[str]) -> None:
             fail(f"{path} 缺少必要规则: {marker}")
 
 
+def validate_discovery_gate(root: Path) -> None:
+    validator_path = root / "scripts" / "validate-test-design-deliverable.py"
+    spec = importlib.util.spec_from_file_location("test_design_deliverable_validator", validator_path)
+    if spec is None or spec.loader is None:
+        fail("无法加载交付校验器进行深探门禁自检")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    valid_state = {
+        "version": 1,
+        "scope": "一级菜单-二级菜单-目标页面",
+        "baseline_complete": True,
+        "closure_rescan_complete": True,
+        "closure_rescan_new_targets": 0,
+        "understanding_questions": [],
+        "targets": [
+            {
+                "id": "TARGET-001",
+                "page": "目标页面",
+                "element": "创建按钮",
+                "kind": "交互",
+                "control_type": "按钮",
+                "status": "已验证",
+                "action": "点击创建按钮",
+                "evidence_source": "浏览器实探",
+                "evidence": "创建区域出现",
+                "observation": "页面展示创建区域",
+                "result": "进入创建状态",
+                "disposition": "场景",
+                "reference_ids": ["SCN-001"],
+            }
+        ],
+        "scenario_case_mapping": [{"scenario_id": "SCN-001", "case_ids": ["TC-001"]}],
+    }
+    workbook_data = {
+        "scenario_ids": {"SCN-001"},
+        "generated_scenario_ids": {"SCN-001"},
+        "case_ids": {"TC-001"},
+        "risk_ids": set(),
+        "performance_ids": set(),
+        "coverage_rows": [
+            {"页面/入口": "目标页面", "元素名称/文案": "创建按钮", "发现方式": "浏览器实探"}
+        ],
+    }
+    with tempfile.TemporaryDirectory(prefix="test-design-discovery-") as temporary_dir:
+        state_path = Path(temporary_dir) / "discovery-state.json"
+        state_path.write_text(json.dumps(valid_state, ensure_ascii=False), encoding="utf-8")
+        module.validate_discovery_state(state_path, workbook_data)
+        invalid_state = dict(valid_state)
+        invalid_state["understanding_questions"] = ["是否允许重名"]
+        invalid_state["targets"] = [
+            dict(
+                valid_state["targets"][0],
+                status="待执行",
+                branch_policy="逐项验证",
+                discovered_values=["10", "20"],
+            )
+        ]
+        invalid_state["scenario_case_mapping"] = []
+        state_path.write_text(json.dumps(invalid_state, ensure_ascii=False), encoding="utf-8")
+        try:
+            module.validate_discovery_state(state_path, workbook_data)
+        except AssertionError as exc:
+            message = str(exc)
+            for marker in ["仍存在待用户理解确认问题", "状态必须为已验证", "仍缺少分支目标", "没有对应功能用例映射"]:
+                if marker not in message:
+                    fail(f"深探门禁没有一次汇总必要问题：{marker}")
+        else:
+            fail("深探门禁错误地放行了未收口状态")
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     for relative in REQUIRED_FILES:
@@ -217,6 +290,7 @@ def main() -> int:
             "分页区域不能只登记为一个笼统的“分页组件”",
             "数据不足只影响实探证据等级，不减少分页场景和用例",
             "每个实际可选页容量",
+            "branch_policy=逐项验证",
             "分页专项准出必须同时满足",
         ],
     )
@@ -245,7 +319,8 @@ def main() -> int:
     assert_contains(
         root / "scripts" / "validate-test-design-deliverable.py",
         [
-            '"--import-workbook", required=True',
+            "--discovery-state",
+            "validate_discovery_state",
             "validate_atomic_scenario_rows",
             "warn_case_merge_candidates",
             "validate_evidence_status_consistency",
@@ -267,6 +342,7 @@ def main() -> int:
             '"--formal-template"',
         ],
     )
+    validate_discovery_gate(root)
     assert_contains(
         root / "docs" / "test-design" / "rules" / "excel-deliverable.md",
         [

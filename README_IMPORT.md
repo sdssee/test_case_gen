@@ -52,7 +52,7 @@ your-project/
 如果涉及页面、截图、原型或可访问系统，请按 docs/test-design/rules/page-discovery.md 做页面实探。
 如果范围超过一个最小标题，请按 docs/test-design/rules/batch-run.md 分批执行。
 每次正式交付都必须复制 docs/test-design/测试用例模板.xlsx 生成独立测试系统导入文件，不要修改原模板，也不需要询问是否生成。
-生成后请优先运行 scripts/test_design_excel_tools.py complete-deliverables 一站式生成导入文件、同步交付件并校验。
+页面任务先用 validate-discovery 完成深探准出，生成后运行 scripts/test_design_excel_tools.py complete-deliverables 并传入同一 discovery-state.json，一站式生成导入文件、同步交付件并校验。
 ```
 
 ## 测试系统导入
@@ -69,6 +69,8 @@ python scripts/test_design_excel_tools.py complete-deliverables `
   --module-path "一级模块>二级菜单>三级菜单"
 ```
 
+页面任务追加 `--discovery-state <discovery-state.json>`；非页面任务不需要该参数。
+
 `generate-import` 仅用于维护或重新转换已有正式测试设计，不作为完整交付流程。
 
 导入文件生成后，用 `-ImportWorkbookPath <导入文件.xlsx>` 追加校验。
@@ -84,5 +86,5 @@ powershell -ExecutionPolicy Bypass -File scripts/validate-test-design.ps1
 交付件校验：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx>
+powershell -ExecutionPolicy Bypass -File scripts/validate-test-design-deliverable.ps1 -WorkbookPath <测试设计.xlsx> -ImportWorkbookPath <导入文件.xlsx> [-DiscoveryStatePath <discovery-state.json>]
 ```

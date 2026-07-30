@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import math
 import os
 import shutil
@@ -330,11 +329,6 @@ def deliverable_names(module_path: str, product_name: str | None = None) -> tupl
     return stem, f"{stem}_测试设计.xlsx", f"{stem}_导入用例.xlsx"
 
 
-def module_leaf_name(module_path: str) -> str:
-    parts = [part.strip() for part in module_path.replace("/", ">").split(">") if part.strip()]
-    return parts[-1] if parts else module_path
-
-
 def clear_data_rows(ws, start_row: int = 2) -> None:
     if ws.max_row > start_row:
         ws.delete_rows(start_row + 1, ws.max_row - start_row)
@@ -358,10 +352,6 @@ def remove_worksheet_tables_and_refresh_filter(ws) -> None:
 def remove_workbook_tables_and_refresh_filters(wb) -> None:
     for ws in wb.worksheets:
         remove_worksheet_tables_and_refresh_filter(ws)
-
-
-def relative_project_path(project_root: Path, path: Path) -> str:
-    return path.resolve().relative_to(project_root.resolve()).as_posix()
 
 
 def safe_filename(value: str) -> str:
@@ -390,185 +380,6 @@ def atomic_copy_workbook(source: Path, target: Path) -> None:
             temporary.unlink()
 
 
-def update_batch_status_paths(batch_status: Path, batch_id: str | None, archive_rel: str, import_rel: str) -> list[dict[str, str]]:
-    if not batch_status:
-        return []
-    with batch_status.open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.DictReader(fp)
-        headers = reader.fieldnames or []
-        rows = list(reader)
-    if not headers:
-        raise ValueError(f"batch-status.csv has no header row: {batch_status}")
-    required = {"批次ID", "归档路径", "导入文件路径", "导入文件已生成"}
-    missing = sorted(required - set(headers))
-    if missing:
-        raise ValueError(f"batch-status.csv is missing required finalize columns: {missing}")
-    target_rows = [row for row in rows if not batch_id or row.get("批次ID") == batch_id]
-    if not target_rows:
-        raise ValueError(f"No matching batch row found for batch_id={batch_id!r}")
-    changes: list[dict[str, str]] = []
-    for row in target_rows:
-        changes.append(
-            {
-                "批次ID": row.get("批次ID", ""),
-                "旧归档路径": row.get("归档路径", ""),
-                "旧导入文件路径": row.get("导入文件路径", ""),
-                "归档路径": archive_rel,
-                "导入文件路径": import_rel,
-            }
-        )
-        row["归档路径"] = archive_rel
-        row["导入文件路径"] = import_rel
-        row["导入文件已生成"] = "是"
-    with batch_status.open("w", encoding="utf-8-sig", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=headers)
-        writer.writeheader()
-        writer.writerows(rows)
-    return changes
-
-
-def sync_batch_markdown_paths(batch_status: Path, changes: list[dict[str, str]]) -> None:
-    for markdown_name in ["batch-plan.md", "batch-review.md"]:
-        markdown_path = batch_status.resolve().parent / markdown_name
-        if not markdown_path.exists():
-            continue
-        text = markdown_path.read_text(encoding="utf-8-sig")
-        for change in changes:
-            for old_key, new_key in [("旧归档路径", "归档路径"), ("旧导入文件路径", "导入文件路径")]:
-                old_value = change.get(old_key, "")
-                new_value = change.get(new_key, "")
-                if old_value and new_value:
-                    text = text.replace(old_value, new_value)
-            if change["归档路径"] not in text or change["导入文件路径"] not in text:
-                text += (
-                    "\n\n## 交付收口路径\n"
-                    f"- {change['批次ID']} 归档路径：{change['归档路径']}\n"
-                    f"- {change['批次ID']} 导入文件路径：{change['导入文件路径']}\n"
-                )
-        markdown_path.write_text(text, encoding="utf-8")
-
-
-def cleanup_batch_artifacts(batch_status: Path | None) -> None:
-    if not batch_status:
-        return
-    pycache = batch_status.resolve().parent / "artifacts" / "scripts" / "__pycache__"
-    if pycache.exists():
-        shutil.rmtree(pycache)
-
-
-def copy_template_if_missing(source: Path, target: Path) -> bool:
-    if target.exists():
-        return False
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
-    return True
-
-
-def write_single_csv_row(path: Path, values: dict[str, str]) -> None:
-    with path.open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.reader(fp)
-        headers = next(reader, [])
-    if not headers:
-        raise ValueError(f"CSV template has no header row: {path}")
-    row = {header: "" for header in headers}
-    for key, value in values.items():
-        if key in row:
-            row[key] = value
-    with path.open("w", encoding="utf-8-sig", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=headers)
-        writer.writeheader()
-        writer.writerow(row)
-
-
-def init_batch_run(project_root: Path, run_id: str, module_path: str, batch_id: str, product_name: str | None = None) -> Path:
-    raise RuntimeError("Legacy batch ledger initialization is no longer supported.")
-    required_templates = {
-        "batch-plan.md": templates_dir / "batch-plan-template.md",
-        "batch-status.csv": templates_dir / "batch-status-template.csv",
-        "batch-review.md": templates_dir / "batch-review-template.md",
-        "page-discovery.csv": templates_dir / "page-discovery-template.csv",
-    }
-    missing = [str(path) for path in required_templates.values() if not path.exists()]
-    if missing:
-        raise ValueError(f"Batch template files are missing: {missing}")
-
-    run_dir.mkdir(parents=True, exist_ok=True)
-    artifacts_dir = run_dir / "artifacts"
-    scripts_dir = artifacts_dir / "scripts"
-    scripts_dir.mkdir(parents=True, exist_ok=True)
-
-    for target_name, template_path in required_templates.items():
-        copy_template_if_missing(template_path, run_dir / target_name)
-
-    product, modules = split_module_parts(module_path, product_name)
-    level1 = modules[0] if len(modules) > 0 else ""
-    level2 = modules[1] if len(modules) > 1 else ""
-    level3 = modules[2] if len(modules) > 2 else ""
-    leaf_path = ">".join(modules) or module_path
-
-    write_single_csv_row(
-        run_dir / "batch-status.csv",
-        {
-            "批次ID": batch_id,
-            "一级模块": level1,
-            "二级菜单": level2,
-            "三级菜单/页面域": level3,
-            "批次范围": leaf_path,
-            "状态": "待开始",
-            "页面数": "0",
-            "元素总数": "0",
-            "已覆盖元素数": "0",
-            "待确认元素数": "0",
-            "功能用例数": "0",
-            "性能场景数": "0",
-            "异常用例数": "0",
-            "边界用例数": "0",
-            "权限/状态用例数": "0",
-            "数据一致性用例数": "0",
-            "页面遍历完成": "否",
-            "功能用例完成": "否",
-            "性能设计完成": "否",
-            "异常边界权限覆盖完成": "否",
-            "页面元素覆盖完成": "否",
-            "覆盖质量自检": "未通过",
-            "导入文件已生成": "否",
-            "最小标题路径": leaf_path,
-            "下一步动作": "开始页面实探并补充 page-discovery.csv",
-        },
-    )
-    write_single_csv_row(
-        run_dir / "page-discovery.csv",
-        {
-            "批次ID": batch_id,
-            "一级模块": level1,
-            "二级菜单": level2,
-            "三级菜单/页面域": level3,
-            "最小标题路径": leaf_path,
-            "菜单路径/URL": leaf_path,
-            "发现方式": "浏览器实探/页面资料",
-            "是否已生成用例": "否",
-            "覆盖状态": "待确认",
-            "备注": "按当前批次页面实探结果补充页面、元素、取值、联动和关联用例",
-        },
-    )
-
-    init_note = (
-        "\n\n## 批次初始化\n"
-        f"- 产品/系统：{product}\n"
-        f"- 模块路径：{leaf_path}\n"
-        f"- 批次ID：{batch_id}\n"
-        "- 执行要求：先补全 page-discovery.csv，再生成测试设计、导入文件和 batch-status.csv 覆盖数据。\n"
-    )
-    for markdown_name in ["batch-plan.md", "batch-review.md"]:
-        markdown_path = run_dir / markdown_name
-        text = markdown_path.read_text(encoding="utf-8-sig")
-        if "## 批次初始化" not in text:
-            markdown_path.write_text(text.rstrip() + init_note, encoding="utf-8")
-
-    print(f"Initialized batch run: {run_dir}")
-    return run_dir
-
-
 def split_module_parts(module_path: str, product_name: str | None = None) -> tuple[str, list[str]]:
     if product_name:
         return product_name, canonical_module_parts(module_path, product_name)
@@ -584,6 +395,7 @@ def finalize_deliverables(
     import_workbook: Path,
     module_path: str,
     product_name: str | None = None,
+    discovery_state: Path | None = None,
 ) -> None:
     project_root = project_root.resolve()
     _, formal_name, import_name = deliverable_names(module_path, product_name)
@@ -592,16 +404,19 @@ def finalize_deliverables(
     deliverable_import = project_root / "docs" / "test-design" / "deliverables" / import_name
 
     script_dir = Path(__file__).resolve().parent
+    validator_args = [
+        "--workbook",
+        str(formal_workbook),
+        "--import-workbook",
+        str(import_workbook),
+        "--formal-template",
+        str(project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"),
+    ]
+    if discovery_state:
+        validator_args.extend(["--discovery-state", str(discovery_state)])
     run_python_script(
         script_dir / "validate-test-design-deliverable.py",
-        [
-            "--workbook",
-            str(formal_workbook),
-            "--import-workbook",
-            str(import_workbook),
-            "--formal-template",
-            str(project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"),
-        ],
+        validator_args,
     )
     atomic_copy_workbook(formal_workbook, deliverable_formal)
     atomic_copy_workbook(import_workbook, deliverable_import)
@@ -620,6 +435,7 @@ def complete_deliverables(
     module_path: str,
     import_workbook: Path | None = None,
     product_name: str | None = None,
+    discovery_state: Path | None = None,
 ) -> None:
     project_root = project_root.resolve()
     script_dir = Path(__file__).resolve().parent
@@ -650,6 +466,8 @@ def complete_deliverables(
             "--formal-template",
             str(formal_template),
         ]
+        if discovery_state:
+            validator_args.extend(["--discovery-state", str(discovery_state)])
         run_python_script(script_dir / "validate-test-design-deliverable.py", validator_args)
 
         formal_targets = {formal_workbook.resolve(), deliverable_formal.resolve()}
@@ -764,6 +582,10 @@ def main() -> int:
     finalize.add_argument("--import-workbook", required=True, type=Path)
     finalize.add_argument("--module-path", required=True)
     finalize.add_argument("--product-name")
+    finalize.add_argument("--discovery-state", type=Path)
+
+    discovery = sub.add_parser("validate-discovery", help="Validate the dynamic discovery queue before scenario design.")
+    discovery.add_argument("--discovery-state", required=True, type=Path)
 
     complete = sub.add_parser("complete-deliverables", help="One-shot precheck, style, import generation, finalize, and delivery validation.")
     complete.add_argument("--project-root", required=True, type=Path)
@@ -772,6 +594,7 @@ def main() -> int:
     complete.add_argument("--module-path", required=True)
     complete.add_argument("--import-workbook", type=Path)
     complete.add_argument("--product-name")
+    complete.add_argument("--discovery-state", type=Path)
 
     args = parser.parse_args()
     if args.command == "generate-import":
@@ -785,6 +608,12 @@ def main() -> int:
             args.import_workbook,
             args.module_path,
             args.product_name,
+            args.discovery_state,
+        )
+    elif args.command == "validate-discovery":
+        run_python_script(
+            Path(__file__).resolve().parent / "validate-test-design-deliverable.py",
+            ["--discovery-state", str(args.discovery_state), "--discovery-only"],
         )
     elif args.command == "complete-deliverables":
         complete_deliverables(
@@ -794,6 +623,7 @@ def main() -> int:
             args.module_path,
             args.import_workbook,
             args.product_name,
+            args.discovery_state,
         )
     return 0
 

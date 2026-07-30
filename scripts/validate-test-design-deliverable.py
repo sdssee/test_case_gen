@@ -214,7 +214,32 @@ UNRESOLVED_EXPECTATION_PATTERNS = [
     re.compile(r"路径\s*[A-Za-zＡ-Ｚａ-ｚ]\s*[/／或]\s*路径\s*[A-Za-zＡ-Ｚａ-ｚ]", re.IGNORECASE),
     re.compile(r"或者?类似(?:提示|文案|结果)"),
     re.compile(r"前端或后端(?:任一)?(?:路径|处理|校验)"),
+    re.compile(r"(?:可能|大概|预计会)[^。；;\r\n]{0,30}"),
+    re.compile(r"(?:显示|提示|返回|处理)[^。；;\r\n]{0,20}(?:或者|或)[^。；;\r\n]{1,20}"),
 ]
+
+ENVIRONMENT_SNAPSHOT_PATTERNS = [
+    (
+        "当前环境固定数量",
+        re.compile(r"(?:当前|现有|已有|目前)(?:测试)?(?:环境)?[^。；;\r\n]{0,20}(?:共|为|有)?\s*\d+\s*条(?:数据|记录)?"),
+    ),
+    (
+        "具体运行账号",
+        re.compile(r"(?:测试账号|使用账号|登录账号)\s*[:：]?\s*(?:user|test|admin)[A-Za-z0-9_.-]*\d+[A-Za-z0-9_.-]*", re.IGNORECASE),
+    ),
+    (
+        "带固定日期的测试对象",
+        re.compile(r"(?:AI_TEST|CODEX_TEST)[^\s，。；;\r\n]{0,48}(?:20\d{6}|20\d{2}[-_/]\d{1,2}[-_/]\d{1,2})", re.IGNORECASE),
+    ),
+    (
+        "现存数据的固定日期",
+        re.compile(r"(?:当前|现有|已有)[^。；;\r\n]{0,30}20\d{2}-\d{1,2}-\d{1,2}"),
+    ),
+]
+
+ENVIRONMENT_WORKAROUND_NOTE_PATTERN = re.compile(
+    r"(?:需|必须)(?:手动)?刷新(?:页面)?(?:才|后)?(?:能|可)?(?:看到|显示|生效|更新)"
+)
 
 EXPECTED_CONTRADICTION_PAIRS = [
     (
@@ -859,9 +884,22 @@ def collect_assertion_issue(action: Callable[[], None]) -> str | None:
     return None
 
 
+def case_generalization_issues(row: dict[str, str]) -> list[str]:
+    """识别高置信度环境快照；只做写入前兜底，不替代生成阶段的证据抽象。"""
+    content = "\n".join(
+        row.get(field, "")
+        for field in ["前置条件", "测试数据", "操作步骤", "预期结果", "备注"]
+    )
+    issues = [label for label, pattern in ENVIRONMENT_SNAPSHOT_PATTERNS if pattern.search(content)]
+    if ENVIRONMENT_WORKAROUND_NOTE_PATTERN.search(row.get("备注", "")):
+        issues.append("将环境异常或手工绕行写成正常用例路径")
+    return issues
+
+
 def validate_function_case_preflight(function_rows: list[dict[str, str]]) -> None:
     """一次汇总生成阶段最常见的用例结构问题，避免逐次生成、逐错修正。"""
     findings: dict[str, list[str]] = {}
+    generalization_rows: dict[str, list[str]] = {}
 
     def add(category: str, message: str) -> None:
         findings.setdefault(category, []).append(message)
@@ -941,6 +979,8 @@ def validate_function_case_preflight(function_rows: list[dict[str, str]]) -> Non
             add("枚举", f"{anchor}：是否适合自动化只能使用 {sorted(allowed_automation)}")
         for issue in ui_symbol_style_issues(row.get("操作步骤", "")):
             add("符号格式", f"{anchor}：{issue}")
+        for issue in case_generalization_issues(row):
+            generalization_rows.setdefault(issue, []).append(f"第 {index} 行/{case_id or '缺失 ID'}")
 
         unauthenticated_context = "\n".join(
             [title, row.get("前置条件", ""), row.get("操作步骤", "")]
@@ -949,6 +989,12 @@ def validate_function_case_preflight(function_rows: list[dict[str, str]]) -> Non
             row.get("操作步骤", "")
         ):
             add("特殊角色与状态", f"{anchor}：未登录场景不得机械追加登录步骤")
+
+    for issue, rows in generalization_rows.items():
+        add(
+            "通用性与数据独立性",
+            f"{issue}出现在 {'、'.join(rows)}，应统一改为业务角色、当前用例造数、运行时唯一标识或相对断言",
+        )
 
     if findings:
         fail(format_findings("功能测试用例写入前集中预检未通过：", findings))

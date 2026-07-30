@@ -18,7 +18,6 @@ EXPECTED_SHEETS = [
     "功能测试用例",
     "性能测试设计",
     "风险与待确认问题",
-    "自动化建议",
     "页面元素覆盖清单",
 ]
 
@@ -435,7 +434,7 @@ def main() -> int:
         validate_no_excel_tables(template)
 
     if workbook_sheets(formal_template) != EXPECTED_SHEETS:
-        fail("正式测试设计模板必须且只能包含 8 个标准 Sheet")
+        fail("正式测试设计模板必须且只能包含 7 个标准 Sheet")
     if first_row_values(import_template) != IMPORT_HEADERS:
         fail("测试用例模板.xlsx 表头发生变化")
     validate_import_left_alignment(import_template)

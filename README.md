@@ -13,7 +13,7 @@
 | `.codebuddy/skills/test-design/SKILL.md` | 测试设计执行流程。 |
 | `.codebuddy/.rules/test-design-rule.mdc` | CodeBuddy IDE 硬规则。 |
 | `.codebuddy/rules/test-design-rule.md` | CodeBuddy Code/CLI 硬规则。 |
-| `docs/test-design/codebuddy-test-design-template.xlsx` | 正式测试设计模板，固定 8 个 Sheet。 |
+| `docs/test-design/codebuddy-test-design-template.xlsx` | 正式测试设计模板，固定 7 个 Sheet。 |
 | `docs/test-design/测试用例模板.xlsx` | 测试系统导入模板，使用时复制副本，不修改原模板。 |
 | `docs/RULE_OWNERSHIP.md` | 规则归属矩阵，避免重复和漂移。 |
 
@@ -21,7 +21,7 @@
 
 ## 标准交付
 
-正式测试设计只包含 8 个标准 Sheet：
+正式测试设计只包含 7 个标准 Sheet：
 
 1. `测试设计总览`
 2. `需求用户故事拆解`
@@ -29,8 +29,7 @@
 4. `功能测试用例`
 5. `性能测试设计`
 6. `风险与待确认问题`
-7. `自动化建议`
-8. `页面元素覆盖清单`
+7. `页面元素覆盖清单`
 
 正式测试设计不新增 `测试系统导入用例` Sheet。每次正式交付都必须复制 `docs/test-design/测试用例模板.xlsx`，同步生成独立测试系统导入文件，无需询问是否生成。
 

@@ -291,7 +291,10 @@ UNRESOLVED_EXPECTATION_PATTERNS = [
 ENVIRONMENT_SNAPSHOT_PATTERNS = [
     (
         "当前环境固定数量",
-        re.compile(r"(?:当前|现有|已有|目前)(?:测试)?(?:环境)?[^。；;\r\n]{0,20}(?:共|为|有)?\s*\d+\s*条(?:数据|记录)?"),
+        re.compile(
+            r"(?:当前(?:测试)?环境|当前|现有|已有|目前)[^。；;\r\n]{0,20}"
+            r"(?:共|为|有|仅有)?\s*\d+\s*条(?!\s*/\s*页)(?:数据|记录)?"
+        ),
     ),
     (
         "具体运行账号",
@@ -306,6 +309,11 @@ ENVIRONMENT_SNAPSHOT_PATTERNS = [
         re.compile(r"(?:当前|现有|已有)[^。；;\r\n]{0,30}20\d{2}-\d{1,2}-\d{1,2}"),
     ),
 ]
+
+UNRESOLVED_CONFIRMATION_PATTERN = re.compile(
+    r"(?:待|需|需要)(?:用户|产品|业务|需求|联调)?确认|尚未确认|原因未知|"
+    r"是否(?:允许|支持|需要|属于|可以|可用)|发布计划(?:未知|未明确)"
+)
 
 ENVIRONMENT_WORKAROUND_NOTE_PATTERN = re.compile(
     r"(?:需|必须)(?:手动)?刷新(?:页面)?(?:才|后)?(?:能|可)?(?:看到|显示|生效|更新)"
@@ -1433,6 +1441,15 @@ def validate_evidence_status_consistency(
             findings["风险状态缺失或非法"].append(
                 f"风险与待确认问题 {risk_id} 的类型为待确认，状态只能为待确认、已确认或已关闭"
             )
+        if raw_status == "已确认":
+            confirmation_text = "\n".join(
+                row.get(field, "") for field in ["描述", "建议处理方式"]
+            )
+            if UNRESOLVED_CONFIRMATION_PATTERN.search(confirmation_text):
+                findings["待确认理解问题未关闭"].append(
+                    f"风险与待确认问题 {risk_id} 标记为已确认，但描述或建议仍包含未确认语义；"
+                    "必须保留待确认并等待用户回复，或改写为已确认结论"
+                )
         if status == "待实探":
             findings["待实探风险未关闭"].append(
                 f"风险与待确认问题 {risk_id} 仍为待实探；请先完成定向补探，"
@@ -1605,6 +1622,7 @@ def validate_discovery_state(
     branch_values_by_target: dict[str, list[str]] = {}
     for index, target in enumerate(target_rows, start=1):
         parent_id = str(target.get("parent_id", "")).strip()
+        branch_value = str(target.get("branch_value", "")).strip()
         if parent_id and parent_id not in target_ids:
             findings["状态结构错误"].append(f"targets[{index}] parent_id 不存在：{parent_id}")
         branch_policy = str(target.get("branch_policy", "")).strip()
@@ -1662,6 +1680,7 @@ def validate_discovery_state(
             )
         if (
             str(target.get("status", "")).strip() == "已验证"
+            and not (parent_id and branch_value)
             and target_matches(target, PAGE_SIZE_PATTERN)
             and str(target.get("branch_policy", "")).strip() != "逐项验证"
         ):

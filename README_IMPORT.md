@@ -52,16 +52,22 @@ your-project/
 如果涉及页面、截图、原型或可访问系统，请按 docs/test-design/rules/page-discovery.md 做页面实探。
 如果范围超过一个最小标题，请按 docs/test-design/rules/batch-run.md 分批执行。
 每次正式交付都必须复制 docs/test-design/测试用例模板.xlsx 生成独立测试系统导入文件，不要修改原模板，也不需要询问是否生成。
-页面任务先用 validate-discovery 完成深探准出，生成后运行 scripts/test_design_excel_tools.py complete-deliverables 并传入同一 discovery-state.json，一站式生成导入文件、同步交付件并校验。
+页面任务在首次浏览器操作前用 init-discovery 创建状态文件，validate-discovery 完成深探准出；生成后先运行 preflight-deliverables 集中预检，通过后运行一次 complete-deliverables，并始终传入同一 discovery-state.json。
 ```
 
 ## 测试系统导入
 
 正式测试设计 Excel 不新增 `测试系统导入用例` Sheet。每次正式交付都同步复制 `docs/test-design/测试用例模板.xlsx` 生成独立导入文件，并保留模板下拉框、必填样式、标红字段和自动生成字段空值。
 
-推荐随批次交付使用统一收口工具：
+推荐随批次先集中预检，再执行唯一一次正式交付：
 
 ```powershell
+python scripts/test_design_excel_tools.py preflight-deliverables `
+  --project-root . `
+  --formal-workbook artifacts/<批次>/测试设计草稿.xlsx `
+  --import-template docs/test-design/测试用例模板.xlsx `
+  --module-path "一级模块>二级菜单>三级菜单"
+
 python scripts/test_design_excel_tools.py complete-deliverables `
   --project-root . `
   --formal-workbook artifacts/<批次>/测试设计草稿.xlsx `
@@ -75,7 +81,7 @@ python scripts/test_design_excel_tools.py complete-deliverables `
 
 `generate-import` 仅用于维护或重新转换已有正式测试设计，不作为完整交付流程。
 
-`complete-deliverables` 已同步完成正式测试设计、导入文件和一次完整校验；成功后不追加重复校验。
+`preflight-deliverables` 最多执行两次集中预检；`complete-deliverables` 只消费哈希一致的预检产物并正式交付一次，成功后不追加重复校验。
 
 ## 自检命令
 

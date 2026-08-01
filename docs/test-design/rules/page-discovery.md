@@ -25,7 +25,7 @@
 
 深探采用“初始全区域元素盘点 → 业务流程动态深探 → 新增内容持续补充 → 最终收口复查”的循环。页面元素覆盖清单是贯穿深探过程的动态台账，不是结束时一次性补写的静态结果。
 
-当前批次只维护一份临时 `discovery-state.json`，不得再创建平行台账或多个修正文件。`targets` 按具有独立行为的语义目标记录，不按 DOM 节点建队列；目标键由页面、状态、元素、动作和数据分支组成，相同目标去重。每个目标只允许处于待执行、执行中、已验证、客观受限或不适用之一；操作后真实出现的新状态追加为带 `parent_id` 的目标。
+当前批次第一次浏览器或 computer use 操作前必须运行 `python scripts/test_design_excel_tools.py init-discovery --scope <最小范围> --output <discovery-state.json>`，随后只维护这一份临时状态文件，不得在深探结束后回忆补写或创建平行台账。`targets` 按具有独立行为的语义目标记录，不按 DOM 节点建队列；目标键由页面、状态、元素、动作和数据分支组成，相同目标去重。每个目标只允许处于待执行、执行中、已发现、已验证、客观受限或不适用之一；已发现仅表示元素或选项存在，未执行动作和结果观察前不得改为已验证。操作后真实出现的新状态追加为带 `parent_id` 的目标。
 
 ### 初始全区域元素盘点
 
@@ -67,8 +67,8 @@
 
 - 状态文件固定包含 `version=1`、`scope`、`baseline_complete`、`closure_rescan_complete`、`closure_rescan_new_targets`、`understanding_questions`、`targets` 和交付前补充的 `scenario_case_mapping`。
 - 每个目标至少记录 `id`、`page`、`element`、`kind`、`control_type` 和 `status`。已验证目标同时记录 `action`、`evidence_source`、`evidence`、`observation` 和 `result`；弹窗、抽屉、下拉、编辑态、确认框或浮层等状态变化再记录 `state_before`、`state_after`、`terminal_action` 和 `recovery`。
-- 固定且有限的离散选项必须在父目标完整记录实际 `discovered_values`。选项会改变页面结构、字段、校验、流程或专项规则要求逐项实探时，记录 `branch_policy=逐项验证`，每个值建立带 `parent_id` 与 `branch_value` 的子目标；选项无需逐项实探但每个持久化值都必须进入正式用例时，记录 `branch_policy=用例逐项覆盖`，深探只执行代表值。普通等价参考数据仍抽取代表值，不机械展开。
-- 客观受限必须填写 `blocking_reason`，不适用必须填写 `reason`。深探准出后为每个目标填写 `disposition` 和 `reference_ids`，去向只允许场景、风险、性能或不适用；交付前用 `scenario_case_mapping` 记录每个标记生成用例的场景 ID 及对应功能用例 ID。
+- 固定且有限的离散选项必须在父目标完整记录实际 `discovered_values`。选项会改变页面结构、字段、校验、流程或专项规则要求逐项实探时，父目标记录 `branch_policy=逐项验证`，每个值建立带 `parent_id` 与 `branch_value` 的一级子目标；子目标不再重复声明分支策略或生成孙目标，只有实际选择并观察结果后才标记已验证。选项无需逐项实探但每个持久化值都必须进入正式用例时，记录 `branch_policy=用例逐项覆盖`，深探只执行代表值。普通等价参考数据仍抽取代表值，不机械展开。
+- 客观受限必须填写 `blocking_reason`，不适用必须填写 `reason`。深探准出后为每个目标填写 `disposition` 和 `reference_ids`，去向只允许场景、风险、性能或不适用；交付前用数组形式的 `scenario_case_mapping` 记录映射项 `{"scenario_id":"SCN-001","case_ids":["TC-001"]}`。
 - 状态文件仅承载短事实和 ID，不承载用例正文、不保存常规截图；页面实探发现的覆盖清单元素必须全部进入队列，队列元素也必须回填覆盖清单。交付成功后状态文件随本批中间文件清理。
 
 ## 深探完成门禁

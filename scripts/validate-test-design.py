@@ -213,6 +213,7 @@ def validate_discovery_gate(root: Path) -> None:
     for risk_rows, overview_rows, label in [
         ([{"编号": "R1", "类型": "待确认", "状态": ""}], [], "空风险状态"),
         ([{"编号": "R1", "类型": "风险", "状态": "已关闭"}], [{"待确认问题": "是否允许重名"}], "总览待确认问题"),
+        ([{"编号": "R1", "类型": "风险", "状态": "已确认", "描述": "原因未知", "建议处理方式": "需确认发布计划"}], [], "伪已确认风险"),
     ]:
         try:
             module.validate_evidence_status_consistency(risk_rows, [], overview_rows, [])
@@ -224,6 +225,16 @@ def validate_discovery_gate(root: Path) -> None:
         fail("页面实探发现方式没有稳定触发深探状态文件")
     if any(module.is_page_discovery_source(value) for value in ["需求文档", "截图", "原型", "用户说明", ""]):
         fail("非实探发现方式错误地触发深探状态文件")
+    if module.case_generalization_issues({"操作步骤": "1. 确认当前为10条/页"}):
+        fail("页容量数值被错误识别为当前环境固定数量")
+    if "当前环境固定数量" not in module.case_generalization_issues(
+        {"前置条件": "1. 当前测试环境仅有7条数据"}
+    ):
+        fail("真实的当前环境固定数量没有被识别")
+    if "当前环境固定数量" not in module.case_generalization_issues(
+        {"前置条件": "1. 当前仅有7条数据"}
+    ):
+        fail("省略环境字样的当前固定数据量没有被识别")
     valid_story = {
         "Story ID/需求 ID": "STORY-001",
         "用户故事/需求描述": "管理业务对象",
@@ -430,6 +441,13 @@ def validate_discovery_gate(root: Path) -> None:
                     "reference_ids": ["SCN-001"],
                 }
             )
+        page_size_child_state = deepcopy(merged_page_size_state)
+        for child in page_size_child_state["targets"][1:]:
+            child["element"] = f"每页条数-{child['branch_value']}"
+            child["observation"] = f"选择{child['branch_value']}后浮层收起"
+            child["result"] = f"列表按{child['branch_value']}重新加载"
+        state_path.write_text(json.dumps(page_size_child_state, ensure_ascii=False), encoding="utf-8")
+        module.validate_discovery_state(state_path)
         merged_page_size_data = deepcopy(workbook_data)
         merged_page_size_data["coverage_rows"] = [
             {"页面/入口": "目标页面", "元素名称/文案": "每页条数", "发现方式": "浏览器实探"},
@@ -589,6 +607,144 @@ def validate_discovery_gate(root: Path) -> None:
             fail("逐项用例覆盖门禁错误地放行了未提交分支")
 
 
+def validate_delivery_workflow_guards(root: Path) -> None:
+    tool_path = root / "scripts" / "test_design_excel_tools.py"
+    spec = importlib.util.spec_from_file_location("test_design_excel_tools", tool_path)
+    if spec is None or spec.loader is None:
+        fail("无法加载交付工具进行单次交付防重试自检")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if module.canonical_module_parts("应用服务-智能体编排-记忆资产管理") != [
+        "应用服务", "智能体编排", "记忆资产管理"
+    ]:
+        fail("一级菜单-二级菜单-目标页面未稳定解析为三级模块路径")
+
+    with tempfile.TemporaryDirectory() as temporary_dir:
+        temporary = Path(temporary_dir)
+        discovery_state = temporary / "discovery-state.json"
+        module.initialize_discovery_state("记忆资产管理", discovery_state)
+        state = json.loads(discovery_state.read_text(encoding="utf-8"))
+        if state.get("targets") != [] or state.get("closure_rescan_new_targets") is not None:
+            fail("深探状态初始化未生成空动态队列或待复扫状态")
+        try:
+            module.initialize_discovery_state("记忆资产管理", discovery_state)
+        except ValueError:
+            pass
+        else:
+            fail("深探状态文件可被重复初始化，可能覆盖已记录证据")
+
+        formal_workbook = temporary / "draft.xlsx"
+        import_template = temporary / "import-template.xlsx"
+        formal_workbook.write_bytes(b"draft")
+        import_template.write_bytes(b"template")
+        original_builder = module.build_and_validate_preflight
+
+        def fail_preflight(*_args, **_kwargs):
+            raise AssertionError("预检失败")
+
+        module.build_and_validate_preflight = fail_preflight
+        try:
+            for _ in range(2):
+                try:
+                    module.preflight_deliverables(
+                        root,
+                        formal_workbook,
+                        import_template,
+                        "应用服务-智能体编排-记忆资产管理",
+                    )
+                except AssertionError:
+                    pass
+                else:
+                    fail("交付预检回归样本错误地通过")
+            try:
+                module.preflight_deliverables(
+                    root,
+                    formal_workbook,
+                    import_template,
+                    "应用服务-智能体编排-记忆资产管理",
+                )
+            except ValueError:
+                pass
+            else:
+                fail("两次预检失败后仍允许继续尝试，可能形成重试风暴")
+        finally:
+            module.build_and_validate_preflight = original_builder
+
+        delivery_state = module.delivery_state_path(formal_workbook)
+        module.atomic_write_json(
+            delivery_state,
+            {"version": 1, "preflight_attempts": 1, "complete_attempted": True},
+        )
+        try:
+            module.complete_deliverables(
+                root,
+                formal_workbook,
+                import_template,
+                "应用服务-智能体编排-记忆资产管理",
+            )
+        except ValueError:
+            pass
+        else:
+            fail("已执行正式交付后仍允许再次执行，可能形成重复生成")
+
+        success_root = temporary / "project"
+        success_template_dir = success_root / "docs" / "test-design"
+        success_template_dir.mkdir(parents=True)
+        (success_template_dir / "codebuddy-test-design-template.xlsx").write_bytes(b"formal-template")
+        success_draft = temporary / "success-draft.xlsx"
+        success_import_template = temporary / "success-import-template.xlsx"
+        success_draft.write_bytes(b"draft-before-preflight")
+        success_import_template.write_bytes(b"import-template")
+
+        def pass_preflight(
+            _project_root,
+            _formal_workbook,
+            _import_template,
+            _module_path,
+            prepared_formal,
+            prepared_import,
+            _product_name=None,
+            _discovery_state=None,
+        ):
+            prepared_formal.write_bytes(b"validated-formal")
+            prepared_import.write_bytes(b"validated-import")
+
+        module.build_and_validate_preflight = pass_preflight
+        try:
+            module.preflight_deliverables(
+                success_root,
+                success_draft,
+                success_import_template,
+                "应用服务-智能体编排-记忆资产管理",
+            )
+            module.complete_deliverables(
+                success_root,
+                success_draft,
+                success_import_template,
+                "应用服务-智能体编排-记忆资产管理",
+            )
+        finally:
+            module.build_and_validate_preflight = original_builder
+        _, formal_name, import_name = module.deliverable_names(
+            "应用服务-智能体编排-记忆资产管理"
+        )
+        if (success_root / "deliverables" / formal_name).read_bytes() != b"validated-formal":
+            fail("正式交付没有消费已通过预检的测试设计产物")
+        if (success_root / "deliverables" / import_name).read_bytes() != b"validated-import":
+            fail("正式交付没有消费已通过预检的导入产物")
+        try:
+            module.complete_deliverables(
+                success_root,
+                success_draft,
+                success_import_template,
+                "应用服务-智能体编排-记忆资产管理",
+            )
+        except ValueError:
+            pass
+        else:
+            fail("成功交付后仍允许第二次正式交付")
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     for relative in REQUIRED_FILES:
@@ -642,7 +798,11 @@ def main() -> int:
             "adjust_row_height",
             "rebuild_formal_workbook_from_template",
             "atomic_copy_workbook",
+            "init-discovery",
+            "preflight-deliverables",
             "complete-deliverables",
+            "preflight_attempts",
+            "complete_attempted",
             "generate-import",
             'project_root / "deliverables"',
         ],
@@ -680,6 +840,8 @@ def main() -> int:
             "供深探准出后的原子场景形成步骤逐项处理",
             "完成原子化后再为每个场景标记一个主",
             "branch_policy=用例逐项覆盖",
+            "init-discovery",
+            "已发现仅表示元素或选项存在",
         ],
     )
     assert_contains(
@@ -760,6 +922,7 @@ def main() -> int:
         ],
     )
     validate_discovery_gate(root)
+    validate_delivery_workflow_guards(root)
     assert_contains(
         root / ".codebuddy" / "skills" / "test-design" / "SKILL.md",
         [
@@ -768,6 +931,8 @@ def main() -> int:
             "在操作分页控件前读取一次 `pagination.md`",
             "不记录没有执行约束力的“已加载”标记",
             "阶段切换不新增用户确认、中间文件、生成轮次或自动重试",
+            "preflight-deliverables",
+            "工具硬限制最多两次预检",
             "先按来源或独立业务价值与验收结果拆解并冻结 Story",
             "不得通过 `pip install`、`pip uninstall`",
             "正常流程在 `complete-deliverables` 成功后不重复校验",
@@ -780,6 +945,8 @@ def main() -> int:
         [
             "不得给 `Worksheet.max_row` 等只读属性赋值",
             "以命令输出的正式测试设计和导入文件实际路径为准",
+            "最多两次预检",
+            "一次正式交付",
             "不重复执行同一份最终交付校验",
         ],
     )

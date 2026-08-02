@@ -185,6 +185,9 @@ BRANCH_POLICIES = {"逐项验证", "用例逐项覆盖"}
 DATA_CHANGE_COMMIT_PATTERN = re.compile(
     r"(?:点击|执行)?(?:确定|保存|提交|确认|应用|发布|导入)(?:按钮|操作)?|(?:自动保存|立即生效)"
 )
+PERSISTENT_BRANCH_TARGET_PATTERN = re.compile(
+    r"(?:新建|创建|新增|添加|编辑|修改|配置|表单|字段|变量|策略|保存|提交|发布|导入)"
+)
 PAGINATION_EVIDENCE_PATTERN = re.compile(
     r"(?:分页(?:组件|控件|区域)?|总条数|共\s*\d+\s*条|每页(?:条数)?|页容量|条\s*/\s*页|上一页|下一页|页码|跳页|跳至(?:第|某|指定|[nN\d])?页)"
 )
@@ -193,11 +196,11 @@ PAGE_SIZE_PATTERN = re.compile(r"(?:每页(?:条数)?|页容量|条\s*/\s*页)")
 PAGINATION_TARGET_FIELDS = ["element", "control_type", "action", "evidence", "observation", "result"]
 PAGINATION_IDENTITY_FIELDS = ["element", "control_type"]
 PAGINATION_CAPABILITY_RULES = [
-    ("首页", re.compile("首页")),
+    ("首页", re.compile(r"首页(?!页码)")),
     ("上一页", re.compile("上一页")),
     ("页码", re.compile("页码(?:按钮|选择)?|当前页")),
     ("下一页", re.compile("下一页")),
-    ("末页", re.compile("末页")),
+    ("末页", re.compile(r"末页(?!页码)")),
     ("省略号", re.compile("省略号")),
     ("每页条数", PAGE_SIZE_PATTERN),
     ("跳页", re.compile(r"跳页|跳至(?:$|第?\s*[Nn\d]+页|指定页)")),
@@ -1519,6 +1522,14 @@ def row_contains_branch_value(row: dict[str, str], fields: list[str], value: str
     return any(branch_value_present(value, row.get(field, "")) for field in fields)
 
 
+def target_requires_persistent_commit(target: dict[str, object]) -> bool:
+    text = "\n".join(
+        str(target.get(field, ""))
+        for field in ["page", "element", "kind", "action", "result"]
+    )
+    return bool(PERSISTENT_BRANCH_TARGET_PATTERN.search(text))
+
+
 def target_matches(
     target: dict[str, object],
     pattern: re.Pattern[str],
@@ -1623,14 +1634,15 @@ def validate_discovery_state(
     for index, target in enumerate(target_rows, start=1):
         parent_id = str(target.get("parent_id", "")).strip()
         branch_value = str(target.get("branch_value", "")).strip()
+        is_branch_child = bool(parent_id and branch_value)
         if parent_id and parent_id not in target_ids:
             findings["状态结构错误"].append(f"targets[{index}] parent_id 不存在：{parent_id}")
         branch_policy = str(target.get("branch_policy", "")).strip()
-        if branch_policy and branch_policy not in BRANCH_POLICIES:
+        if branch_policy and not is_branch_child and branch_policy not in BRANCH_POLICIES:
             findings["状态结构错误"].append(
                 f"{str(target.get('id', '')).strip() or f'targets[{index}]'} branch_policy 只能为逐项验证或用例逐项覆盖"
             )
-        if branch_policy in BRANCH_POLICIES:
+        if not is_branch_child and branch_policy in BRANCH_POLICIES:
             discovered_values = string_list(
                 target.get("discovered_values"),
                 f"{str(target.get('id', '')).strip() or f'targets[{index}]'}.discovered_values",
@@ -1660,6 +1672,8 @@ def validate_discovery_state(
         findings["分页专项未落地"].append("深探证据中已出现分页语义，但没有建立具体分页目标")
     for target in pagination_targets:
         target_id = str(target.get("id", "")).strip() or "未命名分页目标"
+        parent_id = str(target.get("parent_id", "")).strip()
+        branch_value = str(target.get("branch_value", "")).strip()
         element = str(target.get("element", "")).strip()
         if PAGINATION_GENERIC_ELEMENT_PATTERN.fullmatch(element):
             page = normalize(str(target.get("page", "")))
@@ -1846,6 +1860,8 @@ def validate_discovery_state(
         case_branch_fields = ["用例标题", "测试数据", "操作步骤", "预期结果"]
         for target in target_rows:
             target_id = str(target.get("id", "")).strip()
+            if str(target.get("parent_id", "")).strip() and str(target.get("branch_value", "")).strip():
+                continue
             branch_policy = str(target.get("branch_policy", "")).strip()
             if branch_policy not in BRANCH_POLICIES:
                 continue
@@ -1883,14 +1899,22 @@ def validate_discovery_state(
                 if target_matches(target, PAGE_SIZE_PATTERN):
                     page_size_value_scenarios[value] = matching_scenarios
                     page_size_value_cases[value] = matching_cases
-                if branch_policy == "用例逐项覆盖" and not any(
-                    DATA_CHANGE_COMMIT_PATTERN.search(case_rows_by_id[case_id].get("操作步骤", ""))
-                    and branch_value_present(value, case_rows_by_id[case_id].get("预期结果", ""))
-                    for case_id in matching_cases
-                ):
-                    findings["逐项用例覆盖缺失"].append(
-                        f"{target_id} 的有效分支值“{value}”只有选择或取消覆盖，缺少提交及最终结果中的逐值验证"
+                if branch_policy == "用例逐项覆盖":
+                    requires_commit = target_requires_persistent_commit(target)
+                    has_terminal_result = any(
+                        branch_value_present(value, case_rows_by_id[case_id].get("预期结果", ""))
+                        and (
+                            DATA_CHANGE_COMMIT_PATTERN.search(case_rows_by_id[case_id].get("操作步骤", ""))
+                            if requires_commit
+                            else DROPDOWN_RESULT_PATTERN.search(case_rows_by_id[case_id].get("预期结果", ""))
+                        )
+                        for case_id in matching_cases
                     )
+                    if not has_terminal_result:
+                        expected_terminal = "保存、提交或等价持久化结果" if requires_commit else "筛选、刷新或等价状态结果"
+                        findings["逐项用例覆盖缺失"].append(
+                            f"{target_id} 的有效分支值“{value}”缺少逐值的{expected_terminal}验证"
+                        )
             if target_matches(target, PAGE_SIZE_PATTERN):
                 page_size_values = sorted(page_size_value_scenarios)
                 for left_index, left_value in enumerate(page_size_values):

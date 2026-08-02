@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -393,66 +392,14 @@ def split_module_parts(module_path: str, product_name: str | None = None) -> tup
     return (parts[0] if parts else "产品"), parts
 
 
-def finalize_deliverables(
-    project_root: Path,
-    formal_workbook: Path,
-    import_workbook: Path,
-    module_path: str,
-    product_name: str | None = None,
-    discovery_state: Path | None = None,
-) -> None:
-    project_root = project_root.resolve()
-    _, formal_name, import_name = deliverable_names(module_path, product_name)
-
-    deliverable_formal = project_root / "deliverables" / formal_name
-    deliverable_import = project_root / "deliverables" / import_name
-
-    script_dir = Path(__file__).resolve().parent
-    validator_args = [
-        "--workbook",
-        str(formal_workbook),
-        "--import-workbook",
-        str(import_workbook),
-        "--formal-template",
-        str(project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"),
-    ]
-    if discovery_state:
-        validator_args.extend(["--discovery-state", str(discovery_state)])
-    run_python_script(
-        script_dir / "validate-test-design-deliverable.py",
-        validator_args,
-    )
-    atomic_copy_workbook(formal_workbook, deliverable_formal)
-    atomic_copy_workbook(import_workbook, deliverable_import)
-
-
 def run_python_script(script: Path, args: list[str]) -> None:
     completed = subprocess.run([sys.executable, str(script), *args], check=False)
     if completed.returncode:
         raise SystemExit(completed.returncode)
 
 
-def file_sha256(path: Path | None) -> str:
-    if path is None:
-        return ""
-    resolved = path.resolve()
-    if not resolved.exists():
-        raise ValueError(f"Input file not found: {resolved}")
-    digest = hashlib.sha256()
-    with resolved.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def delivery_state_path(formal_workbook: Path) -> Path:
     return formal_workbook.resolve().parent / f".{formal_workbook.stem}.delivery-state.json"
-
-
-def prepared_workbook_paths(formal_workbook: Path) -> tuple[Path, Path]:
-    parent = formal_workbook.resolve().parent
-    stem = formal_workbook.stem
-    return parent / f".{stem}.preflight-formal.xlsx", parent / f".{stem}.preflight-import.xlsx"
 
 
 def atomic_write_json(path: Path, data: dict[str, object]) -> None:
@@ -464,7 +411,7 @@ def atomic_write_json(path: Path, data: dict[str, object]) -> None:
 
 def read_delivery_state(path: Path) -> dict[str, object]:
     if not path.exists():
-        return {"version": 1, "preflight_attempts": 0, "complete_attempted": False}
+        return {"version": 1, "delivery_attempts": 0, "complete_attempted": False}
     try:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -472,54 +419,6 @@ def read_delivery_state(path: Path) -> dict[str, object]:
     if not isinstance(data, dict) or data.get("version") != 1:
         raise ValueError(f"Delivery state is invalid: {path}")
     return data
-
-
-def delivery_fingerprint(
-    project_root: Path,
-    formal_workbook: Path,
-    import_template: Path,
-    module_path: str,
-    product_name: str | None,
-    discovery_state: Path | None,
-) -> str:
-    formal_template = project_root.resolve() / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
-    payload = {
-        "formal_workbook": file_sha256(formal_workbook),
-        "formal_template": file_sha256(formal_template),
-        "import_template": file_sha256(import_template),
-        "discovery_state": file_sha256(discovery_state) if discovery_state else "",
-        "module_path": ">".join(canonical_module_parts(module_path, product_name)),
-        "product_name": (product_name or "").strip(),
-    }
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    ).hexdigest()
-
-
-def build_and_validate_preflight(
-    project_root: Path,
-    formal_workbook: Path,
-    import_template: Path,
-    module_path: str,
-    prepared_formal: Path,
-    prepared_import: Path,
-    product_name: str | None = None,
-    discovery_state: Path | None = None,
-) -> None:
-    script_dir = Path(__file__).resolve().parent
-    formal_template = project_root.resolve() / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
-    rebuild_formal_workbook_from_template(formal_workbook, formal_template, prepared_formal)
-    generate_import_workbook(
-        prepared_formal, import_template, prepared_import, module_path, product_name
-    )
-    validator_args = [
-        "--workbook", str(prepared_formal),
-        "--import-workbook", str(prepared_import),
-        "--formal-template", str(formal_template),
-    ]
-    if discovery_state:
-        validator_args.extend(["--discovery-state", str(discovery_state)])
-    run_python_script(script_dir / "validate-test-design-deliverable.py", validator_args)
 
 
 def initialize_discovery_state(scope: str, output: Path) -> None:
@@ -542,66 +441,6 @@ def initialize_discovery_state(scope: str, output: Path) -> None:
     print(f"OK: 深探状态已初始化：{output.resolve()}")
 
 
-def preflight_deliverables(
-    project_root: Path,
-    formal_workbook: Path,
-    import_template: Path,
-    module_path: str,
-    product_name: str | None = None,
-    discovery_state: Path | None = None,
-) -> None:
-    project_root = project_root.resolve()
-    state_path = delivery_state_path(formal_workbook)
-    state = read_delivery_state(state_path)
-    if state.get("complete_attempted") is True:
-        raise ValueError("当前批次已经执行过正式交付，不得再次预检或重试")
-    fingerprint = delivery_fingerprint(
-        project_root, formal_workbook, import_template, module_path, product_name, discovery_state
-    )
-    if state.get("preflight_status") == "passed" and state.get("fingerprint") == fingerprint:
-        print("OK: 当前输入已通过集中预检，无需重复执行。")
-        return
-    attempts = int(state.get("preflight_attempts", 0))
-    if attempts >= 2:
-        raise ValueError("当前批次已完成两次集中预检，仍未通过；必须停止并向用户返回完整问题")
-    prepared_formal, prepared_import = prepared_workbook_paths(formal_workbook)
-    for path in [prepared_formal, prepared_import]:
-        if path.exists():
-            path.unlink()
-    state.update(
-        preflight_attempts=attempts + 1,
-        preflight_status="running",
-        fingerprint=fingerprint,
-        complete_attempted=False,
-    )
-    atomic_write_json(state_path, state)
-    try:
-        build_and_validate_preflight(
-            project_root,
-            formal_workbook,
-            import_template,
-            module_path,
-            prepared_formal,
-            prepared_import,
-            product_name,
-            discovery_state,
-        )
-    except BaseException:
-        state["preflight_status"] = "failed"
-        atomic_write_json(state_path, state)
-        for path in [prepared_formal, prepared_import]:
-            if path.exists():
-                path.unlink()
-        raise
-    state.update(
-        preflight_status="passed",
-        prepared_formal_sha256=file_sha256(prepared_formal),
-        prepared_import_sha256=file_sha256(prepared_import),
-    )
-    atomic_write_json(state_path, state)
-    print("OK: 测试设计、深探映射和导入文件集中预检通过；可以执行一次正式交付。")
-
-
 def complete_deliverables(
     project_root: Path,
     formal_workbook: Path,
@@ -612,7 +451,9 @@ def complete_deliverables(
     discovery_state: Path | None = None,
 ) -> None:
     project_root = project_root.resolve()
+    script_dir = Path(__file__).resolve().parent
     _, formal_name, import_name = deliverable_names(module_path, product_name)
+    formal_template = project_root / "docs" / "test-design" / "codebuddy-test-design-template.xlsx"
     deliverable_dir = project_root / "deliverables"
     deliverable_formal = deliverable_dir / formal_name
     deliverable_import = deliverable_dir / import_name
@@ -621,37 +462,46 @@ def complete_deliverables(
     state = read_delivery_state(state_path)
     if state.get("complete_attempted") is True:
         raise ValueError("当前批次已经执行过正式交付；禁止自动重试或重复生成")
-    fingerprint = delivery_fingerprint(
-        project_root, formal_workbook, import_template, module_path, product_name, discovery_state
-    )
-    if state.get("preflight_status") != "passed" or state.get("fingerprint") != fingerprint:
-        raise ValueError("当前输入尚未通过集中预检，或预检后输入已变化；禁止直接正式交付")
-    prepared_formal, prepared_import = prepared_workbook_paths(formal_workbook)
-    if not prepared_formal.exists() or not prepared_import.exists():
-        raise ValueError("集中预检产物不存在；不得手工降级生成或自动重试")
-    if (
-        file_sha256(prepared_formal) != state.get("prepared_formal_sha256")
-        or file_sha256(prepared_import) != state.get("prepared_import_sha256")
-    ):
-        raise ValueError("集中预检产物已变化；必须停止，不得正式交付")
-    state.update(complete_attempted=True, complete_result="running")
+    attempts = int(state.get("delivery_attempts", 0))
+    if attempts >= 2:
+        raise ValueError("当前批次已经完成两次集中校验且仍未交付；必须停止并返回完整问题")
+    state.update(delivery_attempts=attempts + 1, delivery_result="validating")
     atomic_write_json(state_path, state)
     try:
-        formal_targets = {formal_workbook.resolve(), deliverable_formal.resolve()}
-        import_targets = {target_import.resolve(), deliverable_import.resolve()}
-        for target in formal_targets:
-            atomic_copy_workbook(prepared_formal, target)
-        for target in import_targets:
-            atomic_copy_workbook(prepared_import, target)
+        with tempfile.TemporaryDirectory(prefix="test-design-deliverables-") as temporary_dir:
+            temporary_root = Path(temporary_dir)
+            temporary_formal = temporary_root / "formal.xlsx"
+            temporary_import = temporary_root / "import.xlsx"
+            rebuild_formal_workbook_from_template(formal_workbook, formal_template, temporary_formal)
+            generate_import_workbook(
+                temporary_formal,
+                import_template,
+                temporary_import,
+                module_path,
+                product_name,
+            )
+            validator_args = [
+                "--workbook", str(temporary_formal),
+                "--import-workbook", str(temporary_import),
+                "--formal-template", str(formal_template),
+            ]
+            if discovery_state:
+                validator_args.extend(["--discovery-state", str(discovery_state)])
+            run_python_script(script_dir / "validate-test-design-deliverable.py", validator_args)
+            state.update(complete_attempted=True, delivery_result="publishing")
+            atomic_write_json(state_path, state)
+            formal_targets = {formal_workbook.resolve(), deliverable_formal.resolve()}
+            import_targets = {target_import.resolve(), deliverable_import.resolve()}
+            for target in formal_targets:
+                atomic_copy_workbook(temporary_formal, target)
+            for target in import_targets:
+                atomic_copy_workbook(temporary_import, target)
     except BaseException:
-        state["complete_result"] = "failed"
+        state["delivery_result"] = "failed"
         atomic_write_json(state_path, state)
         raise
-    state["complete_result"] = "passed"
+    state["delivery_result"] = "passed"
     atomic_write_json(state_path, state)
-    for path in [prepared_formal, prepared_import]:
-        if path.exists():
-            path.unlink()
     print(f"OK: 正式测试设计已写入 {deliverable_formal}")
     print(f"OK: 测试系统导入文件已写入 {deliverable_import}")
 
@@ -752,14 +602,6 @@ def main() -> int:
     style.add_argument("--output", type=Path)
     style.add_argument("--template", type=Path)
 
-    finalize = sub.add_parser("finalize-deliverables", help="Maintenance only: validate and copy existing workbooks; use complete-deliverables for formal delivery.")
-    finalize.add_argument("--project-root", required=True, type=Path)
-    finalize.add_argument("--formal-workbook", required=True, type=Path)
-    finalize.add_argument("--import-workbook", required=True, type=Path)
-    finalize.add_argument("--module-path", required=True)
-    finalize.add_argument("--product-name")
-    finalize.add_argument("--discovery-state", type=Path)
-
     discovery = sub.add_parser("validate-discovery", help="Validate the dynamic discovery queue before scenario design.")
     discovery.add_argument("--discovery-state", required=True, type=Path)
 
@@ -767,17 +609,9 @@ def main() -> int:
     init_discovery.add_argument("--scope", required=True)
     init_discovery.add_argument("--output", required=True, type=Path)
 
-    preflight = sub.add_parser("preflight-deliverables", help="Validate one draft before the single formal delivery attempt.")
-    preflight.add_argument("--project-root", required=True, type=Path)
-    preflight.add_argument("--formal-workbook", required=True, type=Path)
-    preflight.add_argument("--import-template", required=True, type=Path)
-    preflight.add_argument("--module-path", required=True)
-    preflight.add_argument("--product-name")
-    preflight.add_argument("--discovery-state", type=Path)
-
     complete = sub.add_parser(
         "complete-deliverables",
-        help="Publish the unchanged artifacts from a passed preflight exactly once.",
+        help="Validate and publish one draft, with at most one corrected retry.",
     )
     complete.add_argument("--project-root", required=True, type=Path)
     complete.add_argument("--formal-workbook", required=True, type=Path)
@@ -792,15 +626,6 @@ def main() -> int:
         generate_import_workbook(args.formal_workbook, args.import_template, args.output, args.module_path, args.product_name)
     elif args.command == "fix-formal-styles":
         apply_formal_workbook_styles(args.workbook, args.output, args.template)
-    elif args.command == "finalize-deliverables":
-        finalize_deliverables(
-            args.project_root,
-            args.formal_workbook,
-            args.import_workbook,
-            args.module_path,
-            args.product_name,
-            args.discovery_state,
-        )
     elif args.command == "validate-discovery":
         run_python_script(
             Path(__file__).resolve().parent / "validate-test-design-deliverable.py",
@@ -808,15 +633,6 @@ def main() -> int:
         )
     elif args.command == "init-discovery":
         initialize_discovery_state(args.scope, args.output)
-    elif args.command == "preflight-deliverables":
-        preflight_deliverables(
-            args.project_root,
-            args.formal_workbook,
-            args.import_template,
-            args.module_path,
-            args.product_name,
-            args.discovery_state,
-        )
     elif args.command == "complete-deliverables":
         complete_deliverables(
             args.project_root,

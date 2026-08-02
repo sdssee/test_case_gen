@@ -35,15 +35,9 @@
 
 ## 主流程
 
-生成正式测试设计后，先集中预检，再执行唯一一次正式交付：
+生成正式测试设计后，只调用统一交付命令：
 
 ```powershell
-python scripts/test_design_excel_tools.py preflight-deliverables `
-  --project-root . `
-  --formal-workbook artifacts/<批次>/测试设计草稿.xlsx `
-  --import-template docs/test-design/测试用例模板.xlsx `
-  --module-path "一级模块>二级菜单>三级菜单"
-
 python scripts/test_design_excel_tools.py complete-deliverables `
   --project-root . `
   --formal-workbook artifacts/<批次>/测试设计草稿.xlsx `
@@ -51,7 +45,7 @@ python scripts/test_design_excel_tools.py complete-deliverables `
   --module-path "一级模块>二级菜单>三级菜单"
 ```
 
-页面任务在首次浏览器操作前运行 `init-discovery`，进入 DFX 前运行 `validate-discovery`，并在预检与交付命令追加同一 `--discovery-state <discovery-state.json>`；非页面任务不需要该参数。首次预检失败只允许集中修正一次，工具硬限制最多两次预检和一次正式交付。
+页面任务在首次浏览器操作前运行 `init-discovery`，进入 DFX 前运行 `validate-discovery`，并在交付命令追加同一 `--discovery-state <discovery-state.json>`；非页面任务不需要该参数。首次集中校验失败只允许修正唯一数据源一次并再次调用，工具硬限制最多两次校验尝试和一次成功交付。
 
 `--formal-workbook` 是基于正式模板填充的临时草稿，不能预先放入 `deliverables/`；统一工具校验通过后才原子写入正式交付目录，任务结束清理该批临时文件。
 

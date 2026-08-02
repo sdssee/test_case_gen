@@ -67,7 +67,7 @@
 
 - 状态文件固定包含 `version=1`、`scope`、`baseline_complete`、`closure_rescan_complete`、`closure_rescan_new_targets`、`understanding_questions`、`targets` 和交付前补充的 `scenario_case_mapping`。
 - 每个目标至少记录 `id`、`page`、`element`、`kind`、`control_type` 和 `status`。已验证目标同时记录 `action`、`evidence_source`、`evidence`、`observation` 和 `result`；弹窗、抽屉、下拉、编辑态、确认框或浮层等状态变化再记录 `state_before`、`state_after`、`terminal_action` 和 `recovery`。
-- 固定且有限的离散选项必须在父目标完整记录实际 `discovered_values`。选项会改变页面结构、字段、校验、流程或专项规则要求逐项实探时，父目标记录 `branch_policy=逐项验证`，每个值建立带 `parent_id` 与 `branch_value` 的一级子目标；子目标不再重复声明分支策略或生成孙目标，只有实际选择并观察结果后才标记已验证。选项无需逐项实探但每个持久化值都必须进入正式用例时，记录 `branch_policy=用例逐项覆盖`，深探只执行代表值。普通等价参考数据仍抽取代表值，不机械展开。
+- 固定且有限的离散选项必须在父目标完整记录实际 `discovered_values`。选项会改变页面结构、字段、校验、流程或专项规则要求逐项实探时，父目标记录 `branch_policy=逐项验证`，每个值建立带 `parent_id` 与 `branch_value` 的一级子目标；子目标不再重复声明分支策略或生成孙目标，只有实际选择并观察结果后才标记已验证。选项无需逐项实探但每个有效值都必须进入正式用例时，父目标记录 `branch_policy=用例逐项覆盖`，深探只执行代表值；持久化字段在用例中保存或提交，筛选、分页和只读切换验证刷新或状态结果。普通等价参考数据仍抽取代表值，不机械展开。
 - 客观受限必须填写 `blocking_reason`，不适用必须填写 `reason`。深探准出后为每个目标填写 `disposition` 和 `reference_ids`，去向只允许场景、风险、性能或不适用；交付前用数组形式的 `scenario_case_mapping` 记录映射项 `{"scenario_id":"SCN-001","case_ids":["TC-001"]}`。
 - 状态文件仅承载短事实和 ID，不承载用例正文、不保存常规截图；页面实探发现的覆盖清单元素必须全部进入队列，队列元素也必须回填覆盖清单。交付成功后状态文件随本批中间文件清理。
 

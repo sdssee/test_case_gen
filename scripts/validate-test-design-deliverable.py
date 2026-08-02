@@ -141,6 +141,13 @@ FORBIDDEN_NAVIGATION_SEPARATOR_PATTERN = re.compile(
     r"(?<=[\u4e00-\u9fffA-Za-z\]】」』”’])\s*(?:->|→|>)\s*"
     r"(?=[\u4e00-\u9fffA-Za-z\[【「『“‘])"
 )
+SESSION_SETUP_STEP_PATTERN = re.compile(
+    r"(?:打开|启动)[^。；;\r\n]{0,12}浏览器|(?:浏览器中)?访问\s*https?://|进入登录页"
+)
+AUTHENTICATION_CASE_PATTERN = re.compile(
+    r"(?:用户登录|账号登录|系统登录|登录功能|登录验证|单点登录|重新登录|重新认证|身份认证|登录鉴权|会话建立|会话失效|退出登录|(?:^|\n|[-—])登录(?:$|\n|[-—]))"
+)
+DIRECT_ENTRY_CASE_PATTERN = re.compile(r"(?:URL|地址|链接|深链)(?:直达|访问|跳转)|直接访问")
 
 IMPORT_REQUIRED_FIELDS = ["一级模块名称", "二级模块名称", "三级模块名称", "测试用例名称", "测试类型", "测试用例级别", "执行方式"]
 IMPORT_AUTO_FIELDS = ["测试用例系统编号", "作者"]
@@ -926,17 +933,21 @@ def assert_numbered(text: str, label: str) -> None:
         fail(f"{label} numbering must be continuous from 1: {numbers}")
 
 
-def assert_complete_operation_steps(text: str, label: str) -> None:
+def assert_complete_operation_steps(
+    text: str,
+    label: str,
+    allow_session_setup: bool = False,
+) -> None:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if len(lines) < 2:
         fail(f"{label} must include full navigation and operation steps, not a single short sentence")
-    first_steps = "\n".join(lines[:3])
-    entry_markers = ["登录", "打开系统", "访问系统", "进入系统", "打开平台", "访问平台", "进入平台", "URL"]
-    navigation_markers = ["一级", "二级", "三级", "菜单", "模块", "导航", "路径", ">", "页面"]
-    if not any(marker in first_steps for marker in entry_markers):
-        fail(f"{label} must start from system/project entry and include navigation path to target function")
-    if not any(marker in first_steps for marker in navigation_markers):
-        fail(f"{label} must include complete menu/module navigation before operating target controls")
+    first_step = re.sub(r"^\s*\d+\.\s*", "", lines[0]).strip()
+    has_navigation_action = bool(re.search(r"(?:进入|依次进入|导航至|打开|点击|选择)", first_step))
+    has_navigation_target = bool(re.search(r"(?:菜单|模块|页面|页签)", first_step) or "-" in first_step)
+    if not has_navigation_action or not has_navigation_target:
+        if allow_session_setup and SESSION_SETUP_STEP_PATTERN.search(first_step):
+            return
+        fail(f"{label} must start with navigation from the authenticated product entry to the target page")
     if re.match(r"^1\.\s*在[^，,。]*页面", lines[0]):
         fail(f"{label} must not assume the tester is already on the target module page")
 
@@ -987,6 +998,20 @@ def has_active_login_step(steps: str) -> bool:
         if re.search(r"(?:登录系统|登录平台|执行登录)", line):
             return True
     return False
+
+
+def has_session_setup_step(steps: str) -> bool:
+    return bool(SESSION_SETUP_STEP_PATTERN.search(steps or "")) or has_active_login_step(steps)
+
+
+def case_requires_session_setup(row: dict[str, str]) -> bool:
+    context = "\n".join(
+        [row.get("功能点", ""), row.get("用例标题", ""), row.get("前置条件", "")]
+    )
+    return bool(
+        AUTHENTICATION_CASE_PATTERN.search(context)
+        or DIRECT_ENTRY_CASE_PATTERN.search(context)
+    )
 
 
 def collect_assertion_issue(action: Callable[[], None]) -> str | None:
@@ -1044,7 +1069,9 @@ def validate_function_case_preflight(function_rows: list[dict[str, str]]) -> Non
             (
                 "入口导航",
                 lambda row=row, anchor=anchor: assert_complete_operation_steps(
-                    row.get("操作步骤", ""), f"{anchor} 操作步骤"
+                    row.get("操作步骤", ""),
+                    f"{anchor} 操作步骤",
+                    case_requires_session_setup(row),
                 ),
             ),
             (
@@ -1102,6 +1129,12 @@ def validate_function_case_preflight(function_rows: list[dict[str, str]]) -> Non
             row.get("操作步骤", "")
         ):
             add("特殊角色与状态", f"{anchor}：未登录场景不得机械追加登录步骤")
+        elif has_session_setup_step(row.get("操作步骤", "")) and not case_requires_session_setup(row):
+            add(
+                "入口导航",
+                f"{anchor}：普通功能用例不得重复打开浏览器、访问登录地址或执行登录；"
+                "登录状态写入前置条件，操作步骤从已认证后的菜单/页面导航开始",
+            )
 
     for issue, rows in generalization_rows.items():
         add(

@@ -225,6 +225,42 @@ def validate_discovery_gate(root: Path) -> None:
         fail("页面实探发现方式没有稳定触发深探状态文件")
     if any(module.is_page_discovery_source(value) for value in ["需求文档", "截图", "原型", "用户说明", ""]):
         fail("非实探发现方式错误地触发深探状态文件")
+    module.assert_complete_operation_steps(
+        "1. 进入一级菜单-二级菜单-目标页面\n2. 确认目标输入框默认值\n3. 点击执行按钮",
+        "普通功能用例",
+    )
+    redundant_login_steps = (
+        "1. 打开浏览器访问 http://example.test/login\n"
+        "2. 在登录页输入用户名 root 和密码，点击登录按钮\n"
+        "3. 进入一级菜单-二级菜单-目标页面\n4. 点击执行按钮"
+    )
+    if not module.has_session_setup_step(redundant_login_steps):
+        fail("普通功能用例中的浏览器和主动登录步骤没有被识别")
+    if module.case_requires_session_setup({"功能点": "目标功能", "用例标题": "目标功能-默认值"}):
+        fail("普通功能用例被错误识别为登录或URL直达测试")
+    if not module.case_requires_session_setup({"功能点": "用户登录", "用例标题": "用户登录-正确密码登录"}):
+        fail("登录功能用例没有获得入口步骤例外")
+    if not module.case_requires_session_setup({"功能点": "登录", "用例标题": "登录-正确账号密码"}):
+        fail("单独命名为登录的功能用例没有获得入口步骤例外")
+    ordinary_case = {
+        "用例 ID": "TC-ENTRY-001",
+        "功能点": "目标功能",
+        "用例标题": "目标功能-默认值",
+        "前置条件": "1. 用户已登录并具备目标功能权限",
+        "操作步骤": redundant_login_steps,
+        "预期结果": "1. 浏览器成功打开\n2. 用户成功登录\n3. 进入目标页面\n4. 目标功能执行并展示结果",
+        "DFX维度": "DFT功能",
+        "DFX场景": "正向流程",
+        "是否适合自动化": "是",
+    }
+    try:
+        module.validate_function_case_preflight([ordinary_case])
+    except AssertionError as exc:
+        if "普通功能用例不得重复打开浏览器" not in str(exc):
+            fail(f"普通功能用例入口回归返回了非预期问题：{exc}")
+    else:
+        fail("普通功能用例错误地保留了浏览器和登录步骤")
+    module.assert_complete_operation_steps(redundant_login_steps, "登录功能用例", True)
     matched_pagination_capabilities = [
         name for name, pattern in module.PAGINATION_CAPABILITY_RULES
         if pattern.search("分页-末页页码")
@@ -891,8 +927,8 @@ def main() -> int:
             "未完成事实核账不得开始 DFX",
             "DFX 只能标记或补充",
             "是否生成用例=是",
-            "系统/项目入口 → 一级菜单-二级菜单-目标页面",
-            "未登录、退出登录、无痕访问、无权限角色、断网或超时",
+            "已认证后的一级菜单-二级菜单-目标页面",
+            "未登录、无权限、断网或超时",
             "不得虚构“关闭弹窗”",
             "写入前集中核对",
             "禁止连续创建多个 `fix_*` 脚本",
@@ -938,6 +974,8 @@ def main() -> int:
             "DROPDOWN_SELECTION_PATTERN",
             "validate_function_case_preflight",
             "未登录场景不得机械追加登录步骤",
+            "has_session_setup_step",
+            "普通功能用例不得重复打开浏览器",
             "assert_expected_result_consistency",
             "FORMAL_ALLOWED_VALUES",
             "用例逐项覆盖",
